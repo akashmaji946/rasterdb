@@ -78,7 +78,7 @@ GpuDispatcher::DispatchStringMatching(const cudf::column_view& input,
   }
   else if constexpr (MatchType == StringMatchingType::CONTAINS)
   {
-    printf("Do we end up here? constexpr contains\n");
+    //printf("Do we end up here? constexpr contains\n");
     return DoStringMatching(input.data<char>(),
                             input.size(),
                             input.child(0).data<int64_t>(),

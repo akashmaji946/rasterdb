@@ -164,7 +164,7 @@ struct StringMatchingDispatcher
     }
     else
     {
-      printf("String matching dispatcher struct\n");
+      //printf("String matching dispatcher struct\n");
       //----------Using Sirius----------//
       return GpuDispatcher::DispatchStringMatching<MatchType>(input->view(),
                                                               match_str,
@@ -536,7 +536,7 @@ std::unique_ptr<cudf::column> GpuExpressionExecutor::Execute(const BoundFunction
   }
   else if (func_str == CONTAINS_FUNC_STR)
   {
-    printf("StringMatchingDispatcher for contains\n");
+    //printf("StringMatchingDispatcher for contains\n");
     StringMatchingDispatcher<StringMatchingType::CONTAINS, use_cudf> dispatcher(*this);
     return dispatcher(expr, state);
   }

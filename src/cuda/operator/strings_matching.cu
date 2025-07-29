@@ -83,10 +83,6 @@ template __global__ void determine_start_kernel<int64_t>(const int64_t* indices,
 template<typename IdxT>
 __global__ void single_term_kmp_kernel(const char* char_data, const IdxT* indices, const int* kmp_automato, const IdxT* worker_start_term, bool* results, 
 IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT last_char, IdxT num_strings) {
-    if (threadIdx.x == 0) {
-      printf("Starting kernel\n");
-    }
-    
     // See if have any work to do
     int64_t chunk_id = blockIdx.x;
     if (chunk_id >= num_workers) return;
@@ -98,15 +94,15 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
 
     // Determine the subchunk that the current string is going to be working on
     int64_t curr_term = worker_start_term[chunk_id];
-    if (threadIdx.x == 0) {
-      printf("Starting while loop\n");
-    }
+    //if (threadIdx.x == 0) {
+    //  printf("Starting while loop\n");
+    //}
     while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
       curr_term++;
     }
-    if (threadIdx.x == 0) {
-      printf("Ending while loop\n");
-    }
+    //if (threadIdx.x == 0) {
+    //  printf("Ending while loop\n");
+    //}
     int64_t curr_term_end = indices[curr_term + 1];
 
     // Perform the actual string matching
@@ -128,10 +124,6 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
           results[curr_term] = true;
           j = 0;
         }
-    }
-
-    if (threadIdx.x == 0) {
-      printf("Ending kernel\n");
     }
 }
 
@@ -279,27 +271,25 @@ __global__ void multi_term_kmp_kernel(const char* char_data, const IdxT* indices
   IdxT* curr_term_answer, IdxT* prev_term_answer, bool* found_term, int pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, 
   IdxT last_char, IdxT num_strings) {
     // See if have any work to do
-    auto chunk_id = blockIdx.x;
+    int64_t chunk_id = blockIdx.x;
     if (chunk_id >= num_workers) return;
 
-    const auto curr_chunk_start = min(chunk_id * chunk_size, last_char);
-    const auto curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
-    const auto curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
-    const auto curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
+    const int64_t curr_chunk_start = min(chunk_id * chunk_size, last_char);
+    const int64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
+    const int64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
+    const int64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
 
     // Determine the subchunk that the current string is going to be working on
-    auto curr_term = worker_start_term[chunk_id];
-    printf("starting here\n");
+    int64_t curr_term = worker_start_term[chunk_id];
     while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
       curr_term++;
     }
-    printf("here\n");
-    auto curr_term_end = indices[curr_term + 1];
+    int64_t curr_term_end = indices[curr_term + 1];
 
     // Perform the actual string matching
-    int j = 0; int curr_idx = 0; 
+    int64_t j = 0; int64_t curr_idx = 0; 
     #pragma unroll
-    for(int i = curr_sub_chunk_start; i <= curr_sub_chunk_end; i++) {
+    for(int64_t i = curr_sub_chunk_start; i <= curr_sub_chunk_end; i++) {
       // See if we need to switch to a new term
       if(i >= curr_term_end) {
           curr_term = curr_term + 1;
@@ -307,7 +297,7 @@ __global__ void multi_term_kmp_kernel(const char* char_data, const IdxT* indices
           j = 0; // Reset because we are at the start of the string
       }
 
-      curr_idx = (int) char_data[i] + CHAR_INCREMENT;
+      curr_idx = (int64_t) char_data[i] + CHAR_INCREMENT;
       j = kmp_automato[j * CHARS_IN_BYTE + curr_idx];
 
       // Record that we have a hit
@@ -686,7 +676,7 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
    CHUNK_SIZE,
    byte_count - 1);
 
-   printf("Right before launching kernel in DoStringMatching\n");
+   //printf("Right before launching kernel in DoStringMatching\n");
   // Launch KMP kernel
   LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel,
                        int64_t,
@@ -704,7 +694,7 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
    cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
    byte_count - 1,
    input_count);
-  printf("Launched single term KMP kernel in DoStringMatching\n");
+  //printf("Launched single term KMP kernel in DoStringMatching\n");
 
   // Return a boolean cudf::column
   return std::make_unique<cudf::column>(std::move(output), rmm::device_buffer(0, stream, mr), 0);
