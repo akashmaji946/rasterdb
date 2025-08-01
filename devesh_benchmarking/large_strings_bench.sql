@@ -10,11 +10,16 @@ call gpu_buffer_init("17 GB", "17 GB");
 
 .timer on
 
---SELECT * from SPAM WHERE P_VAL LIKE '%Harum Hic Ex At%';
---SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At');
-
---call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Harum Hic Ex At%'");
-
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
+--call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
 --call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
 --call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
 --call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
@@ -28,4 +33,23 @@ call gpu_buffer_init("17 GB", "17 GB");
 --call gpu_processing("SELECT * from SPAM WHERE P_VAL LIKE '%Lorem ipsum%Harum Hic Ex At%'");
 
 call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(P_VAL, 'Harum Hic Ex At')");

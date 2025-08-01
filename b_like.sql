@@ -4,7 +4,15 @@ CREATE TABLE SPAM (
   P_VAL VARCHAR(256)
 );
 
-COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/two_gb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/400_mb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/800_mb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/1200_mb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/1600_mb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/two_gb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/five_gb_synthetic_dataset.csv';
+--COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/medium_synthetic_dataset.csv';
+COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/giant_synthetic_dataset.csv';
+
 
 call gpu_buffer_init("17 GB", "17 GB");
 
