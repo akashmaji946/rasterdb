@@ -5,14 +5,14 @@ import argparse
 USER_DIR = os.path.expanduser("~")
 ALL_DATASET_DIR = os.path.join(USER_DIR, "all_datasets") 
 datasets_to_download = [
-  "wiki_100000.tbl",
-  "wiki_1000000.tbl",
-  "wiki_500000.tbl",
-  "wiki_5000000.tbl"
-  #"random_skewed_1000000_12.tbl",
-  #"random_skewed_1000000_25.tbl",
-  #"random_skewed_100000_50.tbl",
-  #"random_skewed_10000_50.tbl"
+  #"wiki_100000.tbl",
+  #"wiki_1000000.tbl",
+  #"wiki_500000.tbl",
+  #"wiki_5000000.tbl"
+  "random_skewed_1000000_12.tbl",
+  "random_skewed_1000000_25.tbl",
+  "random_skewed_100000_50.tbl",
+  "random_skewed_10000_50.tbl"
 ]
 
 BUCKET_NAME = "devesh-gpu-all-datasets"
@@ -34,7 +34,7 @@ def downloader():
 
         if object_name in datasets_to_download:
           print(object_name)
-          dataset_dir = os.path.join(ALL_DATASET_DIR, "wikipedia")
+          dataset_dir = os.path.join(ALL_DATASET_DIR, "large_strings")
           save_path = os.path.join(dataset_dir, object_name)
           if not os.path.exists(save_path):
                 print("Downloading", object_name, "to", save_path)

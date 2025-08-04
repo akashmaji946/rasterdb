@@ -1,10 +1,9 @@
 DROP TABLE IF EXISTS SPAM;
 
-CREATE TABLE SPAM (
-  P_VAL VARCHAR(256)
-);
+CREATE TABLE SPAM (P_VAL VARCHAR(256));
 
 COPY SPAM from '/mnt/wiscdb/abigale/string_dataset_csvs/wikipedia_dataset.csv';
+
 
 call gpu_buffer_init("17 GB", "17 GB");
 
