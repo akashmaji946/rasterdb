@@ -104,6 +104,7 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     //  printf("Ending while loop\n");
     //}
     int64_t curr_term_end = indices[curr_term + 1];
+    clock_t end_while = clock64();
 
     // Perform the actual string matching
     int64_t j = 0; int64_t curr_idx = 0; 
@@ -124,6 +125,13 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
           results[curr_term] = true;
           j = 0;
         }
+    }
+
+    if (threadIdx.x == 0) {
+      float elapsed_while = (float)(end_while - start);
+      float elapsed_for = (float)(end - end_while);
+
+      printf("Elapsed while: %f Elapsed for: %f\n", elapsed_while, elapsed_for);
     }
 }
 
@@ -230,9 +238,7 @@ void StringMatching(char* char_data, uint64_t* str_indices, std::string match_st
   uint64_t block_sub_chunk_size = (CHUNK_SIZE + THREADS_PER_BLOCK_STRINGS - 1)/THREADS_PER_BLOCK_STRINGS;
   single_term_kmp_kernel<uint64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS>>>(char_data, str_indices, d_kmp_automato, d_worker_start_term, 
     d_answers, match_length, workers_needed, CHUNK_SIZE, block_sub_chunk_size, last_char, num_strings);
-  printf("Launched single term KMP\n");
     cudaDeviceSynchronize();
-  printf("Synchronized single term KMP\n");
   auto str_match_end = std::chrono::high_resolution_clock::now();
   int str_match_time_us = std::chrono::duration_cast<std::chrono::microseconds>(str_match_end - str_match_start).count();
   CHECK_ERROR();
