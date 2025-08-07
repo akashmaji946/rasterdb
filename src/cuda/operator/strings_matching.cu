@@ -185,20 +185,27 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     int64_t mid = 0;
     int64_t left = worker_start_term[chunk_id];
     int64_t right = num_strings - 1;
-    int64_t curr_term_dup = 0;
+    int64_t curr_term_dup = -1;
+    bool found = false;
     for (uint64_t i = 0; i < num_iters; ++i) {
-      mid = left + (right - left)/2;
+      mid = left + (right - left) / 2;
+      bool is_target = (curr_sub_chunk_start >= indices[mid] && curr_sub_chunk_start < indices[mid + 1]);
       
-      if (curr_sub_chunk_start >= indices[mid] && curr_sub_chunk_start < indices[mid + 1]) {
-          curr_term_dup = mid;
-          break;
-      }
-      else if (curr_sub_chunk_start < indices[mid]) {
-          right = mid - 1;
-      }
-      else {
-          left = mid + 1;
-      }
+      // Determine search direction (go left if curr_sub_chunk_start < indices[mid])
+      bool go_left = (curr_sub_chunk_start < indices[mid]);
+      
+      // Update curr_term_dup if we found the target (only update once)
+      curr_term_dup = curr_term_dup * found + mid * (is_target && !found);
+      found = found || is_target;
+      
+      // Calculate new boundaries
+      int64_t new_right = mid - 1;
+      int64_t new_left = mid + 1;
+      
+      // Conditionally update boundaries (only if not found)
+      bool should_update = !found;
+      right = right * (found || !go_left) + new_right * (should_update && go_left);
+      left = left * (found || go_left) + new_left * (should_update && !go_left);
     }
     
     if (curr_term_dup != curr_term) {
