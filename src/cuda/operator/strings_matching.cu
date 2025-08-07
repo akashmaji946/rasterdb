@@ -163,17 +163,7 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     const int64_t curr_chunk_start = min(chunk_id * chunk_size, last_char);
     const int64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
     const int64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
-    const int64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
 
-    // Determine the subchunk that the current string is going to be working on
-    int64_t curr_term = worker_start_term[chunk_id];
-    while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
-      curr_term++;
-    }
-
-    curr_term_array[blockIdx.x] = curr_term;
-
-    // Making sure my binary search is correct!
     uint64_t num_iters = 0;
     uint64_t temp_len = static_cast<uint64_t>(num_strings - worker_start_term[chunk_id]);
     while (temp_len > 1) {
@@ -197,11 +187,7 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
       left = left * go_left + new_left * (!go_left);
     }
 
-    curr_term_dup = right;
-    
-    if (curr_term_dup != curr_term) {
-      printf("Inconsistent binary search\n");
-    }
+    curr_term_array[blockIdx.x] = right;
 }
 
 template __global__ void single_term_kmp_kernel_preprocessing<uint64_t>(const char* char_data,
