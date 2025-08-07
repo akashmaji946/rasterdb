@@ -100,6 +100,7 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
       curr_term++;
     }
+
     //if (threadIdx.x == 0) {
     //  printf("Ending while loop\n");
     //}
@@ -171,6 +172,38 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     }
 
     curr_term_array[blockIdx.x] = curr_term;
+
+    // Making sure my binary search is correct!
+    uint64_t num_iters = 0;
+    uint64_t temp_len = static_cast<uint64_t>(num_strings - worker_start_term[chunk_id]);
+    while (temp_len > 1) {
+      temp_len >>= 1;
+      num_iters++;
+    }
+    num_iters++; 
+
+    int64_t mid = 0;
+    int64_t left = worker_start_term[chunk_id];
+    int64_t right = num_strings - 1;
+    int64_t curr_term_dup = 0;
+    for (uint64_t i = 0; i < num_iters; ++i) {
+      mid = left + (right - left)/2;
+      
+      if (curr_sub_chunk_start >= indices[mid] && curr_sub_chunk_start < indices[mid + 1]) {
+          curr_term_dup = mid;
+          break;
+      }
+      else if (curr_sub_chunk_start < indices[mid]) {
+          right = mid - 1;
+      }
+      else {
+          left = mid + 1;
+      }
+    }
+    
+    if (curr_term_dup != curr_term) {
+      printf("Inconsistent binary search\n");
+    }
 }
 
 template __global__ void single_term_kmp_kernel_preprocessing<uint64_t>(const char* char_data,
@@ -795,22 +828,22 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
 
    //printf("Right before launching kernel in DoStringMatching\n");
   // Launch KMP kernel
-  LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel,
-                       int64_t,
-                       workers_needed,
-                       THREADS_PER_BLOCK_STRINGS,
-                       stream)
-  (input_data,
-   input_offsets,
-   d_kmp_automato.data(),
-   d_worker_start_term.data(),
-   output.data(),
-   match_length,
-   workers_needed,
-   CHUNK_SIZE,
-   cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
-   byte_count - 1,
-   input_count);
+  //LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel,
+  //                     int64_t,
+  //                     workers_needed,
+  //                     THREADS_PER_BLOCK_STRINGS,
+  //                     stream)
+  //(input_data,
+  // input_offsets,
+  // d_kmp_automato.data(),
+  // d_worker_start_term.data(),
+  // output.data(),
+  // match_length,
+  // workers_needed,
+  // CHUNK_SIZE,
+  // cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
+  // byte_count - 1,
+  // input_count);
 
   LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel_preprocessing,
     int64_t,
