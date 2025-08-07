@@ -104,7 +104,6 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     //  printf("Ending while loop\n");
     //}
     int64_t curr_term_end = indices[curr_term + 1];
-    clock_t end_while = clock64();
 
     // Perform the actual string matching
     int64_t j = 0; int64_t curr_idx = 0; 
@@ -125,13 +124,6 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
           results[curr_term] = true;
           j = 0;
         }
-    }
-
-    if (threadIdx.x == 0) {
-      float elapsed_while = (float)(end_while - start);
-      float elapsed_for = (float)(end - end_while);
-
-      printf("Elapsed while: %f Elapsed for: %f\n", elapsed_while, elapsed_for);
     }
 }
 
@@ -158,6 +150,116 @@ template __global__ void single_term_kmp_kernel<int64_t>(const char* char_data,
                                                          int64_t sub_chunk_size,
                                                          int64_t last_char,
                                                          int64_t num_strings);
+
+
+template<typename IdxT>
+__global__ void single_term_kmp_kernel_preprocessing(const char* char_data, const IdxT* indices, const int* kmp_automato, const IdxT* worker_start_term, bool* results, 
+IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT last_char, IdxT num_strings, int64_t* curr_term_array) {
+    // See if have any work to do
+    int64_t chunk_id = blockIdx.x;
+    if (chunk_id >= num_workers) return;
+
+    const int64_t curr_chunk_start = min(chunk_id * chunk_size, last_char);
+    const int64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
+    const int64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
+    const int64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
+
+    // Determine the subchunk that the current string is going to be working on
+    int64_t curr_term = worker_start_term[chunk_id];
+    while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
+      curr_term++;
+    }
+
+    curr_term_array[blockIdx.x] = curr_term;
+}
+
+template __global__ void single_term_kmp_kernel_preprocessing<uint64_t>(const char* char_data,
+  const uint64_t* indices,
+  const int* kmp_automato,
+  const uint64_t* worker_start_term,
+  bool* results,
+  uint64_t pattern_size,
+  uint64_t num_workers,
+  uint64_t chunk_size,
+  uint64_t sub_chunk_size,
+  uint64_t last_char,
+  uint64_t num_strings,
+  int64_t* curr_term_array);
+
+  template __global__ void single_term_kmp_kernel_preprocessing<int64_t>(const char* char_data,
+    const int64_t* indices,
+    const int* kmp_automato,
+    const int64_t* worker_start_term,
+    bool* results,
+    int64_t pattern_size,
+    int64_t num_workers,
+    int64_t chunk_size,
+    int64_t sub_chunk_size,
+    int64_t last_char,
+    int64_t num_strings,
+    int64_t* curr_term_array);
+
+template<typename IdxT>
+__global__ void single_term_kmp_kernel_processing(const char* char_data, const IdxT* indices, const int* kmp_automato, const IdxT* worker_start_term, bool* results, 
+IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT last_char, IdxT num_strings, int64_t* curr_term_array) {
+    int64_t chunk_id = blockIdx.x;
+    if (chunk_id >= num_workers) return;
+  
+    int64_t curr_term = curr_term_array[chunk_id];
+    int64_t curr_term_end = indices[curr_term + 1];
+    const int64_t curr_chunk_start = min(chunk_id * chunk_size, last_char);
+    const int64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
+    const int64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
+    const int64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
+
+    // Perform the actual string matching
+    int64_t j = 0; int64_t curr_idx = 0; 
+    #pragma unroll
+    for(int64_t i = curr_sub_chunk_start; i <= curr_sub_chunk_end; i++) {
+      // See if we need to switch to a new term
+      if(i >= curr_term_end) {
+        curr_term = curr_term + 1;
+        curr_term_end = indices[curr_term + 1];
+        j = 0; // Reset because we are at the start of the string
+      }
+
+      curr_idx = (int) char_data[i] + CHAR_INCREMENT;
+      j = kmp_automato[j * CHARS_IN_BYTE + curr_idx];
+
+      // Record that we have a hit
+      if(j >= pattern_size) {
+        results[curr_term] = true;
+        j = 0;
+      }
+  }
+}
+
+template __global__ void single_term_kmp_kernel_processing<uint64_t>(const char* char_data,
+  const uint64_t* indices,
+  const int* kmp_automato,
+  const uint64_t* worker_start_term,
+  bool* results,
+  uint64_t pattern_size,
+  uint64_t num_workers,
+  uint64_t chunk_size,
+  uint64_t sub_chunk_size,
+  uint64_t last_char,
+  uint64_t num_strings,
+  int64_t* curr_term_array);
+
+template __global__ void single_term_kmp_kernel_processing<int64_t>(const char* char_data,
+    const int64_t* indices,
+    const int* kmp_automato,
+    const int64_t* worker_start_term,
+    bool* results,
+    int64_t pattern_size,
+    int64_t num_workers,
+    int64_t chunk_size,
+    int64_t sub_chunk_size,
+    int64_t last_char,
+    int64_t num_strings,
+    int64_t* curr_term_array);
+
 
 __global__ void write_matching_rows(bool* results, uint64_t num_strings, uint64_t* matching_rows, uint64_t* count) {
   uint64_t tile_size = gridDim.x * blockDim.x;
@@ -211,6 +313,7 @@ void StringMatching(char* char_data, uint64_t* str_indices, std::string match_st
   char* d_match_str = gpuBufferManager->customCudaMalloc<char>(match_string.length(), 0, 0);
   int* d_kmp_automato = gpuBufferManager->customCudaMalloc<int>(kmp_automato_size, 0, 0);
   uint64_t* d_worker_start_term = gpuBufferManager->customCudaMalloc<uint64_t>(workers_needed, 0, 0);
+  int64_t* d_curr_terms = gpuBufferManager->customCudaMalloc<int64_t>(workers_needed, 0, 0);
   bool* d_answers = reinterpret_cast<bool*> (gpuBufferManager->customCudaMalloc<uint8_t>(num_strings, 0, 0));
   cudaMemset(d_answers, 0, num_strings * sizeof(bool));
   // TODO: Do it twice for more accurate allocation
@@ -236,8 +339,14 @@ void StringMatching(char* char_data, uint64_t* str_indices, std::string match_st
 
   auto str_match_start = std::chrono::high_resolution_clock::now();
   uint64_t block_sub_chunk_size = (CHUNK_SIZE + THREADS_PER_BLOCK_STRINGS - 1)/THREADS_PER_BLOCK_STRINGS;
-  single_term_kmp_kernel<uint64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS>>>(char_data, str_indices, d_kmp_automato, d_worker_start_term, 
-    d_answers, match_length, workers_needed, CHUNK_SIZE, block_sub_chunk_size, last_char, num_strings);
+  
+  //single_term_kmp_kernel<uint64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS>>>(char_data, str_indices, d_kmp_automato, d_worker_start_term, 
+  //  d_answers, match_length, workers_needed, CHUNK_SIZE, block_sub_chunk_size, last_char, num_strings);
+  
+  single_term_kmp_kernel_preprocessing<uint64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS>>>(char_data, str_indices, d_kmp_automato, d_worker_start_term, 
+    d_answers, match_length, workers_needed, CHUNK_SIZE, block_sub_chunk_size, last_char, num_strings, d_curr_terms);
+  single_term_kmp_kernel_processing<uint64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS>>>(char_data, str_indices, d_kmp_automato, d_worker_start_term, 
+    d_answers, match_length, workers_needed, CHUNK_SIZE, block_sub_chunk_size, last_char, num_strings, d_curr_terms);
     cudaDeviceSynchronize();
   auto str_match_end = std::chrono::high_resolution_clock::now();
   int str_match_time_us = std::chrono::duration_cast<std::chrono::microseconds>(str_match_end - str_match_start).count();
@@ -263,6 +372,7 @@ void StringMatching(char* char_data, uint64_t* str_indices, std::string match_st
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(d_worker_start_term), 0);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(d_answers), 0);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(count), 0);
+  gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(d_curr_terms), 0);
   count = h_count;
   SIRIUS_LOG_DEBUG("String Matching Result Count = {}", h_count[0]);
 
@@ -665,6 +775,7 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
   const auto workers_needed = cuda::ceil_div(byte_count, static_cast<int64_t>(CHUNK_SIZE));
   rmm::device_uvector<int64_t> d_worker_start_term(workers_needed, stream, mr);
   rmm::device_uvector<bool> output(input_count, stream, mr);
+  rmm::device_uvector<int64_t> d_curr_terms(workers_needed, stream, mr);
 
   // Initialize the output buffer to false
   CUDF_CUDA_TRY(cudaMemsetAsync(output.data(), 0, input_count * sizeof(bool), stream));
@@ -700,6 +811,43 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
    cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
    byte_count - 1,
    input_count);
+
+  LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel_preprocessing,
+    int64_t,
+    workers_needed,
+    THREADS_PER_BLOCK_STRINGS,
+    stream)
+    (input_data,
+    input_offsets,
+    d_kmp_automato.data(),
+    d_worker_start_term.data(),
+    output.data(),
+    match_length,
+    workers_needed,
+    CHUNK_SIZE,
+    cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
+    byte_count - 1,
+    input_count,
+    d_curr_terms.data());
+
+  LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel_processing,
+    int64_t,
+    workers_needed,
+    THREADS_PER_BLOCK_STRINGS,
+    stream)
+    (input_data,
+    input_offsets,
+    d_kmp_automato.data(),
+    d_worker_start_term.data(),
+    output.data(),
+    match_length,
+    workers_needed,
+    CHUNK_SIZE,
+    cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
+    byte_count - 1,
+    input_count,
+    d_curr_terms.data());
+
   //printf("Launched single term KMP kernel in DoStringMatching\n");
 
   // Return a boolean cudf::column
