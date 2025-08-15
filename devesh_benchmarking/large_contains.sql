@@ -26,23 +26,6 @@ call gpu_buffer_init("17 GB", "17 GB");
 .timer on
 
 call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
---call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
+call gpu_processing("SELECT * from SPAM WHERE contains(doc_text, 'Harum Hic Ex At')");
