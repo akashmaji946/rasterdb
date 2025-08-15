@@ -83,56 +83,54 @@ template __global__ void determine_start_kernel<int64_t>(const int64_t* indices,
 template<typename IdxT>
 __global__ void single_term_kmp_kernel(const char* char_data, const IdxT* indices, const int* kmp_automato, const IdxT* worker_start_term, bool* results, 
 IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT last_char, IdxT num_strings) {
-    
+    //extern __shared__ int shared_kmp_buffer[];
+    //
+    //// Cast pointers for different data types in shared memory
+    //int* shared_kmp_automato = shared_kmp_buffer;
+    //const int64_t automaton_size = pattern_size * CHARS_IN_BYTE;
+    //
+    //const int64_t indices_offset = automaton_size;
+    //IdxT* shared_indices = reinterpret_cast<IdxT*>(&shared_kmp_buffer[indices_offset]);
+    //
+    //for (int64_t i = threadIdx.x; i < automaton_size; i += blockDim.x) {
+    //    shared_kmp_automato[i] = kmp_automato[i];
+    //}
+    //
+    //const int64_t indices_count = num_strings;
+    //for (int64_t i = threadIdx.x; i < indices_count; i += blockDim.x) {
+    //    shared_indices[i] = indices[i];
+    //}
+    //__syncthreads();
+
     // See if have any work to do
-    uint64_t chunk_id = static_cast<uint64_t>(blockIdx.x);
+    IdxT chunk_id = static_cast<IdxT>(blockIdx.x);
     if (chunk_id >= num_workers) return;
 
-    const uint64_t curr_chunk_start = min(chunk_id * chunk_size, last_char);
-    const uint64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
-    const uint64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
-    const uint64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
-
-    extern __shared__ int shared_kmp_buffer[];
-    
-    // Cast pointers for different data types in shared memory
-    int* shared_kmp_automato = shared_kmp_buffer;
-    const int64_t automaton_size = pattern_size * CHARS_IN_BYTE;
-    
-    const int64_t indices_offset = automaton_size;
-    IdxT* shared_indices = reinterpret_cast<IdxT*>(&shared_kmp_buffer[indices_offset]);
-    
-    for (int64_t i = threadIdx.x; i < automaton_size; i += blockDim.x) {
-        shared_kmp_automato[i] = kmp_automato[i];
-    }
-    
-    const int64_t indices_count = num_strings;
-    for (int64_t i = threadIdx.x; i < indices_count; i += blockDim.x) {
-        shared_indices[i] = indices[i];
-    }
-    
-    __syncthreads();
+    const IdxT curr_chunk_start = min(chunk_id * chunk_size, last_char);
+    const IdxT curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
+    const IdxT curr_sub_chunk_start = min(curr_chunk_start + static_cast<IdxT>(threadIdx.x) * sub_chunk_size, curr_chunk_end);
+    const IdxT curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
 
     // Determine the subchunk that the current string is going to be working on
-    uint64_t curr_term = worker_start_term[chunk_id];
-    while (curr_term < num_strings && (curr_sub_chunk_start < shared_indices[curr_term] || curr_sub_chunk_start >= shared_indices[curr_term + 1])) {
+    IdxT curr_term = worker_start_term[chunk_id];
+    while (curr_term < num_strings && (curr_sub_chunk_start < indices[curr_term] || curr_sub_chunk_start >= indices[curr_term + 1])) {
       curr_term++;
     }
-    uint64_t curr_term_end = shared_indices[curr_term + 1];
+    IdxT curr_term_end = indices[curr_term + 1];
 
     // Perform the actual string matching
-    uint64_t j = 0; uint64_t curr_idx = 0; 
+    IdxT j = 0; IdxT curr_idx = 0; 
     #pragma unroll
-    for(uint64_t i = curr_sub_chunk_start; i <= curr_sub_chunk_end; i++) {
+    for(IdxT i = curr_sub_chunk_start; i <= curr_sub_chunk_end; i++) {
         // See if we need to switch to a new term
         if(i >= curr_term_end) {
           curr_term = curr_term + 1;
-          curr_term_end = shared_indices[curr_term + 1];
+          curr_term_end = indices[curr_term + 1];
           j = 0; // Reset because we are at the start of the string
         }
 
-        curr_idx = (uint64_t) char_data[i] + CHAR_INCREMENT;
-        j = shared_kmp_automato[j * CHARS_IN_BYTE + curr_idx];
+        curr_idx = static_cast<IdxT>(char_data[i] + CHAR_INCREMENT);
+        j = kmp_automato[j * CHARS_IN_BYTE + curr_idx];
 
         // Record that we have a hit
         if(j >= pattern_size) {
@@ -216,6 +214,14 @@ template __global__ void single_term_kmp_kernel_preprocessing<uint64_t>(const ch
 template<typename IdxT>
 __global__ void single_term_kmp_kernel_processing(const char* char_data, const IdxT* indices, const int* kmp_automato, const IdxT* worker_start_term, bool* results, 
 IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT last_char, IdxT num_strings, uint64_t* curr_term_array) {
+  extern __shared__ int shared_kmp_automato[];
+  const int64_t automaton_size = pattern_size * CHARS_IN_BYTE;
+  
+    for (int64_t i = threadIdx.x; i < automaton_size; i += blockDim.x) {
+      shared_kmp_automato[i] = kmp_automato[i];
+    }
+    __syncthreads();
+  
     int64_t chunk_id = blockIdx.x;
     if (chunk_id >= num_workers) return;
 
@@ -226,14 +232,6 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
     const uint64_t curr_chunk_end = min(curr_chunk_start + chunk_size + pattern_size, last_char);
     const uint64_t curr_sub_chunk_start = min(curr_chunk_start + threadIdx.x * sub_chunk_size, curr_chunk_end);
     const uint64_t curr_sub_chunk_end = min(curr_sub_chunk_start + sub_chunk_size + pattern_size, curr_chunk_end);
-
-    //extern __shared__ int shared_kmp_automato[];
-    //const int64_t automaton_size = pattern_size * CHARS_IN_BYTE;
-    //
-    //for (int64_t i = threadIdx.x; i < automaton_size; i += blockDim.x) {
-    //  shared_kmp_automato[i] = kmp_automato[i];
-    //}
-    //__syncthreads();
 
     // Perform the actual string matching
     uint64_t j = 0; uint64_t curr_idx = 0; 
@@ -251,7 +249,7 @@ IdxT pattern_size, IdxT num_workers, IdxT chunk_size, IdxT sub_chunk_size, IdxT 
         }
 
         curr_idx = (uint64_t) char_data[i] + CHAR_INCREMENT;
-        j = kmp_automato[j * CHARS_IN_BYTE + curr_idx];
+        j = shared_kmp_automato[j * CHARS_IN_BYTE + curr_idx];
 
         // Record that we have a hit
         if(j >= pattern_size) {
@@ -825,9 +823,18 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
 
    //printf("Right before launching kernel in DoStringMatching\n");
   // Launch KMP kernel
-  const int automaton_size = kmp_automato_size * sizeof(int);
-  const int indices_size = input_count * sizeof(int64_t);
-  const int total_smem = automaton_size + indices_size;
+  const uint64_t automaton_size = kmp_automato_size * sizeof(int);
+  const uint64_t indices_size = input_count * sizeof(int64_t);
+  const uint64_t total_smem = automaton_size + indices_size;
+
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0); // Get properties for device 0
+
+  printf("Shared memory per SM: %zu bytes\n", prop.sharedMemPerMultiprocessor);
+  printf("Total shared memory per block: %zu bytes\n", prop.sharedMemPerBlock);
+  printf("Total shared memory requested: %lu\n", total_smem);
+  printf("Total kmp automato memory requested %lu\n", automaton_size);
+
   single_term_kmp_kernel<int64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS, total_smem, stream>>>
   (input_data,
    input_offsets,
@@ -841,39 +848,43 @@ std::unique_ptr<cudf::column> DoStringMatching(const char* input_data,
    byte_count - 1,
    input_count);
 
-  //LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel_preprocessing,
-  //  int64_t,
-  //  workers_needed,
-  //  THREADS_PER_BLOCK_STRINGS,
-  //  stream)
-  //  (input_data,
-  //  input_offsets,
-  //  d_kmp_automato.data(),
-  //  d_worker_start_term.data(),
-  //  output.data(),
-  //  match_length,
-  //  workers_needed,
-  //  CHUNK_SIZE,
-  //  cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
-  //  byte_count - 1,
-  //  input_count,
-  //  d_curr_terms.data());
+   CHECK_ERROR();
+
+  /*
+  LAUNCH_KERNEL_DIRECT(single_term_kmp_kernel_preprocessing,
+    int64_t,
+    workers_needed,
+    THREADS_PER_BLOCK_STRINGS,
+    stream)
+    (input_data,
+    input_offsets,
+    d_kmp_automato.data(),
+    d_worker_start_term.data(),
+    output.data(),
+    match_length,
+    workers_needed,
+    CHUNK_SIZE,
+    cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
+    byte_count - 1,
+    input_count,
+    d_curr_terms.data());
 
 
   //const int automaton_size = kmp_automato_size * sizeof(int);
-  //single_term_kmp_kernel_processing<int64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS, automaton_size, stream>>>
-  //(input_data,
-  //input_offsets,
-  //d_kmp_automato.data(),
-  //d_worker_start_term.data(),
-  //output.data(),
-  //match_length,
-  //workers_needed,
-  //CHUNK_SIZE,
-  //cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
-  //byte_count - 1,
-  //input_count,
-  //d_curr_terms.data());
+  single_term_kmp_kernel_processing<int64_t><<<workers_needed, THREADS_PER_BLOCK_STRINGS, automaton_size, stream>>>
+  (input_data,
+  input_offsets,
+  d_kmp_automato.data(),
+  d_worker_start_term.data(),
+  output.data(),
+  match_length,
+  workers_needed,
+  CHUNK_SIZE,
+  cuda::ceil_div(CHUNK_SIZE, THREADS_PER_BLOCK_STRINGS),
+  byte_count - 1,
+  input_count,
+  d_curr_terms.data());
+  */
 
   //printf("Launched single term KMP kernel in DoStringMatching\n");
 
