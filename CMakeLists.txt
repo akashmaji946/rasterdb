@@ -89,6 +89,7 @@ set(EXTENSION_SOURCES
   src/config.cpp
   src/memory/memory_reservation.cpp
   src/parallel/task_executor.cpp
+  src/sirius_context.cpp
 )
 add_subdirectory(src/operator)
 add_subdirectory(src/plan)

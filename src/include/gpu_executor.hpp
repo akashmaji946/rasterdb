@@ -74,6 +74,7 @@ public:
 	void Initialize(unique_ptr<GPUPhysicalOperator> physical_plan);
 	void InitializeInternal(GPUPhysicalOperator &physical_result_collector);
 	void Execute();
+	void NewExecute();
 	void Reset();
 	shared_ptr<GPUPipeline> CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op);
 

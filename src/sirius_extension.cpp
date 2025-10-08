@@ -43,6 +43,7 @@
 #include "gpu_context.hpp"
 #include "gpu_physical_plan_generator.hpp"
 #include "gpu_buffer_manager.hpp"
+#include "sirius_context.hpp"
 #include "config.hpp"
 
 #include <cstdlib>
@@ -515,6 +516,7 @@ void SiriusExtension::InitializeGPUExtension(Connection &con) {
 	// size_t processing_size_per_cpu = 16UL * 1024 * 1024 * 1024; //16GB
 	// GPUBufferManager *gpuBufferManager = &(GPUBufferManager::GetInstance(cache_size_per_gpu, processing_size_per_gpu, processing_size_per_cpu));
 
+	sirius::SiriusContext sirius_context();
 }
 
 static void SetUsePinMemory(ClientContext &context, SetScope scope, Value &parameter) {
