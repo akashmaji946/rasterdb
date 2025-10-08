@@ -179,7 +179,7 @@ GPUContext::GPUExecutePendingQueryResult(PendingQueryResult &pending) {
 	CheckExecutableInternal(pending);
 	auto &gpu_executor = GetGPUExecutor();
 	try {
-		gpu_executor.Execute();
+		gpu_executor.NewExecute();
 	} catch (std::exception &e) {
 		ErrorData error(e);
 		SIRIUS_LOG_ERROR("Error in GPUExecutePendingQueryResult: {}", error.RawMessage());
