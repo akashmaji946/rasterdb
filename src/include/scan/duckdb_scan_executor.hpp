@@ -45,9 +45,6 @@ class DuckDBScanExecutor {
     // Tell DuckDB scheduler to work on the scheduled task until it's done (see example in gpu_physical_table_scan.cpp)
     void workOnTask();
 
-    // Convert the output chunk from duckdb to a DataBatch
-    void convertToDataBatch();
-
     // Push the output DataBatch to Data Repository
     void pushScanOutput(::sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id, size_t idx);
 

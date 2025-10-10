@@ -50,7 +50,7 @@ public:
     }
 
     // Get a DataBatch by pipeline_id and idx and transfer ownership
-    sirius::unique_ptr<DataBatch> GetDataBatch(size_t pipeline_id, size_t idx) {
+    sirius::unique_ptr<DataBatch> EvictDataBatch(size_t pipeline_id, size_t idx) {
         lock_guard<mutex> lock(mutex_);
         
         // Check bounds
