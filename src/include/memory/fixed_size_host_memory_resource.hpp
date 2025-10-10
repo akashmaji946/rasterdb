@@ -20,16 +20,12 @@
 #include <rmm/mr/pinned_host_memory_resource.hpp>
 #include <rmm/aligned.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
-#include "duckdb/common/shared_ptr.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/vector.hpp"
-#include "duckdb/common/mutex.hpp"
+#include "helper/helper.hpp"
 
 #include <cstddef>
 #include <memory>
 #include <algorithm>
 
-namespace duckdb {
 namespace sirius {
 
 /**
@@ -71,7 +67,7 @@ public:
      * @param initial_pools Number of pools to pre-allocate
      */
     explicit fixed_size_host_memory_resource(
-        duckdb::unique_ptr<rmm::mr::host_memory_resource> upstream_mr,
+        sirius::unique_ptr<rmm::mr::host_memory_resource> upstream_mr,
         std::size_t block_size = default_block_size,
         std::size_t pool_size = default_pool_size,
         std::size_t initial_pools = default_initial_number_pools);
@@ -119,11 +115,11 @@ public:
      * @brief Simple RAII wrapper for multiple block allocations.
      */
     struct multiple_blocks_allocation {
-        duckdb::vector<void*> blocks;
+        sirius::vector<void*> blocks;
         fixed_size_host_memory_resource* mr;
         std::size_t block_size;
 
-        multiple_blocks_allocation(duckdb::vector<void*> b, fixed_size_host_memory_resource* m, std::size_t bs)
+        multiple_blocks_allocation(sirius::vector<void*> b, fixed_size_host_memory_resource* m, std::size_t bs)
             : blocks(std::move(b)), mr(m), block_size(bs) {}
 
         ~multiple_blocks_allocation() {
@@ -210,11 +206,10 @@ private:
 
     std::size_t block_size_;                                    ///< Size of each block
     std::size_t pool_size_;                                     ///< Number of blocks in pool
-    duckdb::unique_ptr<rmm::mr::host_memory_resource> upstream_mr_; ///< Upstream memory resource (optional)
-    duckdb::vector<void*> allocated_blocks_;                       ///< All allocated blocks
-    duckdb::vector<void*> free_blocks_;                           ///< Currently free blocks
-    mutable duckdb::mutex mutex_;                                 ///< Mutex for thread safety
+    sirius::unique_ptr<rmm::mr::host_memory_resource> upstream_mr_; ///< Upstream memory resource (optional)
+    sirius::vector<void*> allocated_blocks_;                       ///< All allocated blocks
+    sirius::vector<void*> free_blocks_;                           ///< Currently free blocks
+    mutable sirius::mutex mutex_;                                 ///< Mutex for thread safety
 };
 
 } // namespace sirius
-} // namespace duckdb

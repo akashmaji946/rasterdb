@@ -16,11 +16,8 @@
 
 #pragma once
 #include "data_batch.hpp"
-#include "duckdb/common/vector.hpp"
-#include "duckdb/common/mutex.hpp"
-#include "duckdb/common/exception.hpp"
+#include "helper/helper.hpp"
 
-namespace duckdb {
 namespace sirius {
 
 //! Thread-safe repository for storing and retrieving DataBatch objects
@@ -35,14 +32,12 @@ public:
     }
 
     // Add a new DataBatch to the repository at the specified pipeline_id and idx
-    void AddNewDataBatch(size_t pipeline_id, size_t idx, duckdb::unique_ptr<DataBatch> data_batch) {
+    void AddNewDataBatch(size_t pipeline_id, size_t idx, sirius::unique_ptr<DataBatch> data_batch) {
         lock_guard<mutex> lock(mutex_);
         
         // Ensure the pipeline_id is valid
         if (pipeline_id >= data_batches_.size()) {
-            throw OutOfRangeException("Pipeline ID %llu out of range (max: %llu)", 
-                                     static_cast<unsigned long long>(pipeline_id),
-                                     static_cast<unsigned long long>(data_batches_.size() - 1));
+            throw std::out_of_range("Invalid pipeline_id");
         }
         
         // Ensure the inner vector is large enough
@@ -55,7 +50,7 @@ public:
     }
 
     // Get a DataBatch by pipeline_id and idx and transfer ownership
-    duckdb::unique_ptr<DataBatch> GetDataBatch(size_t pipeline_id, size_t idx) {
+    sirius::unique_ptr<DataBatch> GetDataBatch(size_t pipeline_id, size_t idx) {
         lock_guard<mutex> lock(mutex_);
         
         // Check bounds
@@ -73,9 +68,8 @@ public:
 
 private:
     // The data repository is organized as a 2D vector: outer vector indexed by pipeline_id, inner vector indexed by idx
-    duckdb::vector<duckdb::vector<duckdb::unique_ptr<DataBatch>>> data_batches_;
+    sirius::vector<sirius::vector<sirius::unique_ptr<DataBatch>>> data_batches_;
     mutex mutex_; // Mutex to protect access to data_batches
 };
 
-}
 }

@@ -24,10 +24,9 @@
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/task_executor.hpp"
+#include "helper/helper.hpp"
 
 namespace duckdb {
-namespace sirius {
-namespace parallel {
 
 // This executor is just handling out the task to duckdb scheduler, and converting the duckdb output chunk to a data batch
 // TODO: one idea to make scan executor work is by having each thread continue calling 'function' until it accumulates 2GB of data
@@ -35,7 +34,7 @@ namespace parallel {
 // For the first step, we assume that we will not run out of CPU memory.
 class DuckDBScanExecutor {
     DuckDBScanExecutor(TaskExecutor &executor, TableFunction& function_p, ExecutionContext& context_p,
-                       GPUPhysicalTableScan& op_p, DataRepository& data_repository) :
+                       GPUPhysicalTableScan& op_p, ::sirius::DataRepository& data_repository) :
         task_executor_(executor), function_(function_p), context_(context_p), op_(op_p), data_repository_(data_repository) {}
 
     ~DuckDBScanExecutor();
@@ -50,16 +49,14 @@ class DuckDBScanExecutor {
     void convertToDataBatch();
 
     // Push the output DataBatch to Data Repository
-    void pushScanOutput(duckdb::unique_ptr<DataBatch> data_batch, size_t pipeline_id, size_t idx);
+    void pushScanOutput(::sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id, size_t idx);
 
 private:
-    DataRepository& data_repository_;
+    ::sirius::DataRepository& data_repository_;
     TaskExecutor &task_executor_;
     TableFunction& function_;
     ExecutionContext& context_;
     GPUPhysicalTableScan& op_;
 };
 
-} // namespace parallel
-} // namespace sirius
 } // namespace duckdb

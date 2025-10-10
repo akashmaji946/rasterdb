@@ -26,6 +26,8 @@
 #include "operator/gpu_physical_result_collector.hpp"
 #include "gpu_buffer_manager.hpp"
 #include "duckdb/execution/executor.hpp"
+#include "sirius_context.hpp"
+
 namespace duckdb {
 
 class ClientContext;
@@ -37,7 +39,7 @@ class GPUExecutor {
 
 public:
 	explicit GPUExecutor(ClientContext &context, GPUContext &gpu_context)
-	    : context(context), gpu_context(gpu_context) {
+	    : context(context), gpu_context(gpu_context), sirius_context(::sirius::SiriusContext::GetInstance()) {
 		gpuBufferManager = &(GPUBufferManager::GetInstance());
 		executor = new Executor(context);
 	};
@@ -80,8 +82,14 @@ public:
 
 	Executor* executor;
 
-	//! Convert the DuckDB physical plan to a GPU physical plan
+    void Signal();
+    void Wait();
 
+private:
+	mutex mtx;
+	condition_variable cv;
+	bool ready = false;
+	::sirius::SiriusContext& sirius_context;
 };
 
 class GPUExecutionContext {

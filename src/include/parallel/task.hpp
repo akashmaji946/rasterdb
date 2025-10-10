@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <memory>
+#include "helper/helper.hpp"
 
 namespace sirius {
 namespace parallel {
@@ -42,7 +42,7 @@ public:
  */
 class ITask {
 public:
-  ITask(std::unique_ptr<ITaskLocalState> local_state, std::shared_ptr<ITaskGlobalState> global_state)
+  ITask(sirius::unique_ptr<ITaskLocalState> local_state, sirius::shared_ptr<ITaskGlobalState> global_state)
     : local_state_(std::move(local_state)), global_state_(global_state) {}
 
   virtual ~ITask() = default;
@@ -57,8 +57,8 @@ public:
   virtual void Execute() = 0;
 
 protected:
-  std::unique_ptr<ITaskLocalState> local_state_;
-  std::shared_ptr<ITaskGlobalState> global_state_;
+  sirius::unique_ptr<ITaskLocalState> local_state_;
+  sirius::shared_ptr<ITaskGlobalState> global_state_;
 };
 
 } // namespace parallel

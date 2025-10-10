@@ -56,51 +56,34 @@ void GPUExecutor::Initialize(unique_ptr<GPUPhysicalOperator> plan) {
 	InitializeInternal(*gpu_owned_plan);
 }
 
+void GPUExecutor::Signal() {
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		ready = true;
+	}
+	cv.notify_one();
+}
+
+void GPUExecutor::Wait() {
+	std::unique_lock<std::mutex> lock(mtx);
+	cv.wait(lock, [this] { return ready; });
+	ready = false;
+}
+
 // The new execution path
 void GPUExecutor::NewExecute() {
 	// Execute the GPU physical plan
 	check_fallback_queries(gpu_context.gpu_active_query->query);
 	// TODO: Implement GPU execution logic
 
-	// start Pipeline Executor, Downgrade Executor, and Task Creator
-	// SiriusContext.PipelineExecutor.Start();
-	// SiriusComponent.DowngradeExecutor.Start();
-	// SiriusComponent.TaskCreator.Start();
+	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
 
-	// for (int pipeline_idx = 0; pipeline_idx < scheduled.size(); pipeline_idx++) {
-	// 	auto pipeline = scheduled[pipeline_idx];
-	// 	SIRIUS_LOG_DEBUG("Scheduling pipeline {}", pipeline_idx);
-	// 	//register pipeline to each executor and task creator
-	// 	SiriusComponent.DataRepository.Register(pipeline);
-	// }
-
-	// for (int pipeline_idx = 0; pipeline_idx < scheduled.size(); pipeline_idx++) {
-	// 	auto pipeline = scheduled[pipeline_idx];
-	// 	SIRIUS_LOG_DEBUG("Executing pipeline {}", pipeline_idx);
-
-	// 	//launch scan task for each pipeline
-	// 	auto source_type = pipeline->source.get()->type;
-	// 	SIRIUS_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
-	// 	if (source_type == PhysicalOperatorType::TABLE_SCAN) {
-	// 		Pipeline duckdb_pipeline(*executor);
-	// 		ThreadContext thread_context(context);
-	// 		ExecutionContext exec_context(context, thread_context, &duckdb_pipeline);
-	// 		auto &table_scan = pipeline->source->Cast<GPUPhysicalTableScan>();
-	// 		table_scan.GetDataDuckDB(exec_context);
-	// 	}
-
-	// 	//wait for pipeline completion
-	// 	// std::unique_lock<std::mutex> lock(mtx);
-	// 	// cv.wait(lock, [this]{ return query_done; });
-	// 	// std::cout << "Pipeline is finished." << std::endl;
-	// }
-
-	//wait for pipeline completion
-	// std::unique_lock<std::mutex> lock(mtx);
-	// cv.wait(lock, [this]{ return query_done; });
-	// std::cout << "Query is finished." << std::endl;
-
-	// return PendingExecutionResult::EXECUTION_FINISHED;
+	task_creator.SetCoordinator(this);
+	task_creator.Start();
+	task_creator.Signal();
+	Wait();
+	std::cout << "Coordinator: Got signal from Creator\n";
+	task_creator.Stop();
 }
 
 void GPUExecutor::Execute() {

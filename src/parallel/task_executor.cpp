@@ -27,7 +27,7 @@ void ITaskExecutor::Start() {
   threads_.reserve(config_.num_threads);
   for (int i = 0; i < config_.num_threads; ++i) {
     threads_.push_back(
-      std::make_unique<TaskExecutorThread>(std::make_unique<std::thread>(&ITaskExecutor::WorkerLoop, this, i)));
+      sirius::make_unique<TaskExecutorThread>(sirius::make_unique<sirius::thread>(&ITaskExecutor::WorkerLoop, this, i)));
   }
 }
 
@@ -45,13 +45,13 @@ void ITaskExecutor::Stop() {
   threads_.clear();
 }
 
-void ITaskExecutor::Schedule(std::unique_ptr<ITask> task) {
+void ITaskExecutor::Schedule(sirius::unique_ptr<ITask> task) {
   task_queue_->Push(std::move(task));
   total_tasks_.fetch_add(1);
 }
 
 void ITaskExecutor::Wait() {
-  std::unique_lock<std::mutex> lock(finish_mutex_);
+  sirius::unique_lock<sirius::mutex> lock(finish_mutex_);
   finish_cv_.wait(lock, [&]() {
     return total_tasks_.load() == finished_tasks_.load();
   });
@@ -65,7 +65,7 @@ void ITaskExecutor::OnStop() {
   task_queue_->Close();
 }
 
-void ITaskExecutor::OnTaskError(int worker_id, std::unique_ptr<ITask> task, const std::exception& e) {
+void ITaskExecutor::OnTaskError(int worker_id, sirius::unique_ptr<ITask> task, const std::exception& e) {
   if (config_.retry_on_error) {
     Schedule(std::move(task));
   } else {

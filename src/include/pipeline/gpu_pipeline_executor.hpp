@@ -20,7 +20,6 @@
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "data/data_repository.hpp"
 
-namespace duckdb {
 namespace sirius {
 namespace parallel {
 
@@ -39,9 +38,9 @@ public:
      */
     explicit GPUPipelineExecutor(
         TaskExecutorConfig config,
-        duckdb::shared_ptr<DataRepository> data_repository = nullptr)
-        : ITaskExecutor(duckdb::make_uniq<GPUPipelineTaskQueue>(), config),
-          data_repository_(std::move(data_repository)) {}
+        DataRepository& data_repository)
+        : ITaskExecutor(sirius::make_unique<GPUPipelineTaskQueue>(), config),
+          data_repository_(data_repository) {}
 
     // Destructor
     ~GPUPipelineExecutor() override = default;
@@ -56,37 +55,25 @@ public:
      * Schedule a GPU pipeline task for execution
      * @param gpu_task The GPU pipeline task to schedule
      */
-    void ScheduleGPUTask(duckdb::unique_ptr<GPUPipelineTask> gpu_task) {
+    void ScheduleGPUTask(sirius::unique_ptr<GPUPipelineTask> gpu_task) {
         // Convert to ITask and use parent's Schedule method
         Schedule(std::move(gpu_task));
-    }
-
-    /**
-     * Get the data repository used by this executor
-     * @return Shared pointer to the data repository, may be nullptr
-     */
-    duckdb::shared_ptr<DataRepository> GetDataRepository() const {
-        return data_repository_;
     }
 
     /**
      * Override the Schedule method to provide GPU-specific scheduling logic
      * @param task The task to schedule
      */
-    void Schedule(duckdb::unique_ptr<ITask> task) override;
+    void Schedule(sirius::unique_ptr<ITask> task) override;
 
 private:
     // Helper method to safely cast ITask to GPUPipelineTask
     GPUPipelineTask* CastToGPUPipelineTask(ITask* task);
 
-    // push the output data batch to the Data Repository
-    void PushPipelineOutput(duckdb::unique_ptr<DataBatch> data_batch, size_t pipeline_id, size_t idx);
-
 private:
     // GPU-specific resources
-    duckdb::shared_ptr<DataRepository> data_repository_;
+    DataRepository& data_repository_;
 };
 
 } // namespace parallel
 } // namespace sirius
-} // namespace duckdb

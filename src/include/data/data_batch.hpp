@@ -19,13 +19,8 @@
 #include <memory>
 #include <cudf/table/table.hpp>
 #include "data/cudf_table_converter.hpp"
-#include "duckdb/common/shared_ptr.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/vector.hpp"
-#include "duckdb/common/queue.hpp"
-#include "duckdb/common/mutex.hpp"
+#include "helper/helper.hpp"
 
-namespace duckdb {
 namespace sirius {
 
 // Enum to indicate where the data is currently residing
@@ -37,14 +32,14 @@ enum class Tier {
 class DataBatch {
 public:
     // Define the variant type to hold either cudf::table or spilling::allocation
-    using DataVariant = std::variant<duckdb::unique_ptr<cudf::table>, duckdb::unique_ptr<table_allocation>>;
+    using DataVariant = std::variant<sirius::unique_ptr<cudf::table>, sirius::unique_ptr<table_allocation>>;
 
     // Constructor to initialize with cudf::table
-    DataBatch(duckdb::unique_ptr<cudf::table> gpu_data) 
+    DataBatch(sirius::unique_ptr<cudf::table> gpu_data) 
         : data_(std::move(gpu_data)), location_(Tier::GPU) {}
 
     // Constructor to initialize with spilling::allocation
-    DataBatch(duckdb::unique_ptr<table_allocation> cpu_data) 
+    DataBatch(sirius::unique_ptr<table_allocation> cpu_data) 
         : data_(std::move(cpu_data)), location_(Tier::CPU) {}
 
     // Function to convert data to GPU
@@ -65,18 +60,17 @@ private:
     Tier location_;
 
     // Implement these conversion functions according to your specific logic
-    duckdb::unique_ptr<cudf::table> ConvertToGPU(duckdb::unique_ptr<table_allocation> cpu_data) {
+    sirius::unique_ptr<cudf::table> ConvertToGPU(sirius::unique_ptr<table_allocation> cpu_data) {
         // Conversion logic here
         // ...
         return nullptr; // Replace with actual conversion result
     }
 
-    duckdb::unique_ptr<table_allocation> ConvertToCPU(duckdb::unique_ptr<cudf::table> gpu_data) {
+    sirius::unique_ptr<table_allocation> ConvertToCPU(sirius::unique_ptr<cudf::table> gpu_data) {
         // Conversion logic here
         // ...
         return nullptr; // Replace with actual conversion result
     }
 };
 
-}
-}
+} // namespace sirius

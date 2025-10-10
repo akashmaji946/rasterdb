@@ -25,8 +25,8 @@
 #include "scan/duckdb_scan_executor.hpp"
 #include "scan/duckdb_scan_task.hpp"
 #include "memory/memory_reservation.hpp"
+#include "helper/helper.hpp"
 
-namespace duckdb {
 namespace sirius {
 
 
@@ -47,14 +47,10 @@ public:
     // Accessors for global components
     TaskCreator& GetTaskCreator() {
         return task_creator_;
-    }  
-
-    duckdb::shared_ptr<DataRepository> GetDataRepository() {
-        return data_repository_;
     }
 
-    ::sirius::memory::MemoryReservationManager& GetMemoryReservationManager() {
-        return ::sirius::memory::MemoryReservationManager::getInstance();
+    sirius::memory::MemoryReservationManager& GetMemoryReservationManager() {
+        return memory::MemoryReservationManager::getInstance();
     }
 
     parallel::GPUPipelineExecutor& GetGPUPipelineExecutor() {
@@ -65,9 +61,9 @@ public:
         return downgrade_executor_;
     }
 
-    duckdb::shared_ptr<parallel::DuckDBScanExecutor> GetDuckDBScanExecutor() {
-        return duckdb_scan_executor_;
-    }
+    // sirius::shared_ptr<duckdb::DuckDBScanExecutor> GetDuckDBScanExecutor() {
+    //     return duckdb_scan_executor_;
+    // }
 
     parallel::DowngradeTaskCreator& GetDowngradeTaskCreator() {
         return downgrade_task_creator_;
@@ -84,14 +80,13 @@ public:
 private :
 
     TaskCreator task_creator_;
-    duckdb::shared_ptr<DataRepository> data_repository_;
+    DataRepository data_repository_;
     parallel::GPUPipelineExecutor gpu_pipeline_executor_;
     parallel::DowngradeExecutor downgrade_executor_;
-    duckdb::shared_ptr<parallel::DuckDBScanExecutor> duckdb_scan_executor_;
+    // sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor_;
     parallel::DowngradeTaskCreator downgrade_task_creator_;
     parallel::GPUPipelineTaskQueue gpu_pipeline_task_queue_;
     parallel::DowngradeTaskQueue downgrade_task_queue_;
 };
 
 } // namespace sirius
-} // namespace duckdb

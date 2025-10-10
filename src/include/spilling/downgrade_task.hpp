@@ -17,22 +17,16 @@
 #pragma once
 #include "data/data_batch.hpp"
 #include "parallel/task_scheduler.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/shared_ptr.hpp"
-#include "duckdb/common/vector.hpp"
-#include "duckdb/common/queue.hpp"
-#include "duckdb/common/helper.hpp"
 
-namespace duckdb {
 namespace sirius {
 namespace parallel {
 
 class DowngradeTask : public ITask {
 public:
     DowngradeTask(uint64_t task_id, 
-                    duckdb::unique_ptr<DataBatch> data_batch,
-                    duckdb::unique_ptr<ITaskLocalState> local_state,
-                    duckdb::shared_ptr<ITaskGlobalState> global_state)
+                    ::sirius::unique_ptr<DataBatch> data_batch,
+                    ::sirius::unique_ptr<ITaskLocalState> local_state,
+                    ::sirius::shared_ptr<ITaskGlobalState> global_state)
         : ITask(std::move(local_state), std::move(global_state)),
           task_id_(task_id),
           data_batch_(std::move(data_batch)) {}
@@ -47,14 +41,14 @@ public:
 
 private:
     uint64_t task_id_;
-    duckdb::unique_ptr<DataBatch> data_batch_;
+    ::sirius::unique_ptr<DataBatch> data_batch_;
 };
 
-class DowngradeTaskQueue : public ITaskScheduler {
+class DowngradeTaskQueue : public ITaskQueue {
 public:
     DowngradeTaskQueue() = default;
 
-    // Implement ITaskScheduler interface
+    // Implement ITaskQueue interface
     void Open() override {
         std::lock_guard<std::mutex> lock(mutex_);
         is_open_ = true;
@@ -65,37 +59,37 @@ public:
         is_open_ = false;
     }
 
-    void Push(duckdb::unique_ptr<ITask> task) override {
+    void Push(::sirius::unique_ptr<ITask> task) override {
         // Convert ITask to DowngradeTask - since we know it's a DowngradeTask
-        auto gpu_task = duckdb::unique_ptr<DowngradeTask>(static_cast<DowngradeTask*>(task.release()));
+        auto gpu_task = ::sirius::unique_ptr<DowngradeTask>(static_cast<DowngradeTask*>(task.release()));
         Push(std::move(gpu_task));
     }
 
     // GPU-specific overload for type safety and convenience
-    void Push(duckdb::unique_ptr<DowngradeTask> gpu_task) {
+    void Push(::sirius::unique_ptr<DowngradeTask> gpu_task) {
         EnqueueTask(std::move(gpu_task));
     }
     
-    duckdb::unique_ptr<ITask> Pull() override {
+    ::sirius::unique_ptr<ITask> Pull() override {
         // Delegate to GPU-specific version and return as base type
         auto gpu_task = PullDowngradeTask();
         return std::move(gpu_task);
     }
 
     // GPU-specific method for type safety and convenience  
-    duckdb::unique_ptr<DowngradeTask> PullDowngradeTask() {
+    ::sirius::unique_ptr<DowngradeTask> PullDowngradeTask() {
         return DequeueTask();
     }
 
         // GPU-specific methods
-    void EnqueueTask(duckdb::unique_ptr<DowngradeTask> downgrade_task) {
+    void EnqueueTask(::sirius::unique_ptr<DowngradeTask> downgrade_task) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (downgrade_task && is_open_) {
             task_queue_.push(std::move(downgrade_task));
         }
     }
 
-    duckdb::unique_ptr<DowngradeTask> DequeueTask() {
+    ::sirius::unique_ptr<DowngradeTask> DequeueTask() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (task_queue_.empty()) {
             return nullptr;
@@ -111,7 +105,7 @@ public:
     }
     
 private:
-    duckdb::queue<duckdb::unique_ptr<DowngradeTask>> task_queue_;
+    ::sirius::queue<::sirius::unique_ptr<DowngradeTask>> task_queue_;
     bool is_open_ = false;
     mutable std::mutex mutex_;  // mutable to allow locking in const methods
 
@@ -119,4 +113,3 @@ private:
 
 } // namespace parallel
 } // namespace sirius
-} // namespace duckdb

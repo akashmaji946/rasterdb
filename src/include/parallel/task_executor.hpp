@@ -16,22 +16,18 @@
 
 #pragma once
 
-#include "task_queue.hpp"
-
-#include <atomic>
-#include <thread>
-#include <vector>
-#include <mutex>
+#include "task_scheduler.hpp"
 #include <condition_variable>
+#include "helper/helper.hpp"
 
 namespace sirius {
 namespace parallel {
 
 struct TaskExecutorThread {
-  explicit TaskExecutorThread(std::unique_ptr<std::thread> thread)
+  explicit TaskExecutorThread(sirius::unique_ptr<std::thread> thread)
     : internal_thread_(std::move(thread)) {}
 
-  std::unique_ptr<std::thread> internal_thread_;
+  sirius::unique_ptr<std::thread> internal_thread_;
 };
 
 struct TaskExecutorConfig {
@@ -45,7 +41,7 @@ struct TaskExecutorConfig {
  */
 class ITaskExecutor {
 public:
-  ITaskExecutor(std::unique_ptr<ITaskQueue> task_queue, TaskExecutorConfig config)
+  ITaskExecutor(sirius::unique_ptr<ITaskQueue> task_queue, TaskExecutorConfig config)
     : task_queue_(std::move(task_queue)), config_(config), running_(false) {}
   
   virtual ~ITaskExecutor() {
@@ -65,7 +61,7 @@ public:
   virtual void Stop();
 
   // Schedule a task.
-  virtual void Schedule(std::unique_ptr<ITask> task);
+  virtual void Schedule(sirius::unique_ptr<ITask> task);
 
   // Wait until all tasks are finished.
   virtual void Wait();
@@ -74,19 +70,19 @@ private:
   // Helper functions.
   virtual void OnStart();
   virtual void OnStop();
-  virtual void OnTaskError(int worker_id, std::unique_ptr<ITask> task, const std::exception& e);
+  virtual void OnTaskError(int worker_id, sirius::unique_ptr<ITask> task, const std::exception& e);
 
   // Main thread loop.
   virtual void WorkerLoop(int worker_id);
 
 private:
-  std::unique_ptr<ITaskQueue> task_queue_;
+  sirius::unique_ptr<ITaskQueue> task_queue_;
   TaskExecutorConfig config_;
-  std::atomic<bool> running_;
-  std::vector<std::unique_ptr<TaskExecutorThread>> threads_;
-  std::atomic<uint64_t> total_tasks_ = 0;
-  std::atomic<uint64_t> finished_tasks_ = 0;
-  std::mutex finish_mutex_;
+  sirius::atomic<bool> running_;
+  sirius::vector<std::unique_ptr<TaskExecutorThread>> threads_;
+  sirius::atomic<uint64_t> total_tasks_ = 0;
+  sirius::atomic<uint64_t> finished_tasks_ = 0;
+  sirius::mutex finish_mutex_;
   std::condition_variable finish_cv_;
 };
 
