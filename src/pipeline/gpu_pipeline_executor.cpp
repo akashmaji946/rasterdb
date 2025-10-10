@@ -14,32 +14,28 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include "task.hpp"
+#include "pipeline/gpu_pipeline_executor.hpp"
 
 namespace sirius {
 namespace parallel {
 
-/**
- * Interface for concrete scheduling policies.
- */
-class ITaskQueue {
-public:
-  virtual ~ITaskQueue() = default;
+void GPUPipelineExecutor::Schedule(sirius::unique_ptr<ITask> task) {
+    // GPU-specific scheduling logic
+    auto gpu_task = CastToGPUPipelineTask(task.get());
+    if (!gpu_task) {
+        // If it's not a GPUPipelineTask, use the parent's implementation
+        ITaskExecutor::Schedule(std::move(task));
+        return;
+    }
 
-  // Open the scheduler and start accepting new tasks.
-  virtual void Open() = 0;
+    // Schedule the GPU task using the parent's method
+    ITaskExecutor::Schedule(std::move(task));
+}
 
-  // Close the scheduler and stop processing new tasks.
-  virtual void Close() = 0;
-
-  // Add a task to the scheduler.
-  virtual void Push(sirius::unique_ptr<ITask> task) = 0;
-
-  // Pull a task. Wait until a task available or the scheduler is closed.
-  virtual sirius::unique_ptr<ITask> Pull() = 0;
-};
+GPUPipelineTask* GPUPipelineExecutor::CastToGPUPipelineTask(ITask* task) {
+    // Safely cast to GPUPipelineTask
+    return dynamic_cast<GPUPipelineTask*>(task);
+}
 
 } // namespace parallel
 } // namespace sirius

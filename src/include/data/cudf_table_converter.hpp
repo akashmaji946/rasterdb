@@ -18,19 +18,14 @@
 
 #include <rmm/mr/host/host_memory_resource.hpp>
 #include "memory/fixed_size_host_memory_resource.hpp"
-#include "duckdb/common/shared_ptr.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/vector.hpp"
 
 #include <cudf/table/table.hpp>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/contiguous_split.hpp>
+#include "helper/helper.hpp"
 
-#include <memory>
-
-namespace duckdb {
 namespace sirius {
 
 /**
@@ -38,11 +33,11 @@ namespace sirius {
  */
 struct table_allocation {
     fixed_size_host_memory_resource::multiple_blocks_allocation allocation;
-    duckdb::unique_ptr<duckdb::vector<uint8_t>> metadata;
+    sirius::unique_ptr<sirius::vector<uint8_t>> metadata;
     std::size_t data_size;
     
     table_allocation(fixed_size_host_memory_resource::multiple_blocks_allocation alloc,
-                     duckdb::unique_ptr<duckdb::vector<uint8_t>> meta,
+                     sirius::unique_ptr<sirius::vector<uint8_t>> meta,
                      std::size_t data_sz)
         : allocation(std::move(alloc)), metadata(std::move(meta)), data_size(data_sz) {}
 };
@@ -103,4 +98,3 @@ private:
 
 };
 } // namespace sirius
-} // namespace duckdb

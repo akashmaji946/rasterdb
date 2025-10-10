@@ -89,7 +89,11 @@ set(EXTENSION_SOURCES
   src/config.cpp
   src/memory/memory_reservation.cpp
   src/parallel/task_executor.cpp
+  src/pipeline/gpu_pipeline_executor.cpp
+  src/spilling/downgrade_executor.cpp
+  src/spilling/downgrade_task_creator.cpp
   src/sirius_context.cpp
+  src/task_creator.cpp
 )
 add_subdirectory(src/operator)
 add_subdirectory(src/plan)

@@ -21,8 +21,9 @@
 #include "parallel/task_executor.hpp"
 #include "parallel/task.hpp"
 
-namespace duckdb {
 namespace sirius {
+
+class duckdb::GPUExecutor;
 
 enum class Source {
     SCAN,
@@ -58,18 +59,13 @@ public:
     
 private:
     mutex mutex_;
-    queue<TaskCompletionMessage> message_queue_;
+    sirius::queue<TaskCompletionMessage> message_queue_;
 };
 
 class TaskCreator {
 public:
-    TaskCreator(
-        duckdb::shared_ptr<DataRepository> data_repository,
-        parallel::GPUPipelineTaskQueue &gpu_pipeline_executor)
-        : data_repository_(data_repository),
-          gpu_pipeline_executor_(gpu_pipeline_executor),
-          task_completion_message_queue_() {
-    }
+    TaskCreator(DataRepository& data_repository,
+    parallel::GPUPipelineTaskQueue &gpu_pipeline_executor);
           
     // Destructor
     ~TaskCreator() = default;
@@ -94,30 +90,39 @@ public:
 
     void WorkerLoop();
 
+    void SetCoordinator(duckdb::GPUExecutor* coordinator) {
+        coordinator_ = coordinator;
+    }
+
     // set duckdb scan executor
-    void SetDuckDBScanExecutor(duckdb::shared_ptr<parallel::DuckDBScanExecutor> duckdb_scan_executor) {
+    void SetDuckDBScanExecutor(sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor) {
         duckdb_scan_executor_ = duckdb_scan_executor;
     }
 
     // submit scan task to scan executor
-    void ScheduleScanGetSizeTask(duckdb::unique_ptr<parallel::DuckDBScanGetSizeTask> scan_getsize_task);
-    void ScheduleScanCoalesceTask(duckdb::unique_ptr<parallel::DuckDBScanCoalesceTask> scan_coalesce_task);
+    void ScheduleScanGetSizeTask(sirius::unique_ptr<duckdb::DuckDBScanGetSizeTask> scan_getsize_task);
+    void ScheduleScanCoalesceTask(sirius::unique_ptr<duckdb::DuckDBScanCoalesceTask> scan_coalesce_task);
 
     // submit pipeline task to pipeline executor
-    void SchedulePipelineTask(duckdb::unique_ptr<parallel::GPUPipelineTask> gpu_pipeline_task);
+    void SchedulePipelineTask(sirius::unique_ptr<parallel::GPUPipelineTask> gpu_pipeline_task);
 
-    duckdb::shared_ptr<DataRepository> GetDataRepository() const {
-        return data_repository_;
-    }
+    void Run();
+    void Signal();
+    void Wait();
 
 private:
     TaskCompletionMessageQueue task_completion_message_queue_;
-    duckdb::shared_ptr<DataRepository> data_repository_;
+    DataRepository& data_repository_;
     parallel::GPUPipelineTaskQueue &gpu_pipeline_executor_;
-    duckdb::shared_ptr<parallel::DuckDBScanExecutor> duckdb_scan_executor_;
-    duckdb::unique_ptr<std::thread> internal_thread_;
+    sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor_;
+
+    sirius::unique_ptr<std::thread> internal_thread_;
     std::atomic<bool> running_;
+    duckdb::GPUExecutor* coordinator_; // reference to the coordinator (GPUExecutor)
+
+	mutex mtx;
+	condition_variable cv;
+	bool ready = false;
 };
 
 } // namespace sirius
-} // namespace duckdb

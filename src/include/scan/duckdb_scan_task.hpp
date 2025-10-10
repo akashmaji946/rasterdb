@@ -23,12 +23,11 @@
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/task_executor.hpp"
 #include "data/data_batch.hpp"
+#include "helper/helper.hpp"
 
 namespace duckdb {
-namespace sirius {
-namespace parallel {
 
-// Scan Executor will leverage DuckDB task scheduler and thread pool, therefore the ScanTask has to be derived from duckdb::BaseExecutorTask.
+// Scan Executor will leverage DuckDB task scheduler and thread pool, therefore the ScanTask has to be derived from ::sirius::BaseExecutorTask.
 // Header bellow following Yifei's Scan implementation on gpu_phyisical_table_scan.cpp
 // ScanTaskQueue is not needed since we will use DuckDB task scheduler to manage tasks
 class DuckDBScanGlobalSourceState : public GlobalSourceState {
@@ -37,10 +36,10 @@ public:
 	}
 
 	idx_t max_threads = 0;
-	duckdb::unique_ptr<GlobalTableFunctionState> global_state;
+	::sirius::unique_ptr<GlobalTableFunctionState> global_state;
 	bool in_out_final = false;
 	DataChunk input_chunk;
-	duckdb::unique_ptr<TableFilterSet> table_filters;
+	::sirius::unique_ptr<TableFilterSet> table_filters;
 
 	optional_ptr<TableFilterSet> GetTableFilters(const GPUPhysicalTableScan &op) const {
 		return table_filters ? table_filters.get() : op.fake_table_filters.get();
@@ -53,23 +52,23 @@ public:
     void InitForTableScanCoalesceTask(const GPUPhysicalTableScan& op, uint8_t** mask_ptr_p) {
     }
 
-    void NextChunkOffsetsAligned(uint64_t chunk_rows, const duckdb::vector<uint64_t>& chunk_column_sizes,
-                                uint64_t* out_row_offset, duckdb::vector<uint64_t>& out_column_data_offsets) {
+    void NextChunkOffsetsAligned(uint64_t chunk_rows, const ::sirius::vector<uint64_t>& chunk_column_sizes,
+                                uint64_t* out_row_offset, ::sirius::vector<uint64_t>& out_column_data_offsets) {
     }
 
     inline void AssignBits(uint8_t from, int from_pos, uint8_t* to, int to_pos, int n) {
     }
 
-    void NextChunkOffsetsUnaligned(uint64_t chunk_rows, const duckdb::vector<uint64_t>& chunk_column_sizes,
-                                    uint64_t* out_row_offset, duckdb::vector<uint64_t>& out_column_data_offsets,
-                                    const duckdb::vector<uint8_t>& chunk_unaligned_mask_bytes) {
+    void NextChunkOffsetsUnaligned(uint64_t chunk_rows, const ::sirius::vector<uint64_t>& chunk_column_sizes,
+                                    uint64_t* out_row_offset, ::sirius::vector<uint64_t>& out_column_data_offsets,
+                                    const ::sirius::vector<uint8_t>& chunk_unaligned_mask_bytes) {
     }
 
     // For both rows which are null mask aligned and unaligned
     struct {
-        duckdb::mutex mutex;
+        ::sirius::mutex mutex;
         uint64_t row_offset;
-        duckdb::vector<uint64_t> column_data_offsets;
+        ::sirius::vector<uint64_t> column_data_offsets;
     } offset_info_aligned, offset_info_unaligned;
 
     // For compacting null mask bytes of unaligned portion per column. We write starting from last bit
@@ -92,11 +91,11 @@ public:
         column_size.resize(op.column_ids.size(), 0);
 	}
 
-	duckdb::unique_ptr<LocalTableFunctionState> local_state;
+	::sirius::unique_ptr<LocalTableFunctionState> local_state;
 
     // Used in `TableScanGetSizeTask`
     uint64_t num_rows;
-    duckdb::vector<uint64_t> column_size;
+    ::sirius::vector<uint64_t> column_size;
 };
 
 class DuckDBScanGetSizeTask : public BaseExecutorTask {
@@ -144,6 +143,4 @@ private:
   int64_t* duckdb_storage_row_ids_ptr;
 };
 
-} // namespace parallel
-} // namespace sirius
 } // namespace duckdb

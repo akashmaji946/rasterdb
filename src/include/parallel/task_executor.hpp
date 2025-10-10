@@ -17,20 +17,16 @@
 #pragma once
 
 #include "task_scheduler.hpp"
-#include "duckdb/common/vector.hpp"
+#include "helper/helper.hpp"
 
-#include <atomic>
-#include <thread>
-
-namespace duckdb {
 namespace sirius {
 namespace parallel {
 
 struct TaskExecutorThread {
-  explicit TaskExecutorThread(duckdb::unique_ptr<std::thread> thread)
+  explicit TaskExecutorThread(sirius::unique_ptr<std::thread> thread)
     : internal_thread_(std::move(thread)) {}
 
-  duckdb::unique_ptr<std::thread> internal_thread_;
+  sirius::unique_ptr<std::thread> internal_thread_;
 };
 
 struct TaskExecutorConfig {
@@ -44,7 +40,7 @@ struct TaskExecutorConfig {
  */
 class ITaskExecutor {
 public:
-  ITaskExecutor(duckdb::shared_ptr<ITaskScheduler> scheduler, TaskExecutorConfig config)
+  ITaskExecutor(sirius::shared_ptr<ITaskQueue> scheduler, TaskExecutorConfig config)
     : scheduler_(std::move(scheduler)), config_(config), running_(false) {}
   
   virtual ~ITaskExecutor() {
@@ -64,24 +60,23 @@ public:
   virtual void Stop();
 
   // Schedule a task.
-  virtual void Schedule(duckdb::unique_ptr<ITask> task);
+  virtual void Schedule(sirius::unique_ptr<ITask> task);
 
 private:
   // Helper functions.
   virtual void OnStart();
   virtual void OnStop();
-  virtual void OnTaskError(int worker_id, duckdb::unique_ptr<ITask> task, const std::exception& e);
+  virtual void OnTaskError(int worker_id, sirius::unique_ptr<ITask> task, const std::exception& e);
 
   // Main thread loop.
   virtual void WorkerLoop(int worker_id);
 
 private:
-  duckdb::shared_ptr<ITaskScheduler> scheduler_;
+  sirius::shared_ptr<ITaskQueue> scheduler_;
   TaskExecutorConfig config_;
   std::atomic<bool> running_;
-  duckdb::vector<duckdb::unique_ptr<TaskExecutorThread>> threads_;
+  sirius::vector<sirius::unique_ptr<TaskExecutorThread>> threads_;
 };
 
 } // namespace parallel
 } // namespace sirius
-} // namespace duckdb

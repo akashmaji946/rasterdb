@@ -15,9 +15,7 @@
  */
 
 #include "parallel/task_executor.hpp"
-#include "duckdb/common/helper.hpp"
 
-namespace duckdb {
 namespace sirius {
 namespace parallel {
 
@@ -30,7 +28,7 @@ void ITaskExecutor::Start() {
   threads_.reserve(config_.num_threads);
   for (int i = 0; i < config_.num_threads; ++i) {
     threads_.push_back(
-      duckdb::make_uniq<TaskExecutorThread>(duckdb::make_uniq<std::thread>(&ITaskExecutor::WorkerLoop, this, i)));
+      sirius::make_unique<TaskExecutorThread>(sirius::make_unique<sirius::thread>(&ITaskExecutor::WorkerLoop, this, i)));
   }
 }
 
@@ -46,7 +44,7 @@ void ITaskExecutor::Stop() {
   threads_.clear();
 }
 
-void ITaskExecutor::Schedule(duckdb::unique_ptr<ITask> task) {
+void ITaskExecutor::Schedule(sirius::unique_ptr<ITask> task) {
   scheduler_->Push(std::move(task));
 }
 
@@ -58,7 +56,7 @@ void ITaskExecutor::OnStop() {
   scheduler_->Close();
 }
 
-void ITaskExecutor::OnTaskError(int worker_id, duckdb::unique_ptr<ITask> task, const std::exception& e) {
+void ITaskExecutor::OnTaskError(int worker_id, sirius::unique_ptr<ITask> task, const std::exception& e) {
   if (config_.retry_on_error) {
     scheduler_->Push(std::move(task));
   } else {
@@ -87,4 +85,3 @@ void ITaskExecutor::WorkerLoop(int worker_id) {
 
 } // namespace parallel
 } // namespace sirius
-} // namespace duckdb
