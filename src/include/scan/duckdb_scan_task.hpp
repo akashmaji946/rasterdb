@@ -130,6 +130,13 @@ public:
 	void ExecuteTask() override {
 	}
 
+
+    // Convert the output chunk from duckdb to a DataBatch
+    void ConvertToDataBatch();
+
+    // push Output DataBatch to Data Repository
+    void PushToDataRepository(::sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id, size_t idx);
+
 private:
   int task_id;
   TableFunction& function;

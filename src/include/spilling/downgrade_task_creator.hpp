@@ -25,50 +25,27 @@ namespace parallel {
  * DowngradeTaskQueue as its scheduler. Manages a pool of threads to
  * schedule downgrade tasks
  */
-class DowngradeTaskCreator : public ITaskExecutor {
+class DowngradeTaskCreator {
 public:
     /**
      * Constructor that creates a DowngradeTaskCreator with a DowngradeTaskQueue scheduler
      * @param config Configuration for the task executor (thread count, retry policy, etc.)
      * @param data_repository Optional data repository for data access
      */
-    explicit DowngradeTaskCreator(
-        TaskExecutorConfig config,
-        DataRepository& data_repository)
-        : ITaskExecutor(sirius::make_unique<DowngradeTaskQueue>(), config),
-          data_repository_(data_repository) {}
-
-    // Destructor
-    ~DowngradeTaskCreator() override = default;
-
-    // Non-copyable but movable
-    DowngradeTaskCreator(const DowngradeTaskCreator&) = delete;
-    DowngradeTaskCreator& operator=(const DowngradeTaskCreator&) = delete;
-    DowngradeTaskCreator(DowngradeTaskCreator&&) = default;
-    DowngradeTaskCreator& operator=(DowngradeTaskCreator&&) = default;
+    DowngradeTaskCreator(
+        DataRepository& data_repository, DowngradeTaskQueue &downgrade_task_queue)
+        : data_repository_(data_repository), downgrade_task_queue_(downgrade_task_queue) {}
 
     /**
      * Schedule a downgrade task for execution
      * @param downgrade_task The downgrade task to schedule
      */
-    void ScheduleDowngradeTask(sirius::unique_ptr<DowngradeTask> downgrade_task) {
-        // Convert to ITask and use parent's Schedule method
-        Schedule(std::move(downgrade_task));
-    }
-
-    /**
-     * Override the Schedule method to provide downgrade-specific scheduling logic
-     * @param task The task to schedule
-     */
-    void Schedule(sirius::unique_ptr<ITask> task) override;
-
-private:
-    // Helper method to safely cast ITask to DowngradeTask
-    DowngradeTask* CastToDowngradeTask(ITask* task);
+    void Schedule(sirius::unique_ptr<DowngradeTask> downgrade_task);
 
 private:
     // Downgrade-specific resources
     DataRepository& data_repository_;
+    DowngradeTaskQueue& downgrade_task_queue_;
 };
 
 } // namespace parallel

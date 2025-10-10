@@ -51,6 +51,12 @@ public:
     const DataBatch* GetDataBatch() const { return data_batch_.get(); }
     const duckdb::GPUPipeline* GetPipeline() const { return pipeline_.get(); }
 
+    // marking task completion by pushing message to task completion message queue
+    void MarkTaskCompletion();
+
+    // push Output DataBatch to Data Repository
+    void PushToDataRepository(sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id, size_t idx);
+
 private:
     sirius::shared_ptr<duckdb::GPUPipeline> pipeline_;
     uint64_t task_id_;

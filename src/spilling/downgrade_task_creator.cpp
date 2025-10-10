@@ -19,22 +19,10 @@
 namespace sirius {
 namespace parallel {
 
-void DowngradeTaskCreator::Schedule(sirius::unique_ptr<ITask> task) {
-    // Downgrade task creation specific scheduling logic
-    auto downgrade_task = CastToDowngradeTask(task.get());
-    if (!downgrade_task) {
-        // If it's not a DowngradeTask, use the parent's implementation
-        ITaskExecutor::Schedule(std::move(task));
-        return;
-    }
-
-    // Schedule the downgrade task using the parent's method
-    ITaskExecutor::Schedule(std::move(task));
-}
-
-DowngradeTask* DowngradeTaskCreator::CastToDowngradeTask(ITask* task) {
-    // Safely cast to DowngradeTask
-    return dynamic_cast<DowngradeTask*>(task);
+void DowngradeTaskCreator::Schedule(sirius::unique_ptr<DowngradeTask> downgrade_task) {
+    // Downgrade-specific scheduling logic
+    // Schedule the downgrade task using the DowngradeTaskQueue
+    downgrade_task_queue_.Push(std::move(downgrade_task));
 }
 
 } // namespace parallel
