@@ -24,61 +24,56 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/contiguous_split.hpp>
+
 #include "helper/helper.hpp"
+#include "data/cpu_data_representation.hpp"
 
 namespace sirius {
 
-/**
- * @brief Structure containing both the host memory allocation and metadata for table recreation.
- */
-struct table_allocation {
-    fixed_size_host_memory_resource::multiple_blocks_allocation allocation;
-    sirius::unique_ptr<sirius::vector<uint8_t>> metadata;
-    std::size_t data_size;
-    
-    table_allocation(fixed_size_host_memory_resource::multiple_blocks_allocation alloc,
-                     sirius::unique_ptr<sirius::vector<uint8_t>> meta,
-                     std::size_t data_sz)
-        : allocation(std::move(alloc)), metadata(std::move(meta)), data_size(data_sz) {}
-};
+using srius::memory::multiple_blocks_allocation;
+using sirius::host_table_representation;
+using sirius::gpu_table_representation;
 
 /**
- * @brief Utility class for converting cuDF tables to host memory allocations.
+ * @brief Utility class for converting between different DataRepresentation types.
  */
-class cudf_table_converter {
+class data_representation_converter {
 public:
     /**
-     * @brief Convert a cuDF table to packed columns and copy data to host memory.
+     * @brief Converts a gpu_table_representation to a host_table_representation
      * 
-     * This function takes a cuDF table, converts it to packed columns (contiguous memory layout),
-     * and then copies both the data and metadata piece by piece into multiple_blocks_allocation
+     * This function takes a gpu_table_representation, converts its cuDF table it to packed columns (contiguous memory layout),
+     * and then copies both the data and metadata piece by piece into a multiple_blocks_allocation
      * using the provided memory resource. The metadata is preserved so the cuDF columns can be
      * recreated later using cudf::unpack().
      * 
      * @param table The cuDF table to convert
      * @param mr The host memory resource to use for allocation
      * @param stream CUDA stream to use for memory operations
-     * @return table_allocation containing both the allocation and metadata for recreation
+     * @return host_table_representation containing both the allocation and metadata for recreation
      * @throws std::bad_alloc if memory allocation fails
      */
-    static table_allocation
-    convert_to_host(const cudf::table_view& table,
+    static std::unique_ptr<host_table_representation>
+    convert_to_host_representation(const std::unique_ptr<gpu_table_representation>& table,
                     fixed_size_host_memory_resource* mr,
                     rmm::cuda_stream_view stream);
 
     /**
-     * @brief Recreate a cuDF table from the packed data stored in host memory.
+     * @brief Converts a host_table_representation to a gpu_table_representation
      * 
-     * This function takes a table_allocation and recreates the original cuDF table using cudf::unpack().
+     * This function first copies the data from the host representation's multiple_blocks_allocation into a contingous buffer
+     * using the provided memory resource. It then uses cudf::unpack() along with the preserved metadata to recreate the original cuDF table.
+     * The resulting cuDF table is then wrapped in a gpu_table_representation.
      * 
-     * @param table_alloc The table allocation containing both data and metadata
+     * @param table The table allocation containing the packed data and metadata
+     * @param mr The GPU memory resource to use for allocation
      * @param stream CUDA stream to use for memory operations
      * @return cudf::table The recreated table (owns the data)
      */
-    static cudf::table recreate_table(const table_allocation& table_alloc, 
-                                     rmm::cuda_stream_view stream);
-
-
+    static std::unique_ptr<gpu_table_representation> 
+    convert_to_gpu_representation(const std::unique_ptr<host_table_representation>& table, 
+                    rmm::mr::device_memory_resource* mr, // TODO: Replace eventually with actual allocator type 
+                    rmm::cuda_stream_view stream);
 
 private:
     /**
@@ -90,7 +85,7 @@ private:
      * @param stream CUDA stream to use for memory operations
      * @return multiple_blocks_allocation RAII wrapper containing the copied data
      */
-    static fixed_size_host_memory_resource::multiple_blocks_allocation 
+    static std::unique_ptr<multiple_blocks_allocation> 
     copy_data_to_host(const rmm::device_buffer* gpu_data, 
                       fixed_size_host_memory_resource* mr,
                       std::size_t& data_size,

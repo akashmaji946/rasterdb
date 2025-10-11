@@ -42,7 +42,9 @@ public:
         : ITaskExecutor(sirius::make_unique<GPUPipelineTaskQueue>(), config),
           data_repository_(data_repository) {}
 
-    // Destructor
+    /**
+     * @brief Destructor for the GPUPipelineExecutor.
+     */
     ~GPUPipelineExecutor() override = default;
 
     // Non-copyable but movable
@@ -52,7 +54,8 @@ public:
     GPUPipelineExecutor& operator=(GPUPipelineExecutor&&) = default;
 
     /**
-     * Schedule a GPU pipeline task for execution
+     * @brief Schedule a GPU pipeline task for execution
+     * 
      * @param gpu_task The GPU pipeline task to schedule
      */
     void ScheduleGPUTask(sirius::unique_ptr<GPUPipelineTask> gpu_task) {
@@ -61,18 +64,24 @@ public:
     }
 
     /**
-     * Override the Schedule method to provide GPU-specific scheduling logic
+     * @brief Override the Schedule method to provide GPU-specific scheduling logic
+     * 
      * @param task The task to schedule
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
 private:
-    // Helper method to safely cast ITask to GPUPipelineTask
+    /**
+     * @brief Helper method to safely cast ITask to GPUPipelineTask
+     * 
+     * @param task The ITask pointer to cast
+     * @return GPUPipelineTask* The casted GPUPipelineTask pointer
+     * @throws std::bad_cast if the task is not of type GPUPipelineTask
+     */
     GPUPipelineTask* CastToGPUPipelineTask(ITask* task);
 
 private:
-    // GPU-specific resources
-    DataRepository& data_repository_;
+    DataRepository& data_repository_; // Reference to the data repository for data access
 };
 
 } // namespace parallel

@@ -15,60 +15,70 @@
  */
 
 #pragma once
+
+#include <unordered_map>
+
 #include "data_batch.hpp"
 #include "helper/helper.hpp"
+#include "data/data_repository_level.hpp"
 
 namespace sirius {
 
-//! Thread-safe repository for storing and retrieving DataBatch objects
+/**
+ * @brief A container for DataBatches produced and consumed by different tasks in the system. 
+ * 
+ * The DataRepository is primarily used to store DataBatches that are currently between tasks. Thus each task
+ * outputs its result to the DataRepository and the subsequent tasks remove it from the DataRepository when they are
+ * ready to work on it. 
+ * 
+ * The DataRepository is leveled container, where each level corresponds to the output a specific pipeline in a given query plan.
+ * When deciding which DataBatch to downgrade to a lower memory tier, the DataRepository should consider where the pipeline is in
+ * the overall query DAG and differ to the indvidual levels to determine which DataBatches within that level should be downgraded first. 
+ */
 class DataRepository {
 public:
-
+    /**
+     * @brief Default constructor for the DataRepository
+     */
     DataRepository() = default;
 
-    void Initialize(size_t num_pipelines) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        data_batches_.resize(num_pipelines);
-    }
+    /** 
+     * @brief Method to add a new level to the DataRepository for a specific pipeline
+     * 
+     * Note that when this method is called, it moves the ownership of the level to the DataRepository and thus the level should not be used by anyone else
+     * after this call.
+     * 
+     * @param pipeline_id The id of the pipeline for which the level is being added
+     * @param level The level to add to the DataRepository
+     * @throws std::invalid_argument if a level already exists for the specified pipeline_id
+    */
+    void AddNewLevel(size_t pipeline_id, sirius::unique_ptr<IDataRepositoryLevel> level);
 
-    // Add a new DataBatch to the repository at the specified pipeline_id and idx
-    void AddNewDataBatch(size_t pipeline_id, size_t idx, sirius::unique_ptr<DataBatch> data_batch) {
-        lock_guard<mutex> lock(mutex_);
-        
-        // Ensure the pipeline_id is valid
-        if (pipeline_id >= data_batches_.size()) {
-            throw std::out_of_range("Invalid pipeline_id");
-        }
-        
-        // Ensure the inner vector is large enough
-        if (idx >= data_batches_[pipeline_id].size()) {
-            data_batches_[pipeline_id].resize(idx + 1);
-        }
-        
-        // Store the data batch
-        data_batches_[pipeline_id][idx] = std::move(data_batch);
-    }
+    /**
+     * @brief Add a new DataBatch to the repository
+     * 
+     * If a level was not previously initialized for the given pipeline_id, it will also be intitialized with the default IDataRepositoryLevel implementation.
+     * Thus, it is recommended that AddNewLevel is called for each pipeline in the query plan before starting execution.
+     * 
+     * @param pipeline_id The id of the pipeline that is depositing the DataBatch into the repository
+     * @param data_batch The DataBatch to add to the repository
+     */
+    void AddNewDataBatch(size_t pipeline_id, sirius::unique_ptr<DataBatch> data_batch);
 
-    // Get a DataBatch by pipeline_id and idx and transfer ownership
-    sirius::unique_ptr<DataBatch> EvictDataBatch(size_t pipeline_id, size_t idx) {
-        lock_guard<mutex> lock(mutex_);
-        
-        // Check bounds
-        if (pipeline_id >= data_batches_.size() || 
-            idx >= data_batches_[pipeline_id].size()) {
-            return nullptr;
-        }
-        
-        // Transfer ownership and clear the slot
-        auto result = std::move(data_batches_[pipeline_id][idx]);
-        data_batches_[pipeline_id][idx] = nullptr;
-        
-        return result;
-    }
+    /**
+     * @brief Evict a DataBatch from the repository
+     * 
+     * This method removes the DataBatch with the specified id from the level corresponding to the specified pipeline_id and returns it.
+     * 
+     * @param pipeline_id The id of the pipeline where the DataBatch currently resides
+     * @param data_batch_id The unique identifier of the DataBatch to evict
+     * @return sirius::unique_ptr<DataBatch> The evicted DataBatch
+     * @throws std::invalid_argument if no level exists for the specified pipeline_id or if the data batch doesn't exist in the provided level
+     */
+    sirius::unique_ptr<DataBatch> EvictDataBatch(size_t pipeline_id, uint64_t data_batch_id);
 
 private:
-    // The data repository is organized as a 2D vector: outer vector indexed by pipeline_id, inner vector indexed by idx
-    sirius::vector<sirius::vector<sirius::unique_ptr<DataBatch>>> data_batches_;
+    sirius::unordered_map<size_t, sirius::unique_ptr<IDataRepositoryLevel>> levels_; // A map storing the different levels in the DataRepository
     mutex mutex_; // Mutex to protect access to data_batches
 };
 

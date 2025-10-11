@@ -24,14 +24,19 @@ namespace sirius {
 namespace parallel {
 
 /**
- * Downgrade-specific task executor that inherits from ITaskExecutor and uses
- * DowngradeTaskQueue as its scheduler. Manages a pool of threads to
- * execute downgrade tasks with specialized memory management for spilling operations.
+ * @brief Executor that inherits from ITaskExecutor to perform downgrade tasks
+ * 
+ * The DowngradeExecutor manages a pool of threads to perform downgrade tasks as well as DowngradeTaskQueue
+ * that actually manages the scheduling of the tasks.  
+ * 
+ * While it is relatively similar to the GPUPipelineExecutor in many of its mechanisms, it also specialized memory management 
+ * logic needed for spilling operations.
  */
 class DowngradeExecutor : public ITaskExecutor {
 public:
     /**
-     * Constructor that creates a DowngradeExecutor with a DowngradeTaskQueue scheduler
+     * @brief Constructor that creates a DowngradeExecutor with a DowngradeTaskQueue scheduler
+     * 
      * @param config Configuration for the task executor (thread count, retry policy, etc.)
      * @param reservation_manager Reference to the memory reservation manager
      * @param data_repository Optional data repository for data access
@@ -44,7 +49,9 @@ public:
 
           }
 
-    // Destructor
+    /**
+     * @brief Destructor for the DowngradeExecutor.
+     */
     ~DowngradeExecutor() override = default;
 
     // Non-copyable but movable
@@ -54,7 +61,8 @@ public:
     DowngradeExecutor& operator=(DowngradeExecutor&&) = default;
 
     /**
-     * Schedule a downgrade task for execution
+     * @brief Schedule a downgrade task for execution
+     * 
      * @param downgrade_task The downgrade task to schedule
      */
     void ScheduleDowngradeTask(sirius::unique_ptr<DowngradeTask> downgrade_task) {
@@ -63,18 +71,23 @@ public:
     }
 
     /**
-     * Override the Schedule method to provide downgrade-specific scheduling logic
+     * @brief Override the Schedule method to provide downgrade-specific scheduling logic
+     * 
      * @param task The task to schedule
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
 private:
-    // Helper method to safely cast ITask to DowngradeTask
+    /**
+     * @brief Helper method to safely cast ITask to DowngradeTask
+     * 
+     * @param task The base task to cast
+     * @return Pointer to the DowngradeTask
+     */
     DowngradeTask* CastToDowngradeTask(ITask* task);
 
 private:
-    // Downgrade-specific resources
-    DataRepository& data_repository_;
+    DataRepository& data_repository_; // The data repository to access the data for downgrading
 };
 
 } // namespace parallel

@@ -21,12 +21,101 @@
 #include <rmm/aligned.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
 #include "helper/helper.hpp"
+#include "memory/common.hpp"
 
 #include <cstddef>
 #include <memory>
 #include <algorithm>
 
 namespace sirius {
+
+using sirius::memory::Tier;
+using sirius::memory::IAllocatedMemory;
+using sirius::memory::IMemoryAllocator;
+
+/**
+ * @brief Simple RAII wrapper representing an multiple block allocations made by the fixed_size_host_memory_resource
+ */
+class multiple_blocks_allocation : public IAllocatedMemory {
+public:
+    /**
+     * @brief Construct a new multiple blocks allocation object
+     * 
+     * @param b The vector of blocks allocated
+     * @param m The memory resource used for allocation/deallocation
+     * @param bs The size of each block in bytes
+     */
+    multiple_blocks_allocation(sirius::vector<void*> b, rmm::mr::host_memory_resource* m, std::size_t bs)
+        : blocks(std::move(b)), mr(m), block_size(bs) {}
+
+    /** 
+     * @brief Destructor for the multiple_blocks_allocation 
+     * 
+     * Returns all of the allocated blocks back to the allocator
+     */
+    ~multiple_blocks_allocation() {
+        for (void* ptr : blocks) {
+            mr->deallocate(ptr, block_size);
+        }
+    }
+
+    // Disable copy to prevent double deallocation
+    multiple_blocks_allocation(const multiple_blocks_allocation&) = delete;
+    multiple_blocks_allocation& operator=(const multiple_blocks_allocation&) = delete;
+
+    // Move semantics
+    multiple_blocks_allocation(multiple_blocks_allocation&& other) noexcept
+        : blocks(std::move(other.blocks)), mr(other.mr), block_size(other.block_size) {
+        other.blocks.clear();
+    }
+
+    multiple_blocks_allocation& operator=(multiple_blocks_allocation&& other) noexcept {
+        if (this != &other) {
+            for (void* ptr : blocks) {
+                mr->deallocate(ptr, block_size);
+            }
+            blocks = std::move(other.blocks);
+            mr = other.mr;
+            block_size = other.block_size;
+            other.blocks.clear();
+        }
+        return *this;
+    }
+
+    /**
+     * @brief Get the number of blocks allocated
+     * 
+     * @return std::size_t Number of blocks
+     */
+    std::size_t size() const noexcept { return blocks.size(); }
+
+    /**
+     * @brief Access a specific block by index
+     * 
+     * @param i Index of the block to access
+     * @return void* Pointer to the block at index i
+     */
+    void* operator[](std::size_t i) const { return blocks[i]; }
+
+    /**
+     * @brief Get the tier of memory that this allocation resides in
+     * 
+     * @return Tier The memory tier
+     */
+    Tier getTier() const override { return Tier::HOST; }
+
+    /**
+     * @brief Get the size of the allocated memory in bytes
+     * 
+     * @return std::size_t Size of the allocation in bytes
+     */
+    std::size_t getAllocatedBytes() const override { return blocks.size() * block_size; }
+
+private:
+    sirius::vector<void*> blocks; // The vector of allocated blocks
+    rmm::mr::host_memory_resource* mr;  // The memory resource used for allocation
+    std::size_t block_size; // The size of each block in bytes
+};
 
 /**
  * @brief A host memory resource that allocates fixed-size blocks using pinned host memory as upstream.
@@ -40,8 +129,10 @@ namespace sirius {
  * When the pool is exhausted, it automatically expands by allocating additional blocks from
  * the upstream resource, making it suitable for workloads with varying memory requirements.
  */
-class fixed_size_host_memory_resource : public rmm::mr::host_memory_resource {
+class fixed_size_host_memory_resource : public rmm::mr::host_memory_resource, public IMemoryAllocator {
 public:
+    friend class multiple_blocks_allocation; 
+
     static constexpr std::size_t default_block_size = 1 << 20;  ///< Default block size (1MB)
     static constexpr std::size_t default_pool_size = 128;       ///< Default number of blocks in pool<
     static constexpr std::size_t default_initial_number_pools = 4; ///< Default number of pools to pre-allocate
@@ -112,50 +203,6 @@ public:
     [[nodiscard]] rmm::mr::host_memory_resource* get_upstream_resource() const noexcept;
 
     /**
-     * @brief Simple RAII wrapper for multiple block allocations.
-     */
-    struct multiple_blocks_allocation {
-        sirius::vector<void*> blocks;
-        fixed_size_host_memory_resource* mr;
-        std::size_t block_size;
-
-        multiple_blocks_allocation(sirius::vector<void*> b, fixed_size_host_memory_resource* m, std::size_t bs)
-            : blocks(std::move(b)), mr(m), block_size(bs) {}
-
-        ~multiple_blocks_allocation() {
-            for (void* ptr : blocks) {
-                mr->deallocate(ptr, block_size);
-            }
-        }
-
-        // Disable copy to prevent double deallocation
-        multiple_blocks_allocation(const multiple_blocks_allocation&) = delete;
-        multiple_blocks_allocation& operator=(const multiple_blocks_allocation&) = delete;
-
-        // Enable move
-        multiple_blocks_allocation(multiple_blocks_allocation&& other) noexcept
-            : blocks(std::move(other.blocks)), mr(other.mr), block_size(other.block_size) {
-            other.blocks.clear();
-        }
-
-        multiple_blocks_allocation& operator=(multiple_blocks_allocation&& other) noexcept {
-            if (this != &other) {
-                for (void* ptr : blocks) {
-                    mr->deallocate(ptr, block_size);
-                }
-                blocks = std::move(other.blocks);
-                mr = other.mr;
-                block_size = other.block_size;
-                other.blocks.clear();
-            }
-            return *this;
-        }
-
-        std::size_t size() const noexcept { return blocks.size(); }
-        void* operator[](std::size_t i) const { return blocks[i]; }
-    };
-
-    /**
      * @brief Allocate multiple blocks to satisfy a large allocation request.
      *
      * This method allocates the minimum number of blocks needed to satisfy the requested size.
@@ -166,7 +213,13 @@ public:
      * @return multiple_blocks_allocation RAII wrapper for the allocated blocks
      * @throws std::bad_alloc if insufficient blocks are available or upstream allocation fails
      */
-    [[nodiscard]] multiple_blocks_allocation allocate_multiple_blocks(std::size_t total_bytes);
+    [[nodiscard]] sirius::unique_ptr<multiple_blocks_allocation> allocate_multiple_blocks(std::size_t total_bytes);
+
+    // IMemoryAllocator interface implementation
+    Tier getTier() const override { return Tier::HOST; }
+    std::unique_ptr<IAllocatedMemory> allocate_memory(size_t total_bytes) override {
+        return allocate_multiple_blocks(total_bytes);
+    }
 
 protected:
     /**

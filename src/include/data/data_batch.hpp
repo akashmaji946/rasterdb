@@ -18,59 +18,71 @@
 #include <variant>
 #include <memory>
 #include <cudf/table/table.hpp>
-#include "data/cudf_table_converter.hpp"
+
 #include "helper/helper.hpp"
+#include "data/common.hpp"
+#include "memory/memory_reservation.hpp"
 
 namespace sirius {
 
-// Enum to indicate where the data is currently residing
-enum class Tier {
-    CPU,
-    GPU
-};
+using sirius::memory::Tier;
 
+/**
+ * @brief A class that represents the input(s) and output(s) of the different pipelines in a query. 
+ * 
+ * The DataBatch in Sirius represents a batch/chunk/row group of the data that is processed by/outputed by a task of a pipeline,
+ * based on the "morsel driven" execution model used by many systems. The underlying data can be stored in different memory tiers
+ * and in different formats as and is owned by the underlying IDataRepresentation rather than the DataBatch itself.
+ */
 class DataBatch {
 public:
-    // Define the variant type to hold either cudf::table or spilling::allocation
-    using DataVariant = std::variant<sirius::unique_ptr<cudf::table>, sirius::unique_ptr<table_allocation>>;
-
-    // Constructor to initialize with cudf::table
-    DataBatch(sirius::unique_ptr<cudf::table> gpu_data) 
-        : data_(std::move(gpu_data)), location_(Tier::GPU) {}
-
-    // Constructor to initialize with spilling::allocation
-    DataBatch(sirius::unique_ptr<table_allocation> cpu_data) 
-        : data_(std::move(cpu_data)), location_(Tier::CPU) {}
-
-    // Function to convert data to GPU
-    void toGPU() {
+    /**
+     * @brief Construct a new Data Batch object
+     * 
+     * @param batch_id Unique identifier for the data batch
+     * @param data The actual data associated with this data batch
+     */
+    DataBatch(uint64_t batch_id, sirius::unique_ptr<IDataRepresentation> data) 
+        : batch_id_(batch_id), data_(std::move(data)) {}
+    
+    // Move constructors
+    DataBatch(DataBatch&& other) noexcept
+        : batch_id_(other.batch_id_), data_(std::move(other.data_)) {
+        other.batch_id_ = 0;
+        other.data_ = nullptr;
     }
 
-    // Function to convert data to CPU
-    void toCPU() {
+    DataBatch& operator=(DataBatch&& other) noexcept {
+        if (this != &other) {
+            batch_id_ = other.batch_id_;
+            data_ = std::move(other.data_);
+            other.batch_id_ = 0;
+            other.data_ = nullptr;
+        }
+        return *this;
     }
 
-    // Access the underlying data
-    const DataVariant& getData() const {
-        return data_;
+    /**
+     * @brief Get the tier that this data batch currently resides in
+     * 
+     * @return Tier The memory tier
+     */
+    Tier getCurrentTier() const {
+        return data_->getCurrentTier();
+    }
+
+    /**
+     * @brief Get this Data Batch's id
+     * 
+     * @return The unique identifier associated with this Data Batch
+     */
+    uint64_t getBatchId() const {
+        return batch_id_;
     }
 
 private:
-    DataVariant data_;
-    Tier location_;
-
-    // Implement these conversion functions according to your specific logic
-    sirius::unique_ptr<cudf::table> ConvertToGPU(sirius::unique_ptr<table_allocation> cpu_data) {
-        // Conversion logic here
-        // ...
-        return nullptr; // Replace with actual conversion result
-    }
-
-    sirius::unique_ptr<table_allocation> ConvertToCPU(sirius::unique_ptr<cudf::table> gpu_data) {
-        // Conversion logic here
-        // ...
-        return nullptr; // Replace with actual conversion result
-    }
+    uint64_t batch_id_; // Unique identifier for the data batch
+    sirius::unique_ptr<IDataRepresentation> data_; // Pointer to the actual data representation
 };
 
 } // namespace sirius

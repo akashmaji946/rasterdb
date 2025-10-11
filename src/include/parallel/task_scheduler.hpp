@@ -22,22 +22,41 @@ namespace sirius {
 namespace parallel {
 
 /**
- * Interface for concrete scheduling policies.
+ * @brief Interface for concrete scheduling policies.
  */
 class ITaskQueue {
 public:
+  /**
+   * @brief Destructor for the ITaskQueue.
+   */
   virtual ~ITaskQueue() = default;
 
-  // Open the scheduler and start accepting new tasks.
+  /**
+   * @brief Needs to be called before any tasks can be scheduled or pulled.
+   */
   virtual void Open() = 0;
 
-  // Close the scheduler and stop processing new tasks.
+  /**
+   * @brief Close the scheduler from accepting new tasks or returning tasks to execute
+   */
   virtual void Close() = 0;
 
-  // Add a task to the scheduler.
+  /**
+   * @brief Push a new task to be scheduled.
+   * 
+   * @param task The task to be scheduled
+   * @throws std::runtime_error If the scheduler is not currently accepting requests
+   */
   virtual void Push(sirius::unique_ptr<ITask> task) = 0;
 
-  // Pull a task. Wait until a task available or the scheduler is closed.
+  /**
+   * @brief Pull a task to execute.
+   * 
+   * Note that this is a blocking call and will wait until a task is available or the scheduler is closed.
+   * 
+   * @return A unique pointer to the task to execute
+   * @throws std::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+   */
   virtual sirius::unique_ptr<ITask> Pull() = 0;
 };
 
