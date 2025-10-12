@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <array>
+#include <iostream>
 
 namespace sirius {
 namespace memory {
@@ -30,8 +31,10 @@ Reservation::Reservation(Tier t, size_t s, MemoryReservationManager* manager)
 
 Reservation::~Reservation() {
     // If the manager is null then that means that the reservation has already been moved from 
-    // this object
-    if (manager_ != nullptr) manager_->release_memory(tier, size);
+    // this object so this ensures that we don't call release memory twice on the same reservation
+    if (manager_ != nullptr) { 
+        manager_->release_memory(tier, size);
+    } 
 }
 
 Reservation::Reservation(Reservation&& other) noexcept 
@@ -90,16 +93,7 @@ std::unique_ptr<Reservation> MemoryReservationManager::requestReservation(Tier t
     return reservation;
 }
 
-void MemoryReservationManager::releaseReservation(std::unique_ptr<Reservation> reservation) {
-    if (!reservation) {
-        return;
-    }
-    
-    release_memory(reservation->tier, reservation->size);
-}
-
 void MemoryReservationManager::release_memory(Tier tier, size_t size) { 
-    if (size == 0) return;
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Update tracking

@@ -34,6 +34,8 @@ class MemoryReservationManager; // Forward declaration to resolve circular depen
 /**
  * @brief A RAII wrapper representing a memory reservation in a specific tier.
  * 
+ * This mean that the owner of a reservation doesn't need to call release reservation but the reservation automatically
+ * gets released when the reservation goes out of scope.
  */
 class Reservation { 
 public:   
@@ -120,13 +122,6 @@ public:
      * @return A unique_ptr to a Reservation object representing the reservation.
      */
     std::unique_ptr<Reservation> requestReservation(Tier tier, size_t size);
-
-    /**
-     * @brief Release a previously made memory reservation.
-     * 
-     * @param reservation A unique_ptr to the Reservation object to release.
-     */
-    void releaseReservation(std::unique_ptr<Reservation> reservation);
     
     /** 
      * @brief Attempt to shrink an existing reservation to a new size.
