@@ -17,6 +17,7 @@
 #pragma once
 
 #include "helper/helper.hpp"
+#include "memory/memory_reservation.hpp"
 
 namespace sirius {
 namespace parallel {

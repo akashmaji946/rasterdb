@@ -18,10 +18,47 @@
 #include <algorithm>
 #include <stdexcept>
 #include <array>
+#include <iostream>
 
 namespace sirius {
 namespace memory {
 
+// Definitions for Reservation
+Reservation::Reservation(Tier t, size_t s, MemoryReservationManager* manager) 
+    : tier(t), size(s),  manager_(manager) {
+
+}
+
+Reservation::~Reservation() {
+    // If the manager is null then that means that the reservation has already been moved from 
+    // this object so this ensures that we don't call release memory twice on the same reservation
+    if (manager_ != nullptr) { 
+        manager_->release_memory(tier, size);
+    } 
+}
+
+Reservation::Reservation(Reservation&& other) noexcept 
+    : tier(other.tier), size(other.size), manager_(other.manager_) {
+    other.manager_ = nullptr; // Ensures that the old object doesn't release the memory
+}
+
+Reservation& Reservation::operator=(Reservation&& other) noexcept {
+    if (this != &other) {
+        // First release the current reservation and then copy the new one
+        if(manager_ != nullptr) manager_->release_memory(tier, size);
+        
+        // Copy the new reservation
+        tier = other.tier;
+        size = other.size;
+        manager_ = other.manager_;
+
+        // Ensure that the old object doesn't release the memory
+        other.manager_ = nullptr;
+    }
+    return *this;
+}
+
+// Definitions for MemoryReservationManager
 
 std::unique_ptr<MemoryReservationManager> MemoryReservationManager::instance_ = nullptr;
 std::once_flag MemoryReservationManager::initialized_;
@@ -46,7 +83,7 @@ std::unique_ptr<Reservation> MemoryReservationManager::requestReservation(Tier t
     waitForMemory(tier, size, lock);
     
     // Create the reservation
-    auto reservation = std::make_unique<Reservation>(tier, size);
+    auto reservation = std::make_unique<Reservation>(tier, size, this);
     
     // Update tracking
     size_t tier_idx = getTierIndex(tier);
@@ -56,16 +93,12 @@ std::unique_ptr<Reservation> MemoryReservationManager::requestReservation(Tier t
     return reservation;
 }
 
-void MemoryReservationManager::releaseReservation(std::unique_ptr<Reservation> reservation) {
-    if (!reservation) {
-        return;
-    }
-    
+void MemoryReservationManager::release_memory(Tier tier, size_t size) { 
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Update tracking
-    size_t tier_idx = getTierIndex(reservation->tier);
-    tier_info_[tier_idx].total_reserved.fetch_sub(reservation->size);
+    size_t tier_idx = getTierIndex(tier);
+    tier_info_[tier_idx].total_reserved.fetch_sub(size);
     tier_info_[tier_idx].active_count.fetch_sub(1);
     
     // Notify waiting threads

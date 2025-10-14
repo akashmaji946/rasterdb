@@ -15,6 +15,7 @@
  */
 
 #include "parallel/task_executor.hpp"
+
 namespace sirius {
 namespace parallel {
 

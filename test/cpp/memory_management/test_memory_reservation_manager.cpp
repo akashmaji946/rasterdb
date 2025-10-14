@@ -65,9 +65,11 @@ TEST_CASE("Basic Reservation and Release", "[memory]") {
     REQUIRE(manager.getActiveReservationCount(Tier::GPU) == 1);
     REQUIRE(manager.getAvailableMemory(Tier::GPU) == 500);
     
-    // Release the reservation
-    manager.releaseReservation(std::move(reservation));
-    
+    // Release the reservation by calling reset on the unique ptr
+    // This will call the destructor on the Reservation which should
+    // release the underlying reservation
+    reservation.reset(); 
+
     // Check that memory is released
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 0);
     REQUIRE(manager.getActiveReservationCount(Tier::GPU) == 0);
@@ -95,7 +97,7 @@ TEST_CASE("Multiple Reservations", "[memory]") {
     
     // Release all reservations
     for (auto& reservation : reservations) {
-        manager.releaseReservation(std::move(reservation));
+        reservation.reset();
     }
     
     // Check that all memory is released
@@ -126,7 +128,7 @@ TEST_CASE("Memory Limit Enforcement", "[memory]") {
     REQUIRE(manager.getAvailableMemory(Tier::GPU) == 0);
     
     // Release first reservation
-    manager.releaseReservation(std::move(reservation1));
+    reservation1.reset();
     
     // Check available memory increased
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 200);
@@ -134,7 +136,7 @@ TEST_CASE("Memory Limit Enforcement", "[memory]") {
     REQUIRE(manager.getAvailableMemory(Tier::GPU) == 800);
     
     // Release second reservation
-    manager.releaseReservation(std::move(reservation2));
+    reservation2.reset();
     
     // Check all memory is released
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 0);
@@ -162,8 +164,8 @@ TEST_CASE("Grow Reservation", "[memory]") {
     REQUIRE_FALSE(success); // Should fail
     REQUIRE(reservation->size == 800); // Size should remain unchanged
     
-    // Release reservation
-    manager.releaseReservation(std::move(reservation));
+    // Don't need to call release reservation as the reservation will automatically be released
+    // when it goes out of scope
 }
 
 // Test shrink reservation
@@ -189,8 +191,8 @@ TEST_CASE("Shrink Reservation", "[memory]") {
     success = manager.shrinkReservation(reservation.get(), 800);
     REQUIRE_FALSE(success);
     
-    // Release reservation
-    manager.releaseReservation(std::move(reservation));
+    // Don't need to call release reservation as the reservation will automatically be released
+    // when it goes out of scope
 }
 
 // Test edge cases
@@ -200,9 +202,6 @@ TEST_CASE("Edge Cases", "[memory]") {
     
     // Test zero size reservation
     REQUIRE_THROWS_AS(manager.requestReservation(Tier::GPU, 0), std::invalid_argument);
-    
-    // Test null reservation release
-    manager.releaseReservation(nullptr); // Should not crash
     
     // Test null reservation resize
     REQUIRE_FALSE(manager.growReservation(nullptr, 100));
@@ -233,9 +232,9 @@ TEST_CASE("Different Tiers", "[memory]") {
     REQUIRE(manager.getActiveReservationCount(Tier::DISK) == 1);
     
     // Release all reservations
-    manager.releaseReservation(std::move(gpu_reservation));
-    manager.releaseReservation(std::move(host_reservation));
-    manager.releaseReservation(std::move(disk_reservation));
+    gpu_reservation.reset();
+    host_reservation.reset();
+    disk_reservation.reset();
     
     // Check all are released
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 0);
@@ -281,7 +280,7 @@ TEST_CASE("Blocking Behavior", "[memory]") {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
         // Release the reservation to unblock the waiting thread
-        manager.releaseReservation(std::move(reservation1));
+        reservation1.reset();
         release_thread_completed = true;
     });
     
@@ -312,7 +311,7 @@ TEST_CASE("Blocking Behavior", "[memory]") {
     REQUIRE(manager.getAvailableMemory(Tier::GPU) == 800);
     
     // Clean up
-    manager.releaseReservation(std::move(waiting_reservation));
+    waiting_reservation.reset();
     
     // Verify all memory is released
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 0);
@@ -346,7 +345,7 @@ TEST_CASE("Maximum Size Reservation", "[memory]") {
     REQUIRE(manager.getAvailableMemory(Tier::GPU) == 0);
     
     // Release reservation
-    manager.releaseReservation(std::move(reservation));
+    reservation.reset();
     
     // Check memory is fully available again
     REQUIRE(manager.getTotalReservedMemory(Tier::GPU) == 0);
@@ -382,13 +381,13 @@ TEST_CASE("Mixed Operations", "[memory]") {
     REQUIRE(manager.getTotalReservedMemory(Tier::HOST) == 1100);
     
     // Release one reservation
-    manager.releaseReservation(std::move(reservation3));
+    reservation3.reset();
     REQUIRE(manager.getTotalReservedMemory(Tier::HOST) == 900);
     REQUIRE(manager.getActiveReservationCount(Tier::HOST) == 2);
     
     // Release remaining reservations
-    manager.releaseReservation(std::move(reservation1));
-    manager.releaseReservation(std::move(reservation2));
+    reservation1.reset();
+    reservation2.reset();
     
     // Check all memory is released
     REQUIRE(manager.getTotalReservedMemory(Tier::HOST) == 0);

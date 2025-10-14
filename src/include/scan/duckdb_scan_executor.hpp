@@ -28,32 +28,70 @@
 
 namespace duckdb {
 
-// This executor is just handling out the task to duckdb scheduler, and converting the duckdb output chunk to a data batch
-// TODO: one idea to make scan executor work is by having each thread continue calling 'function' until it accumulates 2GB of data
-// then convert it into Data Batch, push it to repository, then continue scan to produce a new data batch, until the scan is done.
-// For the first step, we assume that we will not run out of CPU memory.
+/**
+ * @brief Executor for performing DuckDB table scan operations 
+ * 
+ * This executor is just handing out the task to duckdb scheduler, and converting the duckdb output chunk to a data batch
+ * We also don't need to have a separate task queue for managing the scan tasks since we are just handing off the work to duckdb's scheduler
+ * 
+ * In the current implementation, we assume that we will not run out of CPU memory while scanning the data from DuckDB.
+ */
 class DuckDBScanExecutor {
+    /**
+     * @brief Construct a new DuckDBScanExecutor object
+     * 
+     * @param executor The task executor to use for scheduling scan tasks
+     * @param function The table function to scan data from
+     * @param context The execution context for the scan operation
+     * @param op The GPU physical table scan operator associated with this executor
+     * @param data_repository The data repository to push the output data batches to
+     */
     DuckDBScanExecutor(TaskExecutor &executor, TableFunction& function_p, ExecutionContext& context_p,
                        GPUPhysicalTableScan& op_p, ::sirius::DataRepository& data_repository) :
         task_executor_(executor), function_(function_p), context_(context_p), op_(op_p), data_repository_(data_repository) {}
 
+    /**
+     * @brief Destroy the DuckDBScanExecutor object
+     */    
     ~DuckDBScanExecutor();
 
-    // Create a ScanTask and schedule it to duckdb task scheduler (see example in gpu_physical_table_scan.cpp)
+    /** 
+     * @brief Creates a new scan task and schedules it to the duckdb task scheduler
+     * 
+     * See gpu_physical_table_scan.hpp for an example
+     */
     void createAndScheduleTask();
-
-    // Tell DuckDB scheduler to work on the scheduled task until it's done (see example in gpu_physical_table_scan.cpp)
+    
+    /**
+     * @brief Method to inform the DuckDB scheduler to work on the scheduled scan task
+     * 
+     * See gpu_physical_table_scan.hpp for an example
+     */
     void workOnTask();
 
-    // Push the output DataBatch to Data Repository
-    void pushScanOutput(::sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id, size_t idx);
+     /**
+     * @brief Method to mark that this task is completed
+     * 
+     * This method informs that TaskCreator that the current scan task is completed so that it can
+     * schedule more scan tasks. 
+     * This method should be called after pushing the output of this task to the Data Repository.
+     */
+    void MarkTaskCompletion();
+    
+    /**
+     * @brief Method to push the output of a scan task to the Data Repository
+     * 
+     * @param data_batch The data batch to push
+     * @param pipeline_id The id of the pipeline that produced this data batch
+     */
+    void pushScanOutput(::sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id);
 
 private:
-    ::sirius::DataRepository& data_repository_;
-    TaskExecutor &task_executor_;
-    TableFunction& function_;
-    ExecutionContext& context_;
-    GPUPhysicalTableScan& op_;
+    ::sirius::DataRepository& data_repository_; // The data repository to push the output data batches to
+    TaskExecutor &task_executor_; // The task executor to use for scheduling scan tasks
+    TableFunction& function_; // The table function to scan data from
+    ExecutionContext& context_; // The execution context for the scan operation
+    GPUPhysicalTableScan& op_; // The GPU physical table scan operator associated with this executor
 };
 
 } // namespace duckdb
