@@ -52,7 +52,7 @@ void ITaskExecutor::Schedule(sirius::unique_ptr<ITask> task) {
 }
 
 void ITaskExecutor::Wait() {
-  sirius::unique_lock<sirius::mutex> lock(finish_mutex_);
+  std::unique_lock<sirius::mutex> lock(finish_mutex_);
   finish_cv_.wait(lock, [&]() {
     return total_tasks_.load() == finished_tasks_.load();
   });

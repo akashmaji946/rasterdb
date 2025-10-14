@@ -518,7 +518,7 @@ void SiriusExtension::InitializeGPUExtension(Connection &con) {
 
 	sirius::SiriusContext& sirius_context = sirius::SiriusContext::GetInstance();
 	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
-	task_creator.Start();
+	// task_creator.Start();
 }
 
 static void SetUsePinMemory(ClientContext &context, SetScope scope, Value &parameter) {

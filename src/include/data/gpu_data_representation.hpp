@@ -61,7 +61,7 @@ public:
     std::size_t getSizeInBytes() const override { return data_size_; }
 
 private:
-    sirius::unique_ptr<IAllocatedMemory> allocation_; // TODO: Replace the actual allocation type
+    // sirius::unique_ptr<IAllocatedMemory> allocation_; // TODO: Replace the actual allocation type
     cudf::table table_; // The actual cuDF table with the data
     std::size_t data_size_; // The size of the actual data in bytes
 
