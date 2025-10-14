@@ -77,9 +77,8 @@ void GPUExecutor::NewExecute() {
 	// TODO: Implement GPU execution logic
 
 	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
-
 	task_creator.SetCoordinator(this);
-	task_creator.Start();
+	// task_creator.Start();
 	task_creator.Signal();
 	Wait();
 	std::cout << "Coordinator: Got signal from Creator\n";
