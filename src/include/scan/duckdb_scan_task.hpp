@@ -27,8 +27,7 @@
 
 // The implementations have been based on the initial implementation in gpu_phyisical_table_scan.cpp by Yifei
 // Additionally, since the we are leveraging duckdb's task scheduler and thread pool, the scan tasks have to be derived from
-// ::sirius::BaseExecutorTask
-// TODO (yifiei): Implement doc style comments for these classes and methods since he probably has the most context on what these represent
+// ::duckdb::BaseExecutorTask
 namespace duckdb {
 
 class DuckDBScanGlobalSourceState : public GlobalSourceState {

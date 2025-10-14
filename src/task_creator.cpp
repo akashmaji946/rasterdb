@@ -58,6 +58,9 @@ TaskCreator::WorkerLoop() {
     std::cout << "Creator: Got signal from Coordinator\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
     std::cout << "Creator: Done processing, signaling Coordinator\n";
+    if (coordinator_ == nullptr) {
+        throw std::runtime_error("Coordinator is not set in TaskCreator");
+    }
     coordinator_->Signal();  // signal B
 }
 

@@ -516,7 +516,9 @@ void SiriusExtension::InitializeGPUExtension(Connection &con) {
 	// size_t processing_size_per_cpu = 16UL * 1024 * 1024 * 1024; //16GB
 	// GPUBufferManager *gpuBufferManager = &(GPUBufferManager::GetInstance(cache_size_per_gpu, processing_size_per_gpu, processing_size_per_cpu));
 
-	sirius::SiriusContext sirius_context();
+	sirius::SiriusContext& sirius_context = sirius::SiriusContext::GetInstance();
+	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
+	task_creator.Start();
 }
 
 static void SetUsePinMemory(ClientContext &context, SetScope scope, Value &parameter) {
