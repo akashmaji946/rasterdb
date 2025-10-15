@@ -16,7 +16,7 @@
 
 #pragma once
 #include "data/data_batch.hpp"
-#include "parallel/task_scheduler.hpp"
+#include "parallel/task_executor.hpp"
 
 namespace sirius {
 namespace parallel {

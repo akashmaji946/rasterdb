@@ -74,15 +74,32 @@ void GPUExecutor::Wait() {
 void GPUExecutor::NewExecute() {
 	// Execute the GPU physical plan
 	check_fallback_queries(gpu_context.gpu_active_query->query);
-	// TODO: Implement GPU execution logic
 
+	// Currently we will start the components after the query start instead of during database initialization because it is easier for development.
 	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
 	task_creator.SetCoordinator(this);
 	task_creator.Start();
+
+	// Get all the executors from sirius context
+	sirius::parallel::GPUPipelineExecutor& gpu_pipeline_executor = sirius_context.GetGPUPipelineExecutor();
+	sirius::parallel::DuckDBScanExecutor& duckdb_scan_executor = sirius_context.GetDuckDBScanExecutor();
+	sirius::parallel::DowngradeExecutor& downgrade_executor = sirius_context.GetDowngradeExecutor();
+	sirius::DowngradeTaskCreator& downgrade_task_creator = sirius_context.GetDowngradeTaskCreator();
+
+	gpu_pipeline_executor.Start();
+	duckdb_scan_executor.Start();
+	downgrade_executor.Start();
+	downgrade_task_creator.Start();
+
 	task_creator.Signal();
 	Wait();
 	std::cout << "Coordinator: Got signal from Creator\n";
 	task_creator.Stop();
+
+	gpu_pipeline_executor.Start();
+	duckdb_scan_executor.Start();
+	downgrade_executor.Start();
+	downgrade_task_creator.Start();
 }
 
 void GPUExecutor::Execute() {

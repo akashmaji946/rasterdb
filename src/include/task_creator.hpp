@@ -20,6 +20,7 @@
 #include "scan/duckdb_scan_executor.hpp"
 #include "parallel/task_executor.hpp"
 #include "parallel/task.hpp"
+#include "parallel/task_creator.hpp"
 
 namespace sirius {
 
@@ -62,7 +63,7 @@ private:
     sirius::queue<TaskCompletionMessage> message_queue_;
 };
 
-class TaskCreator {
+class TaskCreator : public ITaskCreator {
 public:
     TaskCreator(DataRepository& data_repository,
         parallel::GPUPipelineExecutor &gpu_pipeline_executor,
@@ -77,19 +78,13 @@ public:
     TaskCreator(TaskCreator&&) = default;
     TaskCreator& operator=(TaskCreator&&) = default;
 
-    // start the task creator (signaled by the coordinator)
-    void Start();
-
-    // stop the task creator and signal the coordinator
-    void Stop();
-
     // pull messages from the message queue and create tasks accordingly
     void PullMessage();
 
     // scan the data repository for new data batches and submit scan/pipeline tasks
     void ScanRepository();
 
-    void WorkerLoop();
+    void WorkerLoop() override;
 
     void SetCoordinator(duckdb::GPUExecutor* coordinator) {
         coordinator_ = coordinator;
@@ -110,9 +105,6 @@ private:
     DataRepository& data_repository_;
     parallel::GPUPipelineExecutor& gpu_pipeline_executor_;
     parallel::DuckDBScanExecutor& duckdb_scan_executor_;
-
-    sirius::unique_ptr<std::thread> internal_thread_;
-    std::atomic<bool> running_;
     duckdb::GPUExecutor* coordinator_; // reference to the coordinator (GPUExecutor)
 
 	sirius::mutex mtx;

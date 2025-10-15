@@ -15,5 +15,6 @@
 set(EXTENSION_SOURCES
         ${EXTENSION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/task_executor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/task_creator.cpp
         PARENT_SCOPE
 )

@@ -103,6 +103,13 @@ public:
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
+    /**
+     * @brief Main worker loop for executing tasks
+     * 
+     * @param worker_id The identifier for the worker thread
+     */
+    void WorkerLoop(int worker_id) override;
+    
 private:
     DataRepository& data_repository_; // The data repository to push the output data batches to
     duckdb::TableFunction* function_; // The table function to scan data from

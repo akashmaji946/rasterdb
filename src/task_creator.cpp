@@ -23,35 +23,12 @@ TaskCreator::TaskCreator(
     DataRepository& data_repository,
     parallel::GPUPipelineExecutor& gpu_pipeline_executor,
     parallel::DuckDBScanExecutor& duckdb_scan_executor
-    ) : data_repository_(data_repository),
+    ) : 
+    ITaskCreator(), data_repository_(data_repository),
         gpu_pipeline_executor_(gpu_pipeline_executor),
         duckdb_scan_executor_(duckdb_scan_executor),
         task_completion_message_queue_(), 
-        coordinator_(nullptr),
-        running_(false) {
-}
-
-// spawn the internal thread that runs the task creator loop
-void
-TaskCreator::Start() {
-  bool expected = false;
-  if (!running_.compare_exchange_strong(expected, true)) {
-    return;
-  }
-  internal_thread_ = sirius::make_unique<sirius::thread>(&TaskCreator::WorkerLoop, this);
-}
-
-void
-TaskCreator::Stop() {
-  bool expected = true;
-  if (!running_.compare_exchange_strong(expected, false)) {
-    return;
-  }
-  // stop the internal thread
-  if (internal_thread_ && internal_thread_->joinable()) {
-    internal_thread_->join();
-    internal_thread_.reset();
-  }
+        coordinator_(nullptr) {
 }
 
 void 

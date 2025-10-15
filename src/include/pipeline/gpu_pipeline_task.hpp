@@ -19,8 +19,7 @@
 #include <mutex>
 #include "gpu_pipeline.hpp"
 #include "data/data_batch.hpp"
-#include "parallel/task.hpp"
-#include "parallel/task_scheduler.hpp"
+#include "parallel/task_executor.hpp"
 #include "helper/helper.hpp"
 
 namespace sirius {

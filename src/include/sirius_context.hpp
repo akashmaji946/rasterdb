@@ -65,18 +65,18 @@ public:
         return duckdb_scan_executor_;
     }
 
-    parallel::DowngradeTaskCreator& GetDowngradeTaskCreator() {
+    DowngradeTaskCreator& GetDowngradeTaskCreator() {
         return downgrade_task_creator_;
     }
 
 private :
 
     TaskCreator task_creator_;
+    DowngradeTaskCreator downgrade_task_creator_;
     DataRepository data_repository_;
     parallel::GPUPipelineExecutor gpu_pipeline_executor_;
     parallel::DowngradeExecutor downgrade_executor_;
     parallel::DuckDBScanExecutor duckdb_scan_executor_;
-    parallel::DowngradeTaskCreator downgrade_task_creator_;
 };
 
 } // namespace sirius

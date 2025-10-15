@@ -32,6 +32,10 @@ void GPUPipelineExecutor::Schedule(sirius::unique_ptr<ITask> task) {
     ITaskExecutor::Schedule(std::move(task));
 }
 
+void GPUPipelineExecutor::WorkerLoop(int worker_id) {
+
+}
+
 GPUPipelineTask* GPUPipelineExecutor::CastToGPUPipelineTask(ITask* task) {
     // Safely cast to GPUPipelineTask
     return dynamic_cast<GPUPipelineTask*>(task);

@@ -37,5 +37,9 @@ DowngradeTask* DowngradeExecutor::CastToDowngradeTask(ITask* task) {
     return dynamic_cast<DowngradeTask*>(task);
 }
 
+void DowngradeExecutor::WorkerLoop(int worker_id) {
+
+}
+
 } // namespace parallel
 } // namespace sirius

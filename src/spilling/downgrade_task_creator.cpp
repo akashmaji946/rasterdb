@@ -17,13 +17,15 @@
 #include "spilling/downgrade_task_creator.hpp"
 
 namespace sirius {
-namespace parallel {
 
-void DowngradeTaskCreator::Schedule(sirius::unique_ptr<DowngradeTask> downgrade_task) {
+void DowngradeTaskCreator::Schedule(sirius::unique_ptr<parallel::DowngradeTask> downgrade_task) {
     // Downgrade-specific scheduling logic
     // Schedule the downgrade task using the DowngradeTaskQueue
     downgrade_executor_.Schedule(std::move(downgrade_task));
 }
 
-} // namespace parallel
+void DowngradeTaskCreator::WorkerLoop() {
+
+}
+
 } // namespace sirius

@@ -25,5 +25,9 @@ void DuckDBScanExecutor::Schedule(sirius::unique_ptr<ITask> task) {
     ITaskExecutor::Schedule(std::move(task));
 }
 
+void DuckDBScanExecutor::WorkerLoop(int worker_id) {
+    // Worker loop implementation for processing tasks
+}
+
 } // namespace parallel
 } // namespace sirius

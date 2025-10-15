@@ -16,16 +16,16 @@
 
 #pragma once
 #include "spilling/downgrade_executor.hpp"
+#include "parallel/task_creator.hpp"
 
 namespace sirius {
-namespace parallel {
 
 /**
  * Downgrade-specific task creator that inherits from ITaskExecutor and uses
  * DowngradeTaskQueue as its scheduler. Manages a pool of threads to
  * schedule downgrade tasks
  */
-class DowngradeTaskCreator {
+class DowngradeTaskCreator : public ITaskCreator {
 public:
     /**
      * Constructor that creates a DowngradeTaskCreator with a DowngradeTaskQueue scheduler
@@ -33,20 +33,31 @@ public:
      * @param data_repository Optional data repository for data access
      */
     DowngradeTaskCreator(
-        DataRepository& data_repository, DowngradeExecutor &downgrade_executor)
-        : data_repository_(data_repository), downgrade_executor_(downgrade_executor) {}
+        DataRepository& data_repository, parallel::DowngradeExecutor &downgrade_executor)
+        : ITaskCreator(), data_repository_(data_repository), downgrade_executor_(downgrade_executor) {}
+
+    // Destructor
+    ~DowngradeTaskCreator() = default;
+
+    // Non-copyable but movable
+    DowngradeTaskCreator(const DowngradeTaskCreator&) = delete;
+    DowngradeTaskCreator& operator=(const DowngradeTaskCreator&) = delete;
+    DowngradeTaskCreator(DowngradeTaskCreator&&) = default;
+    DowngradeTaskCreator& operator=(DowngradeTaskCreator&&) = default;
+
+    // main worker loop for the downgrade task creator
+    void WorkerLoop() override;
 
     /**
      * Schedule a downgrade task for execution
      * @param downgrade_task The downgrade task to schedule
      */
-    void Schedule(sirius::unique_ptr<DowngradeTask> downgrade_task);
+    void Schedule(sirius::unique_ptr<parallel::DowngradeTask> downgrade_task);
 
 private:
     // Downgrade-specific resources
     DataRepository& data_repository_;
-    DowngradeExecutor& downgrade_executor_;
+    parallel::DowngradeExecutor& downgrade_executor_;
 };
 
-} // namespace parallel
 } // namespace sirius

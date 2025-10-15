@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "task_scheduler.hpp"
+#include "task_queue.hpp"
 #include <condition_variable>
 #include "helper/helper.hpp"
 
@@ -79,7 +79,7 @@ private:
   sirius::unique_ptr<ITaskQueue> task_queue_;
   TaskExecutorConfig config_;
   sirius::atomic<bool> running_;
-  sirius::vector<std::unique_ptr<TaskExecutorThread>> threads_;
+  sirius::vector<sirius::unique_ptr<TaskExecutorThread>> threads_;
   sirius::atomic<uint64_t> total_tasks_ = 0;
   sirius::atomic<uint64_t> finished_tasks_ = 0;
   sirius::mutex finish_mutex_;
