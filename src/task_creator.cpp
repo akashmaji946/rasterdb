@@ -21,9 +21,11 @@ namespace sirius {
 
 TaskCreator::TaskCreator(
     DataRepository& data_repository,
-    parallel::GPUPipelineTaskQueue &gpu_pipeline_executor
+    parallel::GPUPipelineExecutor& gpu_pipeline_executor,
+    parallel::DuckDBScanExecutor& duckdb_scan_executor
     ) : data_repository_(data_repository),
         gpu_pipeline_executor_(gpu_pipeline_executor),
+        duckdb_scan_executor_(duckdb_scan_executor),
         task_completion_message_queue_(), 
         coordinator_(nullptr),
         running_(false) {

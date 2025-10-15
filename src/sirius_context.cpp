@@ -20,12 +20,11 @@
 namespace sirius {
 
 SiriusContext::SiriusContext() :
-    gpu_pipeline_task_queue_(parallel::GPUPipelineTaskQueue()),
-    downgrade_task_queue_(parallel::DowngradeTaskQueue()),
     data_repository_(DataRepository()),
     gpu_pipeline_executor_(parallel::GPUPipelineExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
     downgrade_executor_(parallel::DowngradeExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
-    task_creator_(TaskCreator(data_repository_, gpu_pipeline_task_queue_)),
-    downgrade_task_creator_(data_repository_, downgrade_task_queue_) {}
+    duckdb_scan_executor_(parallel::DuckDBScanExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
+    task_creator_(TaskCreator(data_repository_, gpu_pipeline_executor_, duckdb_scan_executor_)),
+    downgrade_task_creator_(data_repository_, downgrade_executor_) {}
 
 } // namespace sirius

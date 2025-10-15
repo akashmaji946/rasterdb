@@ -87,16 +87,17 @@ set(EXTENSION_SOURCES
   src/cpu_cache.cpp
   src/gpu_query_result.cpp
   src/config.cpp
-  src/memory/memory_reservation.cpp
-  src/parallel/task_executor.cpp
-  src/pipeline/gpu_pipeline_executor.cpp
-  src/spilling/downgrade_executor.cpp
-  src/spilling/downgrade_task_creator.cpp
   src/sirius_context.cpp
   src/task_creator.cpp
 )
 add_subdirectory(src/operator)
 add_subdirectory(src/plan)
+add_subdirectory(src/parallel)
+add_subdirectory(src/memory)
+add_subdirectory(src/spilling)
+add_subdirectory(src/scan)
+add_subdirectory(src/data)
+add_subdirectory(src/pipeline)
 
 set(CUDA_SOURCES 
   src/cuda/communication.cu 

@@ -17,56 +17,50 @@
 #pragma once
 #include "config.hpp"
 #include "operator/gpu_physical_table_scan.hpp"
-#include "gpu_buffer_manager.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/execution/execution_context.hpp"
-#include "duckdb/parallel/task_executor.hpp"
+#include "parallel/task_executor.hpp"
 #include "data/data_batch.hpp"
 #include "helper/helper.hpp"
 
 // The implementations have been based on the initial implementation in gpu_phyisical_table_scan.cpp by Yifei
-// Additionally, since the we are leveraging duckdb's task scheduler and thread pool, the scan tasks have to be derived from
-// ::duckdb::BaseExecutorTask
-namespace duckdb {
+namespace sirius {
+namespace parallel {
 
-class DuckDBScanGlobalSourceState : public GlobalSourceState {
+class DuckDBScanGlobalSourceState : public ITaskGlobalState {
 public:
 
 	idx_t max_threads = 0;
-	::sirius::unique_ptr<GlobalTableFunctionState> global_state;
+	sirius::unique_ptr<duckdb::GlobalTableFunctionState> global_state;
 	bool in_out_final = false;
-	DataChunk input_chunk;
-	::sirius::unique_ptr<TableFilterSet> table_filters;
+	sirius::unique_ptr<duckdb::TableFilterSet> table_filters;
 
-	optional_ptr<TableFilterSet> GetTableFilters(const GPUPhysicalTableScan &op) const {
+	duckdb::optional_ptr<duckdb::TableFilterSet> GetTableFilters(const duckdb::GPUPhysicalTableScan &op) const {
 		return table_filters ? table_filters.get() : op.fake_table_filters.get();
-	}
-	idx_t MaxThreads() override {
-		return max_threads;
 	}
 
     // The followings are used in `TableScanCoalesceTask`
-    void InitForTableScanCoalesceTask(const GPUPhysicalTableScan& op, uint8_t** mask_ptr_p) {
+    void InitForTableScanCoalesceTask(const duckdb::GPUPhysicalTableScan& op, uint8_t** mask_ptr_p) {
     }
 
-    void NextChunkOffsetsAligned(uint64_t chunk_rows, const ::sirius::vector<uint64_t>& chunk_column_sizes,
-                                uint64_t* out_row_offset, ::sirius::vector<uint64_t>& out_column_data_offsets) {
+    void NextChunkOffsetsAligned(uint64_t chunk_rows, const sirius::vector<uint64_t>& chunk_column_sizes,
+                                uint64_t* out_row_offset, sirius::vector<uint64_t>& out_column_data_offsets) {
     }
 
     inline void AssignBits(uint8_t from, int from_pos, uint8_t* to, int to_pos, int n) {
     }
 
-    void NextChunkOffsetsUnaligned(uint64_t chunk_rows, const ::sirius::vector<uint64_t>& chunk_column_sizes,
-                                    uint64_t* out_row_offset, ::sirius::vector<uint64_t>& out_column_data_offsets,
-                                    const ::sirius::vector<uint8_t>& chunk_unaligned_mask_bytes) {
+    void NextChunkOffsetsUnaligned(uint64_t chunk_rows, const sirius::vector<uint64_t>& chunk_column_sizes,
+                                    uint64_t* out_row_offset, sirius::vector<uint64_t>& out_column_data_offsets,
+                                    const sirius::vector<uint8_t>& chunk_unaligned_mask_bytes) {
     }
 
     // For both rows which are null mask aligned and unaligned
     struct {
-        ::sirius::mutex mutex;
+        sirius::mutex mutex;
         uint64_t row_offset;
-        ::sirius::vector<uint64_t> column_data_offsets;
+        sirius::vector<uint64_t> column_data_offsets;
     } offset_info_aligned, offset_info_unaligned;
 
     // For compacting null mask bytes of unaligned portion per column. We write starting from last bit
@@ -76,12 +70,12 @@ public:
     int unaligned_mask_in_byte_pos;
 };
 
-class DuckDBScanLocalSourceState : public LocalSourceState {
+class DuckDBScanLocalSourceState : public ITaskLocalState {
 public:
-	DuckDBScanLocalSourceState(ExecutionContext &context, DuckDBScanGlobalSourceState &gstate,
-	                     const GPUPhysicalTableScan &op) {
+	DuckDBScanLocalSourceState(duckdb::ExecutionContext &context, DuckDBScanGlobalSourceState &gstate,
+	                     const duckdb::GPUPhysicalTableScan &op) {
 		if (op.function.init_local) {
-			TableFunctionInitInput input(op.bind_data.get(), op.column_ids, op.scanned_ids,
+			duckdb::TableFunctionInitInput input(op.bind_data.get(), op.column_ids, op.scanned_ids,
 			                             gstate.GetTableFilters(op), op.extra_info.sample_options);
 			local_state = op.function.init_local(context, input, gstate.global_state.get());
 		}
@@ -89,45 +83,35 @@ public:
         column_size.resize(op.column_ids.size(), 0);
 	}
 
-	::sirius::unique_ptr<LocalTableFunctionState> local_state;
+	sirius::unique_ptr<duckdb::LocalTableFunctionState> local_state;
 
     // Used in `TableScanGetSizeTask`
     uint64_t num_rows;
-    ::sirius::vector<uint64_t> column_size;
+    sirius::vector<uint64_t> column_size;
 };
 
-class DuckDBScanGetSizeTask : public BaseExecutorTask {
+class DuckDBScanTask : public ITask {
 public:
-	DuckDBScanGetSizeTask(TaskExecutor &executor, int task_id_p, TableFunction& function_p, ExecutionContext& context_p,
-                       GPUPhysicalTableScan& op_p, GlobalSourceState* g_state_p, LocalSourceState* l_state_p)
-	    : BaseExecutorTask(executor), task_id(task_id_p), function(function_p), context(context_p),
-        op(op_p), g_state(g_state_p), l_state(l_state_p) {}
+    /**
+     * @brief Construct a new DuckDBScanTask object
+     *
+     * @param task_id Unique identifier for this scan task
+     * @param function_p Reference to the DuckDB table function
+     * @param context_p Execution context for the scan
+     * @param op_p Physical table scan operator
+     * @param local_state Local state specific to this task
+     * @param global_state Global state shared across scan tasks
+     */
+    DuckDBScanTask(uint64_t task_id, 
+                    duckdb::TableFunction& function_p, 
+                    duckdb::ExecutionContext& context_p,
+                    duckdb::GPUPhysicalTableScan& op_p,
+                    sirius::unique_ptr<ITaskLocalState> local_state,
+                    sirius::shared_ptr<ITaskGlobalState> global_state)
+        : ITask(std::move(local_state), std::move(global_state)),
+          task_id(task_id), function(function_p), context(context_p), op(op_p) {}
 
-	void ExecuteTask() override {
-    }
-
-private:
-  int task_id;
-  TableFunction& function;
-  ExecutionContext& context;
-  GPUPhysicalTableScan& op;
-  GlobalSourceState* g_state;
-  LocalSourceState* l_state;
-};
-
-class DuckDBScanCoalesceTask : public BaseExecutorTask {
-public:
-	DuckDBScanCoalesceTask(TaskExecutor &executor, int task_id_p, TableFunction& function_p, ExecutionContext& context_p,
-                        GPUPhysicalTableScan& op_p, GlobalSourceState* g_state_p, LocalSourceState* l_state_p,
-                        uint8_t** data_ptr_p, uint8_t** mask_ptr_p, uint64_t** offset_ptr_p,
-                        int64_t* duckdb_storage_row_ids_ptr_p)
-	    : BaseExecutorTask(executor), task_id(task_id_p), function(function_p), context(context_p),
-        op(op_p), g_state(g_state_p), l_state(l_state_p), data_ptr(data_ptr_p), mask_ptr(mask_ptr_p),
-        offset_ptr(offset_ptr_p), duckdb_storage_row_ids_ptr(duckdb_storage_row_ids_ptr_p) {}
-
-	void ExecuteTask() override {
-	}
-
+	void Execute() override;
 
     // Convert the output chunk from duckdb to a DataBatch
     void ConvertToDataBatch();
@@ -137,15 +121,125 @@ public:
 
 private:
   int task_id;
-  TableFunction& function;
-  ExecutionContext& context;
-  GPUPhysicalTableScan& op;
-  GlobalSourceState* g_state;
-  LocalSourceState* l_state;
-  uint8_t** data_ptr;
-  uint8_t** mask_ptr;
-  uint64_t** offset_ptr;
-  int64_t* duckdb_storage_row_ids_ptr;
+  duckdb::TableFunction& function;
+  duckdb::ExecutionContext& context;
+  duckdb::GPUPhysicalTableScan& op;
+  ITaskGlobalState* g_state;
+  ITaskLocalState* l_state;
 };
 
-} // namespace duckdb
+class DuckDBScanTaskQueue : public ITaskQueue {
+public:
+    /**
+     * @brief Construct a new DuckDBScanTaskQueue object
+     */
+    DuckDBScanTaskQueue() = default;
+
+    /**
+     * @brief Setups the task queue to start accepting and returning tasks
+     */
+    void Open() override {
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
+        is_open_ = true;
+    }
+
+    /**
+     * @brief Closes the task queue from accepting new tasks or returning tasks
+     */
+    void Close() override {
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
+        is_open_ = false;
+    }
+
+    /**
+     * @brief Push a new task to be scheduled.
+     * 
+     * @param task The task to be scheduled
+     * @throws std::runtime_error If the scheduler is not currently accepting requests
+     */
+    void Push(sirius::unique_ptr<ITask> task) override {
+        // Convert ITask to DuckDBScanTask - since we know it's a DuckDBScanTask
+        auto duckdb_scan_task = sirius::unique_ptr<DuckDBScanTask>(static_cast<DuckDBScanTask*>(task.release()));
+        Push(std::move(duckdb_scan_task));
+    }
+
+    /**
+     * @brief DuckDB scan specific push overload for type safety and convenience
+     * 
+     * @param duckdb_scan_task The DuckDB scan task to be scheduled
+     * @throws std::runtime_error If the scheduler is not currently accepting requests
+     */
+    void Push(sirius::unique_ptr<DuckDBScanTask> duckdb_scan_task) {
+        EnqueueTask(std::move(duckdb_scan_task));
+    }
+    
+    /**
+     * @brief Pull a task to execute.
+     * 
+     * Note that this is a non blocking call and will return nullptr if no task is available. In the future we should
+     * consider this call blocking. 
+     * 
+     * @return A unique pointer to the task to execute if there is one, nullptr otherwise
+     * @throws std::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+     */
+    sirius::unique_ptr<ITask> Pull() override {
+        // Delegate to DuckDB scan specific version and return as base type
+        auto duckdb_scan_task = PullScanTask();
+        return std::move(duckdb_scan_task);
+    }
+
+    /**
+     * @brief DuckDB scan specific pull method for type safety and convenience  
+     * 
+     * @return A unique pointer to the DuckDB scan task to execute, nullptr otherwise
+     * @throws std::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+     */
+    sirius::unique_ptr<DuckDBScanTask> PullScanTask() {
+        return DequeueTask();
+    }
+
+    /**
+     * @brief Enqueue a DuckDB scan task into the queue
+     * 
+     * @param duckdb_scan_task The DuckDB scan task to enqueue
+     */
+    void EnqueueTask(sirius::unique_ptr<DuckDBScanTask> duckdb_scan_task) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (duckdb_scan_task && is_open_) {
+            task_queue_.push(std::move(duckdb_scan_task));
+        }
+    }
+
+    /**
+     * @brief Dequeue a DuckDB scan task from the queue
+     * 
+     * @return A unique pointer to the dequeued DuckDB scan task if there is a task, nullptr otherwise
+     */
+    sirius::unique_ptr<DuckDBScanTask> DequeueTask() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (task_queue_.empty()) {
+            return nullptr;
+        }
+        auto task = std::move(task_queue_.front());
+        task_queue_.pop();
+        return task;
+    }
+
+    /**
+     * @brief Check if the task queue is empty
+     * 
+     * @return true if the queue is empty, false otherwise
+     */
+    bool IsEmpty() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return task_queue_.empty();
+    }
+
+private:
+    sirius::queue<sirius::unique_ptr<DuckDBScanTask>> task_queue_; // The underlying queue storing the tasks
+    bool is_open_ = false; // Whether the queue is open for accepting and returning tasks
+    mutable std::mutex mutex_;  // mutable to allow locking in const methods
+};
+
+} // namespace parallel
+} // namespace sirius

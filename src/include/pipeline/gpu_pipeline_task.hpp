@@ -113,7 +113,7 @@ private:
  * @brief A task queue specifically for managing GPUPipelineTask instances.
  * 
  * This class provides a thread-safe queue implementation for scheduling and retrieving GPU pipeline tasks.
- * Currently it just uses the sirius::queue (which is just the std::queue) but in the future we might want to
+ * Currently it just uses the sirius::queue (which is just the sirius::queue) but in the future we might want to
  * implement a more sophisticated queue that supports priority scheduling, task stealing, etc..
  */
 class GPUPipelineTaskQueue : public ITaskQueue {
@@ -127,7 +127,7 @@ public:
      * @brief Setups the task queue to start accepting and returning tasks
      */
     void Open() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
         is_open_ = true;
     }
 
@@ -135,7 +135,7 @@ public:
      * @brief Closes the task queue from accepting new tasks or returning tasks
      */
     void Close() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
         is_open_ = false;
     }
 
@@ -143,7 +143,7 @@ public:
      * @brief Push a new task to be scheduled.
      * 
      * @param task The task to be scheduled
-     * @throws std::runtime_error If the scheduler is not currently accepting requests
+     * @throws sirius::runtime_error If the scheduler is not currently accepting requests
      */
     void Push(sirius::unique_ptr<ITask> task) override {
         // Convert ITask to GPUPipelineTask - since we know it's a GPUPipelineTask
@@ -155,7 +155,7 @@ public:
      * @brief GPU-specific push overload for type safety and convenience
      * 
      * @param gpu_task The GPU pipeline task to be scheduled
-     * @throws std::runtime_error If the scheduler is not currently accepting requests
+     * @throws sirius::runtime_error If the scheduler is not currently accepting requests
      */
     void Push(sirius::unique_ptr<GPUPipelineTask> gpu_task) {
         EnqueueTask(std::move(gpu_task));
@@ -168,7 +168,7 @@ public:
      * consider this call blocking. 
      * 
      * @return A unique pointer to the task to execute if there is one, nullptr otherwise
-     * @throws std::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+     * @throws sirius::runtime_error If the scheduler is not currently stopped and thus not returning tasks
      */
     sirius::unique_ptr<ITask> Pull() override {
         // Delegate to GPU-specific version and return as base type
@@ -180,7 +180,7 @@ public:
      * @brief GPU-specific pull method for type safety and convenience  
      * 
      * @return A unique pointer to the GPU pipeline task to execute, nullptr otherwise
-     * @throws std::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+     * @throws sirius::runtime_error If the scheduler is not currently stopped and thus not returning tasks
      */
     sirius::unique_ptr<GPUPipelineTask> PullGPUTask() {
         return DequeueTask();
@@ -192,7 +192,7 @@ public:
      * @param gpu_pipeline_task The GPU pipeline task to enqueue
      */
     void EnqueueTask(sirius::unique_ptr<GPUPipelineTask> gpu_pipeline_task) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
         if (gpu_pipeline_task && is_open_) {
             task_queue_.push(std::move(gpu_pipeline_task));
         }
@@ -204,7 +204,7 @@ public:
      * @return A unique pointer to the dequeued GPU pipeline task if there is a task, nullptr otherwise
      */
     sirius::unique_ptr<GPUPipelineTask> DequeueTask() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
         if (task_queue_.empty()) {
             return nullptr;
         }
@@ -219,14 +219,14 @@ public:
      * @return true if the queue is empty, false otherwise
      */
     bool IsEmpty() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        sirius::lock_guard<sirius::mutex> lock(mutex_);
         return task_queue_.empty();
     }
 
 private:
     sirius::queue<sirius::unique_ptr<GPUPipelineTask>> task_queue_; // The underlying queue storing the tasks
     bool is_open_ = false; // Whether the queue is open for accepting and returning tasks
-    mutable std::mutex mutex_;  // mutable to allow locking in const methods
+    mutable sirius::mutex mutex_;  // mutable to allow locking in const methods
 };
 
 } // namespace parallel

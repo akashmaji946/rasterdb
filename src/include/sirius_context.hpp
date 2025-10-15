@@ -61,20 +61,12 @@ public:
         return downgrade_executor_;
     }
 
-    // sirius::shared_ptr<duckdb::DuckDBScanExecutor> GetDuckDBScanExecutor() {
-    //     return duckdb_scan_executor_;
-    // }
+    parallel::DuckDBScanExecutor& GetDuckDBScanExecutor() {
+        return duckdb_scan_executor_;
+    }
 
     parallel::DowngradeTaskCreator& GetDowngradeTaskCreator() {
         return downgrade_task_creator_;
-    }
-
-    parallel::GPUPipelineTaskQueue& GetGPUPipelineTaskQueue() {
-        return gpu_pipeline_task_queue_;
-    }
-
-    parallel::DowngradeTaskQueue& GetDowngradeTaskQueue() {
-        return downgrade_task_queue_;
     }
 
 private :
@@ -83,10 +75,8 @@ private :
     DataRepository data_repository_;
     parallel::GPUPipelineExecutor gpu_pipeline_executor_;
     parallel::DowngradeExecutor downgrade_executor_;
-    // sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor_;
+    parallel::DuckDBScanExecutor duckdb_scan_executor_;
     parallel::DowngradeTaskCreator downgrade_task_creator_;
-    parallel::GPUPipelineTaskQueue gpu_pipeline_task_queue_;
-    parallel::DowngradeTaskQueue downgrade_task_queue_;
 };
 
 } // namespace sirius

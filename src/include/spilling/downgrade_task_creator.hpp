@@ -33,8 +33,8 @@ public:
      * @param data_repository Optional data repository for data access
      */
     DowngradeTaskCreator(
-        DataRepository& data_repository, DowngradeTaskQueue &downgrade_task_queue)
-        : data_repository_(data_repository), downgrade_task_queue_(downgrade_task_queue) {}
+        DataRepository& data_repository, DowngradeExecutor &downgrade_executor)
+        : data_repository_(data_repository), downgrade_executor_(downgrade_executor) {}
 
     /**
      * Schedule a downgrade task for execution
@@ -45,7 +45,7 @@ public:
 private:
     // Downgrade-specific resources
     DataRepository& data_repository_;
-    DowngradeTaskQueue& downgrade_task_queue_;
+    DowngradeExecutor& downgrade_executor_;
 };
 
 } // namespace parallel

@@ -16,7 +16,7 @@
 
 #pragma once
 #include "data/data_repository.hpp"
-#include "pipeline/gpu_pipeline_task.hpp"
+#include "pipeline/gpu_pipeline_executor.hpp"
 #include "scan/duckdb_scan_executor.hpp"
 #include "parallel/task_executor.hpp"
 #include "parallel/task.hpp"
@@ -65,7 +65,8 @@ private:
 class TaskCreator {
 public:
     TaskCreator(DataRepository& data_repository,
-    parallel::GPUPipelineTaskQueue &gpu_pipeline_executor);
+        parallel::GPUPipelineExecutor &gpu_pipeline_executor,
+        parallel::DuckDBScanExecutor& duckdb_scan_executor);
           
     // Destructor
     ~TaskCreator() = default;
@@ -94,14 +95,8 @@ public:
         coordinator_ = coordinator;
     }
 
-    // set duckdb scan executor
-    void SetDuckDBScanExecutor(sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor) {
-        duckdb_scan_executor_ = duckdb_scan_executor;
-    }
-
     // submit scan task to scan executor
-    void ScheduleScanGetSizeTask(sirius::unique_ptr<duckdb::DuckDBScanGetSizeTask> scan_getsize_task);
-    void ScheduleScanCoalesceTask(sirius::unique_ptr<duckdb::DuckDBScanCoalesceTask> scan_coalesce_task);
+    void ScheduleDuckDBScan (sirius::unique_ptr<parallel::DuckDBScanTask> scan_getsize_task);
 
     // submit pipeline task to pipeline executor
     void SchedulePipelineTask(sirius::unique_ptr<parallel::GPUPipelineTask> gpu_pipeline_task);
@@ -113,15 +108,15 @@ public:
 private:
     TaskCompletionMessageQueue task_completion_message_queue_;
     DataRepository& data_repository_;
-    parallel::GPUPipelineTaskQueue &gpu_pipeline_executor_;
-    sirius::shared_ptr<duckdb::DuckDBScanExecutor> duckdb_scan_executor_;
+    parallel::GPUPipelineExecutor& gpu_pipeline_executor_;
+    parallel::DuckDBScanExecutor& duckdb_scan_executor_;
 
     sirius::unique_ptr<std::thread> internal_thread_;
     std::atomic<bool> running_;
     duckdb::GPUExecutor* coordinator_; // reference to the coordinator (GPUExecutor)
 
-	mutex mtx;
-	condition_variable cv;
+	sirius::mutex mtx;
+	std::condition_variable cv;
 	bool ready = false;
 };
 

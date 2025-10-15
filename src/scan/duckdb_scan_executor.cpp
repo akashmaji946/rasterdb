@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "spilling/downgrade_task_creator.hpp"
+#include "scan/duckdb_scan_executor.hpp"
+#include "scan/duckdb_scan_task.hpp"
 
 namespace sirius {
 namespace parallel {
 
-void DowngradeTaskCreator::Schedule(sirius::unique_ptr<DowngradeTask> downgrade_task) {
-    // Downgrade-specific scheduling logic
-    // Schedule the downgrade task using the DowngradeTaskQueue
-    downgrade_executor_.Schedule(std::move(downgrade_task));
+void DuckDBScanExecutor::Schedule(sirius::unique_ptr<ITask> task) {
+    // Call the parent's Schedule method to handle the task execution
+    ITaskExecutor::Schedule(std::move(task));
 }
 
 } // namespace parallel
