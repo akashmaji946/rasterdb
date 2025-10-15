@@ -95,11 +95,10 @@ void GPUExecutor::NewExecute() {
 	Wait();
 	std::cout << "Coordinator: Got signal from Creator\n";
 	task_creator.Stop();
-
-	gpu_pipeline_executor.Start();
-	duckdb_scan_executor.Start();
-	downgrade_executor.Start();
-	downgrade_task_creator.Start();
+	gpu_pipeline_executor.Stop();
+	duckdb_scan_executor.Stop();
+	downgrade_executor.Stop();
+	downgrade_task_creator.Stop();
 }
 
 void GPUExecutor::Execute() {
