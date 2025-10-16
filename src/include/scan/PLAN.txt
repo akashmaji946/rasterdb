@@ -1,0 +1,9 @@
+DuckDBScanExecutor : ITaskExecutor
+DuckDBScanTaskQueue : ITaskQueue
+DuckDBScanTask: ITask
+   - void Execute();
+     - Loop:
+       - function
+       - size
+       - stop if >= 2GB
+Wait
