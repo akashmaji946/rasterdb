@@ -91,7 +91,7 @@ void ITaskExecutor::WorkerLoop(int worker_id) {
       OnTaskError(worker_id, std::move(task), e);
     }
     {
-      std::unique_lock<std::mutex> lock(finish_mutex_);
+      std::unique_lock<sirius::mutex> lock(finish_mutex_);
       finished_tasks_.fetch_add(1);
       if (total_tasks_.load() == finished_tasks_.load()) {
         finish_cv_.notify_one();

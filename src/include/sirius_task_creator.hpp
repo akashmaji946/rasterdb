@@ -21,47 +21,10 @@
 #include "parallel/task_executor.hpp"
 #include "parallel/task.hpp"
 #include "parallel/task_creator.hpp"
+#include "gpu_pipeline_hashmap.hpp"
+#include "task_completion.hpp"
 
 namespace sirius {
-
-class duckdb::GPUExecutor;
-
-enum class Source {
-    SCAN,
-    PIPELINE
-};
-
-// Message indicating the completion of a task, notifying task creator that it should check if new tasks can be created
-struct TaskCompletionMessage {
-    uint64_t task_id;
-    uint64_t pipeline_id;
-    Source source;
-};
-
-class TaskCompletionMessageQueue {
-public:
-    TaskCompletionMessageQueue() = default;
-    ~TaskCompletionMessageQueue() = default;
-    
-    void EnqueueMessage(const TaskCompletionMessage &message) {
-        lock_guard<mutex> lock(mutex_);
-        message_queue_.push(message);
-    }
-    
-    bool DequeueMessage(TaskCompletionMessage &message) {
-        lock_guard<mutex> lock(mutex_);
-        if (message_queue_.empty()) {
-            return false;
-        }
-        message = message_queue_.front();
-        message_queue_.pop();
-        return true;
-    }
-    
-private:
-    mutex mutex_;
-    sirius::queue<TaskCompletionMessage> message_queue_;
-};
 
 class TaskCreator : public ITaskCreator {
 public:
@@ -78,17 +41,22 @@ public:
     TaskCreator(TaskCreator&&) = default;
     TaskCreator& operator=(TaskCreator&&) = default;
 
-    // pull messages from the message queue and create tasks accordingly
-    void PullMessage();
-
-    // scan the data repository for new data batches and submit scan/pipeline tasks
-    void ScanRepository();
+    // scan the data repository for new data batches and submit pipeline tasks
+    void ScanRepository(size_t pipeline_idx);
 
     void WorkerLoop() override;
 
     void SetCoordinator(duckdb::GPUExecutor* coordinator) {
         coordinator_ = coordinator;
     }
+
+    void SetGPUPipelineHashMap(sirius::shared_ptr<GPUPipelineHashMap> gpu_pipeline_hashmap) {
+        gpu_pipeline_hashmap_ = gpu_pipeline_hashmap;
+    }
+
+    sirius::unique_ptr<parallel::DuckDBScanTask> CreateScanTask(size_t pipeline_idx);
+    sirius::unique_ptr<parallel::GPUPipelineTask> CreatePipelineTask(size_t pipeline_idx, 
+        sirius::vector<sirius::unique_ptr<DataBatch>> data_batches);
 
     // submit scan task to scan executor
     void ScheduleDuckDBScan (sirius::unique_ptr<parallel::DuckDBScanTask> scan_getsize_task);
@@ -97,8 +65,14 @@ public:
     void SchedulePipelineTask(sirius::unique_ptr<parallel::GPUPipelineTask> gpu_pipeline_task);
 
     void Run();
+
     void Signal();
+
     void Wait();
+
+    uint64_t GetNextTaskId() {
+        return next_task_id_++;
+    }
 
 private:
     TaskCompletionMessageQueue task_completion_message_queue_;
@@ -106,7 +80,9 @@ private:
     parallel::GPUPipelineExecutor& gpu_pipeline_executor_;
     parallel::DuckDBScanExecutor& duckdb_scan_executor_;
     duckdb::GPUExecutor* coordinator_; // reference to the coordinator (GPUExecutor)
+    sirius::shared_ptr<GPUPipelineHashMap> gpu_pipeline_hashmap_;
 
+    sirius::atomic<uint64_t> next_task_id_ = 0; // Atomic counter for generating unique task IDs
 	sirius::mutex mtx;
 	std::condition_variable cv;
 	bool ready = false;
