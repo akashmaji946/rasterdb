@@ -95,7 +95,7 @@ public:
      * @param i Index of the block to access
      * @return void* Pointer to the block at index i
      */
-    void* operator[](std::size_t i) const { return blocks[i]; }
+    void* getBlock(std::size_t i) const { return blocks[i]; }
 
     /**
      * @brief Get the tier of memory that this allocation resides in
@@ -110,6 +110,13 @@ public:
      * @return std::size_t Size of the allocation in bytes
      */
     std::size_t getAllocatedBytes() const override { return blocks.size() * block_size; }
+
+    /**
+     * @brief Get the size of each block in bytes
+     * 
+     * @return std::size_t Size of each block
+     */
+    size_t getBlockSize() const noexcept { return block_size; }
 
 private:
     sirius::vector<void*> blocks; // The vector of allocated blocks

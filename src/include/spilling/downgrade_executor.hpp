@@ -24,22 +24,22 @@ namespace sirius {
 namespace parallel {
 
 /**
- * @brief Executor that inherits from ITaskExecutor to perform downgrade tasks
+ * @brief Executor specialized for performing memory downgrade operations across tier hierarchies.
  * 
- * The DowngradeExecutor manages a pool of threads to perform downgrade tasks as well as DowngradeTaskQueue
- * that actually manages the scheduling of the tasks.  
+ * The DowngradeExecutor inherits from ITaskExecutor and manages a pool of threads dedicated
+ * to executing downgrade tasks that move data between different memory tiers (e.g., GPU to CPU,
+ * CPU to disk). It uses a DowngradeTaskQueue for task scheduling and coordination.
  * 
- * While it is relatively similar to the GPUPipelineExecutor in many of its mechanisms, it also specialized memory management 
- * logic needed for spilling operations.
+ * While similar to GPUPipelineExecutor in its threading model, it includes specialized
+ * memory management logic required for efficient spilling operations and tier management.
  */
 class DowngradeExecutor : public ITaskExecutor {
 public:
     /**
-     * @brief Constructor that creates a DowngradeExecutor with a DowngradeTaskQueue scheduler
+     * @brief Constructs a new DowngradeExecutor with task execution configuration
      * 
      * @param config Configuration for the task executor (thread count, retry policy, etc.)
-     * @param reservation_manager Reference to the memory reservation manager
-     * @param data_repository Optional data repository for data access
+     * @param data_repository Reference to the data repository for accessing and storing data batches
      */
     explicit DowngradeExecutor(
         TaskExecutorConfig config,
@@ -61,9 +61,12 @@ public:
     DowngradeExecutor& operator=(DowngradeExecutor&&) = default;
 
     /**
-     * @brief Schedule a downgrade task for execution
+     * @brief Schedules a downgrade task for execution
      * 
-     * @param downgrade_task The downgrade task to schedule
+     * This is a type-safe wrapper that converts the downgrade task to the base ITask
+     * interface and delegates to the parent's Schedule method.
+     * 
+     * @param downgrade_task The downgrade task to schedule for execution
      */
     void ScheduleDowngradeTask(sirius::unique_ptr<DowngradeTask> downgrade_task) {
         // Convert to ITask and use parent's Schedule method
@@ -71,36 +74,54 @@ public:
     }
 
     /**
-     * @brief Override the Schedule method to provide downgrade-specific scheduling logic
+     * @brief Schedules a task for execution with downgrade-specific logic
      * 
-     * @param task The task to schedule
+     * Overrides the base class Schedule method to provide specialized scheduling
+     * behavior for downgrade operations, including memory tier validation and
+     * resource management.
+     * 
+     * @param task The task to schedule (must be a DowngradeTask)
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
     /**
-     * @brief Main worker loop for executing tasks
+     * @brief Main worker loop for executing downgrade tasks
      * 
-     * @param worker_id The identifier for the worker thread
+     * Each worker thread runs this loop to continuously pull and execute downgrade
+     * tasks from the queue. Includes specialized error handling and resource cleanup
+     * for memory tier operations.
+     * 
+     * @param worker_id The unique identifier for this worker thread
      */
     void WorkerLoop(int worker_id) override;
 
-    // Start worker threads
+    /**
+     * @brief Starts the executor and initializes worker threads
+     * 
+     * Initializes the thread pool and begins accepting tasks for execution.
+     */
     void Start() override;
 
-    // Stop accepting new tasks, and join worker threads.
+    /**
+     * @brief Stops the executor and cleanly shuts down worker threads
+     * 
+     * Stops accepting new tasks and waits for all worker threads to complete
+     * their current tasks before shutting down.
+     */
     void Stop() override;
 
 private:
     /**
-     * @brief Helper method to safely cast ITask to DowngradeTask
+     * @brief Safely casts ITask to DowngradeTask with type validation
      * 
-     * @param task The base task to cast
-     * @return Pointer to the DowngradeTask
+     * @param task The base task pointer to cast
+     * @return DowngradeTask* The casted DowngradeTask pointer
+     * @throws std::bad_cast if the task is not of type DowngradeTask
      */
     DowngradeTask* CastToDowngradeTask(ITask* task);
 
 private:
-    DataRepository& data_repository_; // The data repository to access the data for downgrading
+    DataRepository& data_repository_;  ///< Reference to the data repository for accessing data during downgrade operations
 };
 
 } // namespace parallel

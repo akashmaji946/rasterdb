@@ -18,29 +18,67 @@
 
 namespace sirius {
 
+/**
+ * @brief Enumeration of task sources for completion tracking
+ */
 enum class Source {
-    SCAN,
-    PIPELINE
+    SCAN,       ///< Task originated from a scan operation
+    PIPELINE    ///< Task originated from a pipeline operation
 };
 
-// Message indicating the completion of a task, notifying task creator that it should check if new tasks can be created
+/**
+ * @brief Message structure for notifying task completion events
+ * 
+ * This structure carries information about completed tasks to notify the task creator
+ * that it should check if new dependent tasks can be scheduled for execution.
+ */
 struct TaskCompletionMessage {
-    uint64_t task_id;
-    uint64_t pipeline_id;
-    Source source;
+    uint64_t task_id;      ///< Unique identifier of the completed task
+    uint64_t pipeline_id;  ///< Identifier of the pipeline associated with the completed task
+    Source source;         ///< Source type of the completed task (scan or pipeline)
 };
 
+/**
+ * @brief Thread-safe queue for task completion message passing
+ * 
+ * This class provides a thread-safe mechanism for tasks to notify the task creator
+ * about their completion. It uses a semaphore-based blocking queue to ensure
+ * efficient communication between producer (tasks) and consumer (task creator) threads.
+ */
 class TaskCompletionMessageQueue {
 public:
+    /**
+     * @brief Constructs a new TaskCompletionMessageQueue
+     */
     TaskCompletionMessageQueue() = default;
+    
+    /**
+     * @brief Destructor for TaskCompletionMessageQueue
+     */
     ~TaskCompletionMessageQueue() = default;
     
+    /**
+     * @brief Adds a completion message to the queue
+     * 
+     * This method safely enqueues a task completion message and signals waiting
+     * consumers that a new message is available.
+     * 
+     * @param message The completion message to enqueue (ownership is transferred)
+     */
     void EnqueueMessage(sirius::unique_ptr<TaskCompletionMessage> message) {
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         message_queue_.push(std::move(message));
         sem_.release(); // signal that one item is available
     }
     
+    /**
+     * @brief Removes and returns a completion message from the queue
+     * 
+     * This method blocks until a message becomes available, then safely dequeues
+     * and returns it to the caller.
+     * 
+     * @return sirius::unique_ptr<TaskCompletionMessage> The dequeued message, or nullptr if queue is empty
+     */
     sirius::unique_ptr<TaskCompletionMessage> DequeueMessage() {
         sem_.acquire(); // wait until there's something
         sirius::lock_guard<sirius::mutex> lock(mutex_);
@@ -52,14 +90,19 @@ public:
         return message;
     }
 
+    /**
+     * @brief Alias for DequeueMessage for consistent interface
+     * 
+     * @return sirius::unique_ptr<TaskCompletionMessage> The dequeued message
+     */
     sirius::unique_ptr<TaskCompletionMessage> PullMessage() {
         return DequeueMessage();
     }
     
 private:
-    mutex mutex_;
-    sirius::queue<sirius::unique_ptr<TaskCompletionMessage>> message_queue_;
-    std::counting_semaphore<> sem_{0}; // starts with 0 available permits
+    mutex mutex_;                                                        ///< Mutex for thread-safe queue access
+    sirius::queue<sirius::unique_ptr<TaskCompletionMessage>> message_queue_;  ///< Underlying message queue
+    std::counting_semaphore<> sem_{0};                                   ///< Semaphore for blocking/signaling (starts with 0 permits)
 };
 
 } // namespace sirius

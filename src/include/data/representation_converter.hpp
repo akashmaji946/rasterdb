@@ -27,10 +27,11 @@
 
 #include "helper/helper.hpp"
 #include "data/cpu_data_representation.hpp"
+#include "data/gpu_data_representation.hpp"
 
 namespace sirius {
 
-using srius::memory::multiple_blocks_allocation;
+using sirius::multiple_blocks_allocation;
 using sirius::host_table_representation;
 using sirius::gpu_table_representation;
 
@@ -51,10 +52,10 @@ public:
      * @param mr The host memory resource to use for allocation
      * @param stream CUDA stream to use for memory operations
      * @return host_table_representation containing both the allocation and metadata for recreation
-     * @throws std::bad_alloc if memory allocation fails
+     * @throws sirius::bad_alloc if memory allocation fails
      */
-    static std::unique_ptr<host_table_representation>
-    convert_to_host_representation(const std::unique_ptr<gpu_table_representation>& table,
+    static sirius::unique_ptr<host_table_representation>
+    convert_to_host_representation(const sirius::unique_ptr<gpu_table_representation>& table,
                     fixed_size_host_memory_resource* mr,
                     rmm::cuda_stream_view stream);
 
@@ -70,8 +71,8 @@ public:
      * @param stream CUDA stream to use for memory operations
      * @return cudf::table The recreated table (owns the data)
      */
-    static std::unique_ptr<gpu_table_representation> 
-    convert_to_gpu_representation(const std::unique_ptr<host_table_representation>& table, 
+    static sirius::unique_ptr<gpu_table_representation> 
+    convert_to_gpu_representation(const sirius::unique_ptr<host_table_representation>& table, 
                     rmm::mr::device_memory_resource* mr, // TODO: Replace eventually with actual allocator type 
                     rmm::cuda_stream_view stream);
 
@@ -85,7 +86,7 @@ private:
      * @param stream CUDA stream to use for memory operations
      * @return multiple_blocks_allocation RAII wrapper containing the copied data
      */
-    static std::unique_ptr<multiple_blocks_allocation> 
+    static sirius::unique_ptr<multiple_blocks_allocation> 
     copy_data_to_host(const rmm::device_buffer* gpu_data, 
                       fixed_size_host_memory_resource* mr,
                       std::size_t& data_size,

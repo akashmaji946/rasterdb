@@ -15,6 +15,7 @@
 set(EXTENSION_SOURCES
         ${EXTENSION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/data_repository.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/simple_data_repository_level.cpp        
+        ${CMAKE_CURRENT_SOURCE_DIR}/simple_data_repository_level.cpp      
+        ${CMAKE_CURRENT_SOURCE_DIR}/representation_converter.cpp  
         PARENT_SCOPE
 )

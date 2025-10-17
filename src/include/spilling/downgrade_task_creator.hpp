@@ -21,22 +21,28 @@
 namespace sirius {
 
 /**
- * Downgrade-specific task creator that inherits from ITaskExecutor and uses
- * DowngradeTaskQueue as its scheduler. Manages a pool of threads to
- * schedule downgrade tasks
+ * @brief Task creator specialized for managing downgrade operations in memory tier hierarchies.
+ * 
+ * This class inherits from ITaskCreator and is responsible for creating and scheduling
+ * downgrade tasks that move data between different memory tiers (e.g., GPU to CPU,
+ * CPU to disk). It coordinates with the DowngradeExecutor to manage the execution
+ * of these memory management operations.
  */
 class DowngradeTaskCreator : public ITaskCreator {
 public:
     /**
-     * Constructor that creates a DowngradeTaskCreator with a DowngradeTaskQueue scheduler
-     * @param config Configuration for the task executor (thread count, retry policy, etc.)
-     * @param data_repository Optional data repository for data access
+     * @brief Constructs a new DowngradeTaskCreator object
+     * 
+     * @param data_repository Reference to the data repository for accessing and storing data batches
+     * @param downgrade_executor Reference to the downgrade executor for task execution
      */
     DowngradeTaskCreator(
         DataRepository& data_repository, parallel::DowngradeExecutor &downgrade_executor)
         : ITaskCreator(), data_repository_(data_repository), downgrade_executor_(downgrade_executor) {}
 
-    // Destructor
+    /**
+     * @brief Destructor for the DowngradeTaskCreator
+     */
     ~DowngradeTaskCreator() = default;
 
     // Non-copyable but movable
@@ -45,19 +51,24 @@ public:
     DowngradeTaskCreator(DowngradeTaskCreator&&) = default;
     DowngradeTaskCreator& operator=(DowngradeTaskCreator&&) = default;
 
-    // main worker loop for the downgrade task creator
+    /**
+     * @brief Main worker loop for the downgrade task creator
+     * 
+     * This method continuously monitors for memory pressure and creates downgrade
+     * tasks as needed to move data from higher-tier to lower-tier memory.
+     */
     void WorkerLoop() override;
 
     /**
-     * Schedule a downgrade task for execution
-     * @param downgrade_task The downgrade task to schedule
+     * @brief Schedules a downgrade task for execution
+     * 
+     * @param downgrade_task The downgrade task to schedule for execution
      */
     void Schedule(sirius::unique_ptr<parallel::DowngradeTask> downgrade_task);
 
 private:
-    // Downgrade-specific resources
-    DataRepository& data_repository_;
-    parallel::DowngradeExecutor& downgrade_executor_;
+    DataRepository& data_repository_;                    ///< Reference to the data repository for data access
+    parallel::DowngradeExecutor& downgrade_executor_;    ///< Reference to the downgrade executor for task execution
 };
 
 } // namespace sirius
