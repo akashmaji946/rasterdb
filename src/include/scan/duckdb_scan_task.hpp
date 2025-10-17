@@ -45,6 +45,7 @@ public:
      *
      * @param scan_metadata Metadata required for the scan operation
      * @param task_id A unique identifier for the task
+     * @param pipeline_id The id of the pipeline associated with this task
      * @param local_state Local state specific to this task
      * @param global_state Global state shared across scan tasks
      */

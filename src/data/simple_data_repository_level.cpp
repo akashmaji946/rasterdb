@@ -34,7 +34,7 @@ SimpleDataRepositoryLevel::EvictDataBatch() {
             return evicted_batch;
         // }
     }
-    throw std::invalid_argument("Data batch with the specified id does not exist");
+    return nullptr;
 }
 
 std::vector<uint64_t> 

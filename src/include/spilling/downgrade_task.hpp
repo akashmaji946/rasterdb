@@ -15,11 +15,21 @@
  */
 
 #pragma once
-#include "data/data_batch.hpp"
 #include "parallel/task_executor.hpp"
+#include "task_completion.hpp"
+#include "helper/helper.hpp"
+#include "data/data_repository.hpp"
 
 namespace sirius {
 namespace parallel {
+
+class DowngradeTaskGlobalState : public ITaskGlobalState {
+public:
+    explicit DowngradeTaskGlobalState(DataRepository& data_repository, TaskCompletionMessageQueue& message_queue) : 
+        data_repository_(data_repository), message_queue_(message_queue) {}
+    DataRepository& data_repository_;
+    TaskCompletionMessageQueue& message_queue_; // Message queue to notify TaskCreator about completion of the
+};
 
 /**
  * @brief A task representing a unit of work in a downgrade operation.
@@ -34,11 +44,13 @@ public:
      * @brief Construct a new DowngradeTask object
      * 
      * @param task_id A unique identifier for the task
+     * @param pipeline_id The id of the pipeline associated with this task
      * @param data_batch The data batch to be processed by this task
      * @param local_state The local state specific to this task
      * @param global_state The global state shared across multiple tasks
      */
     DowngradeTask(uint64_t task_id, 
+                    uint64_t pipeline_id,
                     sirius::unique_ptr<DataBatch> data_batch,
                     sirius::unique_ptr<ITaskLocalState> local_state,
                     sirius::shared_ptr<ITaskGlobalState> global_state)
@@ -49,8 +61,7 @@ public:
     /**
      * @brief Method to actually execute the downgrade task
      */
-    void Execute() override {
-    }
+    void Execute() override;
 
     /**
     * @brief Get the unique identifier for the task
@@ -72,7 +83,6 @@ public:
      * @brief Method to push the output of this task to the Data Repository
      * 
      * @param data_batch The data batch to push
-     * @param pipeline_id The id of the pipeline that produced this data batch
      */
     void PushToDataRepository(sirius::unique_ptr<sirius::DataBatch> data_batch, size_t pipeline_id);
 
@@ -85,6 +95,7 @@ public:
 
 private:
     uint64_t task_id_; // The unique identifier for the task
+    uint64_t pipeline_id_;
     sirius::unique_ptr<DataBatch> data_batch_; // The data batch to be processed by this task
 };
 
@@ -114,6 +125,7 @@ public:
      * @brief Closes the task queue from accepting new tasks or returning tasks
      */
     void Close() override {
+        sem_.release(); // signal that one item is available
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         is_open_ = false;
     }
@@ -175,6 +187,7 @@ public:
         if (downgrade_task && is_open_) {
             task_queue_.push(std::move(downgrade_task));
         }
+        sem_.release(); // signal that one item is available
     }
 
     /**
@@ -183,6 +196,7 @@ public:
      * @return A unique pointer to the dequeued downgrade task if there is a task, nullptr otherwise
      */
     sirius::unique_ptr<DowngradeTask> DequeueTask() {
+        sem_.acquire(); // wait until there's something
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         if (task_queue_.empty()) {
             return nullptr;
@@ -206,7 +220,7 @@ private:
     sirius::queue<sirius::unique_ptr<DowngradeTask>> task_queue_; // The underlying queue storing the tasks
     bool is_open_ = false; // Whether the queue is open for accepting and returning tasks
     mutable sirius::mutex mutex_;  // mutable to allow locking in const methods
-
+    std::counting_semaphore<> sem_{0}; // starts with 0 available permits
 };
 
 } // namespace parallel

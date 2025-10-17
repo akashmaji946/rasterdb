@@ -37,8 +37,50 @@ DowngradeTask* DowngradeExecutor::CastToDowngradeTask(ITask* task) {
     return dynamic_cast<DowngradeTask*>(task);
 }
 
-void DowngradeExecutor::WorkerLoop(int worker_id) {
+void DowngradeExecutor::Start() {
+    bool expected = false;
+    if (!running_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    OnStart();
+    threads_.reserve(config_.num_threads);
+    for (int i = 0; i < config_.num_threads; ++i) {
+        threads_.push_back(
+        sirius::make_unique<TaskExecutorThread>(sirius::make_unique<sirius::thread>(&DowngradeExecutor::WorkerLoop, this, i)));
+    }
+}
 
+void DowngradeExecutor::Stop() {
+    bool expected = true;
+    if (!running_.compare_exchange_strong(expected, false)) {
+        return;
+    }
+    OnStop();
+    for (auto& thread : threads_) {
+        if (thread->internal_thread_->joinable()) {
+        thread->internal_thread_->join();
+        }
+    }
+    threads_.clear();
+}
+
+void DowngradeExecutor::WorkerLoop(int worker_id) {
+    while (true) {
+        if (!running_.load()) {
+            // Executor is stopped.
+            break;
+        }
+        auto task = task_queue_->Pull();
+            if (task == nullptr) {
+            // Task queue is closed.
+            break;
+        }
+        try {
+            task->Execute();
+        } catch (const std::exception& e) {
+            OnTaskError(worker_id, std::move(task), e);
+        }
+    }
 }
 
 } // namespace parallel
