@@ -14,28 +14,22 @@
  * limitations under the License.
  */
 
-#include "pipeline/gpu_pipeline_task.hpp"
+#include "spilling/downgrade_task.hpp"
+#include "spilling/downgrade_executor.hpp"
 
 namespace sirius {
 namespace parallel {
 
-void GPUPipelineTask::Execute() {
-    // create IDataRepresentation
-    // create DataBatch
-    std::cout << "Pipeline Task is executing\n";
-    auto batch_id = global_state_->Cast<GPUPipelineTaskGlobalState>().data_repository_.GetNextDataBatchId();
-    sirius::unique_ptr<sirius::DataBatch> data_batch = sirius::make_unique<sirius::DataBatch>(batch_id, nullptr);
-    // push DataBatch to data_repository_
-    global_state_->Cast<GPUPipelineTaskGlobalState>().data_repository_.AddNewDataBatch(pipeline_id_, std::move(data_batch));
-    // notify TaskCreator about task completion
+void DowngradeTask::Execute() {
+    std::cout << "Downgrade Task is executing\n";
     MarkTaskCompletion();
 }
 
-void GPUPipelineTask::MarkTaskCompletion() {
+void DowngradeTask::MarkTaskCompletion() {
     // notify TaskCreator about task completion
-    std::cout << "Marking Pipeline Task Completion\n";
+    std::cout << "Marking Downgrade Task Completion\n";
     auto message = sirius::make_unique<sirius::TaskCompletionMessage>(task_id_, pipeline_id_, sirius::Source::PIPELINE);
-    global_state_->Cast<GPUPipelineTaskGlobalState>().message_queue_.EnqueueMessage(std::move(message));
+    global_state_->Cast<DowngradeTaskGlobalState>().message_queue_.EnqueueMessage(std::move(message));
 }
 
 

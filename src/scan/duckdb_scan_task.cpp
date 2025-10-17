@@ -25,7 +25,6 @@ void DuckDBScanTask::Execute() {
     // create DataBatch
     std::cout << "Scan Task is executing\n";
     auto batch_id = global_state_->Cast<DuckDBScanGlobalSourceState>().data_repository_.GetNextDataBatchId();
-    std::cout << "Scan Task is executing\n";
     sirius::unique_ptr<sirius::DataBatch> data_batch = sirius::make_unique<sirius::DataBatch>(batch_id, nullptr);
     // push DataBatch to data_repository_
     global_state_->Cast<DuckDBScanGlobalSourceState>().data_repository_.AddNewDataBatch(pipeline_id_, std::move(data_batch));

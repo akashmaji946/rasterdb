@@ -15,8 +15,6 @@
  */
 
 #pragma once
-#include <queue>
-#include <mutex>
 #include "gpu_pipeline.hpp"
 #include "data/data_repository.hpp"
 #include "parallel/task_executor.hpp"
@@ -49,6 +47,7 @@ public:
      * 
      * @param pipeline The GPU pipeline associated with this task
      * @param task_id A unique identifier for the task
+     * @param pipeline_id The id of the pipeline associated with this task
      * @param data_batch The data batch to be processed by this task
      * @param local_state The local state specific to this task
      * @param global_state The global state shared across multiple tasks

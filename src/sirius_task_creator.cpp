@@ -90,7 +90,7 @@ void
 TaskCreator::WorkerLoop() {
     Wait();  // wait for signal from B
     std::cout << "Creator: Got signal from Coordinator\n";
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     for (size_t pipeline_idx = 0; pipeline_idx < gpu_pipeline_hashmap_->vec_.size(); pipeline_idx++) {
         auto pipeline = gpu_pipeline_hashmap_->vec_[pipeline_idx];
         auto source_type = pipeline->GetSource()->type;
@@ -100,23 +100,43 @@ TaskCreator::WorkerLoop() {
             ScheduleDuckDBScan(std::move(scan_task));
         }
     }
-    // poll for messages from task_completion_message_queue_
-    // implement polling on a queue
-    // while (true) {
-        std::cout << "Creator: Waiting for task completion messages\n";
-        auto message = task_completion_message_queue_.PullMessage();
-        // if new message from scan task, create new scan task and submit to duckdb_scan_executor_
-        // if (message->source == Source::SCAN) {
-        //     std::cout << "Creator: Received scan completion message for pipeline " << message->pipeline_id << "\n";
-        //     auto scan_task = CreateScanTask(message->pipeline_id);
-        //     ScheduleDuckDBScan(std::move(scan_task));
-        // }
-        // iterate over data_repository_ to check if new data batches are available
-        ScanRepository(message->pipeline_id);
-    // }
 
-    std::cout << "Creator: Waiting for task completion messages\n";
-    message = task_completion_message_queue_.PullMessage();
+    int scan_finished = 0;
+    int pipeline_finished = 0;
+    int scan_created = 1;
+    int pipeline_created = 0;
+    while (true) {
+        std::cout << "Creator: Waiting for task completion messages\n";
+        // poll for messages from task_completion_message_queue_
+        // implement polling on a queue
+        auto message = task_completion_message_queue_.PullMessage();
+
+        if (message->source == Source::PIPELINE) {
+            pipeline_finished++;
+            std::cout << "Creator: Received pipeline completion message for pipeline " << message->pipeline_id << "\n";
+            if (pipeline_created < scan_created) {
+                ScanRepository(message->pipeline_id);
+                pipeline_created++;
+            }
+        } else if (message->source == Source::SCAN) {
+            scan_finished++;
+            std::cout << "Creator: Received scan completion message for pipeline " << message->pipeline_id << "\n";
+            if (scan_created < 10) {
+                auto scan_task = CreateScanTask(message->pipeline_id);
+                ScheduleDuckDBScan(std::move(scan_task));
+                scan_created++;
+            }
+            if (pipeline_created < scan_created) {
+                ScanRepository(message->pipeline_id);
+                pipeline_created++;
+            }
+        }
+
+        std::cout << "Creator: scan_counter = " << scan_finished << ", pipeline_counter = " << pipeline_finished << "\n";
+        if (scan_finished >= 10 && pipeline_finished >= 10) {
+            break;
+        }
+    }
     std::cout << "Creator: Done processing, signaling Coordinator\n";
     if (coordinator_ == nullptr) {
         throw std::runtime_error("Coordinator is not set in TaskCreator");
@@ -140,7 +160,7 @@ TaskCreator::Wait() {
     ready = false;
 }
 
-void
+bool
 TaskCreator::ScanRepository(size_t pipeline_idx) {
     sirius::unique_ptr<DataBatch> data_batch = data_repository_.levels_[pipeline_idx]->Cast<SimpleDataRepositoryLevel>().EvictDataBatch();
     if (data_batch != nullptr) {
@@ -149,6 +169,10 @@ TaskCreator::ScanRepository(size_t pipeline_idx) {
         data_batches.push_back(std::move(data_batch));
         sirius::unique_ptr<parallel::GPUPipelineTask> pipeline_task = CreatePipelineTask(pipeline_idx, std::move(data_batches));
         SchedulePipelineTask(std::move(pipeline_task));
+        return true;
+    } else {
+        std::cout << "Creator: No data batch found for pipeline " << pipeline_idx << "\n";
+        return false;
     }
 }
 

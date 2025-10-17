@@ -88,7 +88,7 @@ set(EXTENSION_SOURCES
   src/gpu_query_result.cpp
   src/config.cpp
   src/sirius_context.cpp
-  src/task_creator.cpp
+  src/sirius_task_creator.cpp
 )
 add_subdirectory(src/operator)
 add_subdirectory(src/plan)

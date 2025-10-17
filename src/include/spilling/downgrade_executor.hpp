@@ -84,6 +84,12 @@ public:
      */
     void WorkerLoop(int worker_id) override;
 
+    // Start worker threads
+    void Start() override;
+
+    // Stop accepting new tasks, and join worker threads.
+    void Stop() override;
+
 private:
     /**
      * @brief Helper method to safely cast ITask to DowngradeTask

@@ -42,7 +42,7 @@ public:
     TaskCreator& operator=(TaskCreator&&) = default;
 
     // scan the data repository for new data batches and submit pipeline tasks
-    void ScanRepository(size_t pipeline_idx);
+    bool ScanRepository(size_t pipeline_idx);
 
     void WorkerLoop() override;
 
