@@ -40,22 +40,6 @@ public:
      * 
      * @param config The task executor configuration
      * @param data_repository The data repository to push the output data batches to
-     * @param function_p The table function to scan data from
-     * @param context_p The execution context for the scan operation
-     * @param op_p The GPU physical table scan operator associated with this executor
-     */
-    explicit DuckDBScanExecutor(
-        TaskExecutorConfig config,
-        DataRepository& data_repository, duckdb::TableFunction* function_p, duckdb::ExecutionContext* context_p,
-                       duckdb::GPUPhysicalTableScan* op_p)
-        : ITaskExecutor(sirius::make_unique<DuckDBScanTaskQueue>(), config),
-          data_repository_(data_repository), function_(function_p), context_(context_p), op_(op_p) {}
-
-    /**
-     * @brief Construct a new DuckDBScanExecutor object with task executor configuration
-     * 
-     * @param config The task executor configuration
-     * @param data_repository The data repository to push the output data batches to
      */
     explicit DuckDBScanExecutor(
         TaskExecutorConfig config,
@@ -73,18 +57,6 @@ public:
     DuckDBScanExecutor& operator=(const DuckDBScanExecutor&) = delete;
     DuckDBScanExecutor(DuckDBScanExecutor&&) = default;
     DuckDBScanExecutor& operator=(DuckDBScanExecutor&&) = default;
-
-    void SetExecutionContext(duckdb::ExecutionContext* context_p) {
-        context_ = context_p;
-    }
-
-    void SetTableFunction(duckdb::TableFunction* function_p) {
-        function_ = function_p;
-    }
-
-    void SetPhysicalTableScan(duckdb::GPUPhysicalTableScan* op_p) {
-        op_ = op_p;
-    }
 
     /**
      * @brief Schedule a DuckDB scan task for execution by converting it to ITask
@@ -109,12 +81,15 @@ public:
      * @param worker_id The identifier for the worker thread
      */
     void WorkerLoop(int worker_id) override;
+
+    // Start worker threads
+    void Start() override;
+
+    // Stop accepting new tasks, and join worker threads.
+    void Stop() override;
     
 private:
-    DataRepository& data_repository_; // The data repository to push the output data batches to
-    duckdb::TableFunction* function_; // The table function to scan data from
-    duckdb::ExecutionContext* context_; // The execution context for the scan operation
-    duckdb::GPUPhysicalTableScan* op_; // The GPU physical table scan operator associated with this executor
+    DataRepository& data_repository_; // The data repository to push the output data batches t
 };
 
 } // namespace parallel

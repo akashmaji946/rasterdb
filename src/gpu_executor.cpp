@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "sirius_context.hpp"
 #include "gpu_context.hpp"
 #include "duckdb/execution/operator/set/physical_recursive_cte.hpp"
 #include "duckdb/execution/operator/helper/physical_result_collector.hpp"
@@ -75,25 +76,51 @@ void GPUExecutor::NewExecute() {
 	// Execute the GPU physical plan
 	check_fallback_queries(gpu_context.gpu_active_query->query);
 
+	sirius::shared_ptr<sirius::GPUPipelineHashMap> gpu_pipeline_hashmap = sirius::make_shared<sirius::GPUPipelineHashMap>(scheduled);
+
 	// Currently we will start the components after the query start instead of during database initialization because it is easier for development.
 	sirius::TaskCreator& task_creator = sirius_context.GetTaskCreator();
-	task_creator.SetCoordinator(this);
-	task_creator.Start();
 
 	// Get all the executors from sirius context
 	sirius::parallel::GPUPipelineExecutor& gpu_pipeline_executor = sirius_context.GetGPUPipelineExecutor();
 	sirius::parallel::DuckDBScanExecutor& duckdb_scan_executor = sirius_context.GetDuckDBScanExecutor();
 	sirius::parallel::DowngradeExecutor& downgrade_executor = sirius_context.GetDowngradeExecutor();
 	sirius::DowngradeTaskCreator& downgrade_task_creator = sirius_context.GetDowngradeTaskCreator();
+	sirius::DataRepository& data_repository = sirius_context.GetDataRepository();
 
-	gpu_pipeline_executor.Start();
+	// add new level to the data_repository according to the number of pipelines
+	for (size_t pipeline_idx = 0; pipeline_idx < gpu_pipeline_hashmap->vec_.size(); pipeline_idx++) {
+		// construct SimpleDataRepositoryLevel as the default level
+		data_repository.AddNewLevel(pipeline_idx, sirius::make_unique<sirius::SimpleDataRepositoryLevel>());
+		auto pipeline = scheduled[pipeline_idx];
+		auto source_type = pipeline->GetSource()->type;
+		if (source_type == PhysicalOperatorType::TABLE_SCAN) {
+			// initialize pipeline
+			Pipeline duckdb_pipeline(*executor);
+			ThreadContext thread_context(context);
+			ExecutionContext exec_context(context, thread_context, &duckdb_pipeline);
+			auto &table_scan = pipeline->source->Cast<GPUPhysicalTableScan>();
+			//construct shared_ptr DuckDBScanMetadata
+			sirius::shared_ptr<sirius::DuckDBScanMetadata> scan_metadata = 
+				sirius::make_shared<sirius::DuckDBScanMetadata>(exec_context, table_scan);
+			gpu_pipeline_hashmap->scan_metadata_map_.emplace(pipeline_idx, scan_metadata);
+		}
+	}
+
+	task_creator.SetCoordinator(this);
+	task_creator.SetGPUPipelineHashMap(gpu_pipeline_hashmap);
+	task_creator.Start();
+
 	duckdb_scan_executor.Start();
+	gpu_pipeline_executor.Start();
 	downgrade_executor.Start();
 	downgrade_task_creator.Start();
 
+	std::cout << "Coordinator: Signaling Creator to start working\n";
 	task_creator.Signal();
 	Wait();
 	std::cout << "Coordinator: Got signal from Creator\n";
+
 	task_creator.Stop();
 	gpu_pipeline_executor.Stop();
 	duckdb_scan_executor.Stop();

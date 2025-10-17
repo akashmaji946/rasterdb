@@ -15,8 +15,9 @@
  */
 
 #pragma once
-#include "task_creator.hpp"
+#include "sirius_task_creator.hpp"
 #include "data/data_repository.hpp"
+#include "data/simple_data_repository_level.hpp"
 #include "pipeline/gpu_pipeline_executor.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "spilling/downgrade_executor.hpp"
@@ -67,6 +68,10 @@ public:
 
     DowngradeTaskCreator& GetDowngradeTaskCreator() {
         return downgrade_task_creator_;
+    }
+
+    DataRepository& GetDataRepository() {
+        return data_repository_;
     }
 
 private :

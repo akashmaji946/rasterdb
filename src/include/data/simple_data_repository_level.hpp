@@ -15,7 +15,7 @@
  */
 
 #pragma once
-#include "data_batch.hpp"
+#include "data/data_repository_level.hpp"
 #include "helper/helper.hpp"
 
 namespace sirius {
@@ -27,14 +27,18 @@ namespace sirius {
  * Thus, as a chunk of data goes through the various stages of the query plan, it gets stored in different levels of the data repository.
  * Thus each level doesn't have to reason about the query plan and the execution DAG when it comes to decision such as which DataBatch to downgrade.
  */
-class IDataRepositoryLevel {
+class SimpleDataRepositoryLevel : public IDataRepositoryLevel {
 public:
+    
+    SimpleDataRepositoryLevel() = default;
+    ~SimpleDataRepositoryLevel() = default;
+
     /**
      * @brief Method to add new data batch to the current level
      * 
      * @param data_batch The data batch to add to this level
      */
-    virtual void AddNewDataBatch(sirius::unique_ptr<DataBatch> data_batch) = 0;
+    void AddNewDataBatch(sirius::unique_ptr<DataBatch> data_batch) override;
 
     /**
      * @brief Method to evict a data batch from the current level by its unique identifier
@@ -42,7 +46,7 @@ public:
      * @return sirius::unique_ptr<DataBatch> The evicted data batch
      * @throws std::invalid_argument if the data batch with the specified id does not exist
      */
-    virtual sirius::unique_ptr<DataBatch> EvictDataBatch() = 0;
+    sirius::unique_ptr<DataBatch> EvictDataBatch() override;
 
     /**
      * @brief Method to get an ordered (priority wise) list of data batch ids that can be downgraded to a lower tier
@@ -54,17 +58,9 @@ public:
      * @param num_data_batches The number of data batches that should be returned (essentially returns the Top-K downgrable batches)
      * @return std::vector<uint64_t> The ordered list of data batch ids that can be downgraded. Its size = max(num_data_batches, # of downgradable batches)
      */
-    virtual std::vector<uint64_t> GetDowngradableDataBatches(size_t num_data_batches) = 0;
+    std::vector<uint64_t> GetDowngradableDataBatches(size_t num_data_batches) override;
 
-	template <class TARGET>
-	TARGET &Cast() {
-		return reinterpret_cast<TARGET &>(*this);
-	}
-
-	template <class TARGET>
-	const TARGET &Cast() const {
-		return reinterpret_cast<const TARGET &>(*this);
-	}
+    sirius::vector<sirius::unique_ptr<DataBatch>> data_batches_; // Container to store the data batches in this level
 };
 
 } // namespace sirius

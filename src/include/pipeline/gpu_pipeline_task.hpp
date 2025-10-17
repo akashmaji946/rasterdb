@@ -18,12 +18,21 @@
 #include <queue>
 #include <mutex>
 #include "gpu_pipeline.hpp"
-#include "data/data_batch.hpp"
+#include "data/data_repository.hpp"
 #include "parallel/task_executor.hpp"
 #include "helper/helper.hpp"
+#include "task_completion.hpp"
 
 namespace sirius {
 namespace parallel {
+
+class GPUPipelineTaskGlobalState : public ITaskGlobalState {
+public:
+    explicit GPUPipelineTaskGlobalState(DataRepository& data_repository, TaskCompletionMessageQueue& message_queue) : 
+        data_repository_(data_repository), message_queue_(message_queue) {}
+    DataRepository& data_repository_;
+    TaskCompletionMessageQueue& message_queue_; // Message queue to notify TaskCreator about completion of the
+};
 
 /**
  * @brief A task representing a unit of work in a GPU pipeline.
@@ -44,25 +53,22 @@ public:
      * @param local_state The local state specific to this task
      * @param global_state The global state shared across multiple tasks
      */
-    GPUPipelineTask(sirius::shared_ptr<duckdb::GPUPipeline> pipeline, 
-                    uint64_t task_id, 
-                    sirius::unique_ptr<DataBatch> data_batch,
+    GPUPipelineTask(uint64_t task_id,
+                    uint64_t pipeline_id,
+                    duckdb::shared_ptr<duckdb::GPUPipeline> pipeline, 
+                    sirius::vector<sirius::unique_ptr<DataBatch>> data_batches,
                     sirius::unique_ptr<ITaskLocalState> local_state,
                     sirius::shared_ptr<ITaskGlobalState> global_state)
         : ITask(std::move(local_state), std::move(global_state)),
-          pipeline_(std::move(pipeline)),
-          task_id_(task_id),
-          data_batch_(std::move(data_batch)) {}
+            pipeline_(std::move(pipeline)),
+            task_id_(task_id),
+            pipeline_id_(pipeline_id),
+            data_batches_(std::move(data_batches)) {}
 
     /**
      * @brief Method to actually execute the task
      */
-    void Execute() override {
-        // TODO: Implement the actual GPU pipeline task execution logic
-        // This is where you would process the data_batch_ using the pipeline_
-        if (pipeline_ && data_batch_) {
-        }
-    }
+    void Execute() override;
 
     /**
      * @brief Get the unique identifier for this task
@@ -70,13 +76,6 @@ public:
      * @return uint64_t The task ID
      */
     uint64_t GetTaskId() const { return task_id_; }
-
-    /**
-     * @brief Get the data batch associated with this task
-     * 
-     * @return const DataBatch* Pointer to the data batch
-     */
-    const DataBatch* GetDataBatch() const { return data_batch_.get(); }
 
     /**
      * @brief Get the GPU pipeline associated with this task
@@ -103,9 +102,10 @@ public:
     void PushToDataRepository(sirius::unique_ptr<::sirius::DataBatch> data_batch, size_t pipeline_id);
 
 private:
-    sirius::shared_ptr<duckdb::GPUPipeline> pipeline_;
+    duckdb::shared_ptr<duckdb::GPUPipeline> pipeline_;
     uint64_t task_id_;
-    sirius::unique_ptr<DataBatch> data_batch_;
+    uint64_t pipeline_id_;
+    sirius::vector<sirius::unique_ptr<DataBatch>> data_batches_;
 };
 
 /**
@@ -134,6 +134,7 @@ public:
      * @brief Closes the task queue from accepting new tasks or returning tasks
      */
     void Close() override {
+        sem_.release(); // signal that one item is available
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         is_open_ = false;
     }
@@ -195,6 +196,7 @@ public:
         if (gpu_pipeline_task && is_open_) {
             task_queue_.push(std::move(gpu_pipeline_task));
         }
+        sem_.release(); // signal that one item is available
     }
 
     /**
@@ -203,6 +205,7 @@ public:
      * @return A unique pointer to the dequeued GPU pipeline task if there is a task, nullptr otherwise
      */
     sirius::unique_ptr<GPUPipelineTask> DequeueTask() {
+        sem_.acquire(); // wait until there's something
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         if (task_queue_.empty()) {
             return nullptr;
@@ -226,6 +229,7 @@ private:
     sirius::queue<sirius::unique_ptr<GPUPipelineTask>> task_queue_; // The underlying queue storing the tasks
     bool is_open_ = false; // Whether the queue is open for accepting and returning tasks
     mutable sirius::mutex mutex_;  // mutable to allow locking in const methods
+    std::counting_semaphore<> sem_{0}; // Semaphore to manage task availability
 };
 
 } // namespace parallel

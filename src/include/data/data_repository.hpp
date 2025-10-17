@@ -71,15 +71,26 @@ public:
      * This method removes the DataBatch with the specified id from the level corresponding to the specified pipeline_id and returns it.
      * 
      * @param pipeline_id The id of the pipeline where the DataBatch currently resides
-     * @param data_batch_id The unique identifier of the DataBatch to evict
      * @return sirius::unique_ptr<DataBatch> The evicted DataBatch
      * @throws std::invalid_argument if no level exists for the specified pipeline_id or if the data batch doesn't exist in the provided level
      */
-    sirius::unique_ptr<DataBatch> EvictDataBatch(size_t pipeline_id, uint64_t data_batch_id);
+    sirius::unique_ptr<DataBatch> EvictDataBatch(size_t pipeline_id);
 
-private:
+    /**
+     * @brief Generate a new unique identifier for a DataBatch
+     * 
+     * This method generates a new unique identifier that can be used to identify a DataBatch in the repository.
+     * 
+     * @return uint64_t A new unique identifier for a DataBatch
+     */
+    uint64_t GetNextDataBatchId() {
+        return next_data_batch_id_++;
+    }
+
     sirius::unordered_map<size_t, sirius::unique_ptr<IDataRepositoryLevel>> levels_; // A map storing the different levels in the DataRepository
+private:
     mutex mutex_; // Mutex to protect access to data_batches
+    sirius::atomic<uint64_t> next_data_batch_id_ = 0; // Counter to generate unique data batch ids
 };
 
 }

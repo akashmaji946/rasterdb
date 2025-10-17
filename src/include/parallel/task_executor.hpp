@@ -66,7 +66,7 @@ public:
   // Wait until all tasks are finished.
   virtual void Wait();
 
-private:
+protected:
   // Helper functions.
   virtual void OnStart();
   virtual void OnStop();
@@ -75,7 +75,7 @@ private:
   // Main thread loop.
   virtual void WorkerLoop(int worker_id);
 
-private:
+protected:
   sirius::unique_ptr<ITaskQueue> task_queue_;
   TaskExecutorConfig config_;
   sirius::atomic<bool> running_;
