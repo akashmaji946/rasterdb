@@ -4,6 +4,7 @@
 #include <gpu_buffer_manager.hpp>
 #include <parallel/task.hpp>
 #include <parallel/task_queue.hpp>
+#include <scan/duckdb_scan_executor_new.hpp>
 
 // duckdb
 #include <blockingconcurrentqueue.h>
@@ -94,8 +95,7 @@ class DuckDBScanTaskGlobalState
 {
 public:
   //----------Constructor----------//
-  explicit DuckDBScanTaskGlobalState(duckdb::ClientContext& context,
-                                     const duckdb::PhysicalTableScan& op)
+  DuckDBScanTaskGlobalState(duckdb::ClientContext& context, const duckdb::PhysicalTableScan& op)
   {
     if (op.dynamic_filters && op.dynamic_filters->HasFilters())
     {
@@ -166,11 +166,11 @@ class DuckDBScanTaskLocalState
 
 public:
   //----------Constructor----------//
-  explicit DuckDBScanTaskLocalState(shared_ptr<DuckDBScanTaskQueue> task_queue,
-                                    duckdb::ExecutionContext& context,
-                                    DuckDBScanTaskGlobalState& gstate,
-                                    const duckdb::PhysicalTableScan& op)
-      : task_queue(std::move(task_queue))
+  DuckDBScanTaskLocalState(DuckDBScanExecutor& executor,
+                           const DuckDBScanTaskGlobalState& gstate,
+                           duckdb::ExecutionContext& context,
+                           const duckdb::PhysicalTableScan& op)
+      : executor(executor)
       , context(context)
       , op(op)
       , num_columns(op.column_ids.size()) /// KEVIN: row_id column?
@@ -244,8 +244,8 @@ public:
   std::vector<size_t> byte_offsets; ///< Current byte offsets in data buffers
   size_t row_offset = 0;            ///< Current row offset in buffers
 
-  // Task queue for pushing extra scan tasks back into the queue
-  shared_ptr<DuckDBScanTaskQueue> task_queue;
+  // Reference to the calling executor to schedule additional scan tasks if necessary
+  DuckDBScanExecutor& executor;
 
   size_t num_columns;
   std::vector<duckdb::LogicalType> scanned_types; ///< Types of the scanned columns
@@ -316,6 +316,7 @@ public:
                 l.offset_ptrs[col][l.row_offset + row] + len; // Prefix sum of offsets
 
               // Ensure that we have space in the data buffer for the data copy
+              /// KEVIN: Is there a better way?
               if (l.byte_offsets[col] + len > DEFAULT_TARGET_BYTES)
               {
                 // For now, just throw an exception
@@ -346,7 +347,7 @@ public:
         {
           auto const* src_valid = reinterpret_cast<const uint8_t*>(validity.GetData());
           auto* dst             = l.mask_ptrs[col];
-          auto const cur_bit    = MOD_8(l.row_offset); ///< bit offset in tail byte
+          auto const cur_bit    = MOD_8(l.row_offset); ///< bit offset in current tail byte
           auto const dst_byte   = DIV_8(l.row_offset); ///< dst start byte
           auto const nbits      = l.chunk.size();
 
@@ -368,6 +369,8 @@ public:
             //----------Byte-Unaligned----------//
             /// KEVIN: is this code path ever entered in the single-threaded case?
             /// KEVIN: [potential optimization] use uint64_t chunks for bit manipulation
+            /// KEVIN: [potential optimization] use 2 buffers for aligned and unaligned writes (once
+            /// unaligned is used once, most subsequent writes will be unaligned)
             auto const nbytes = CEIL_DIV_8(nbits);
             for (idx_t b = 0; b < nbytes; ++b)
             {
@@ -412,17 +415,17 @@ public:
     if (!g.IsSourceDrained())
     {
       auto new_task = sirius::make_unique<DuckDBScanTask>(
-        sirius::make_unique<DuckDBScanTaskLocalState>(l.task_queue, l.context, g, l.op),
+        sirius::make_unique<DuckDBScanTaskLocalState>(l.executor, l.context, g, l.op),
         this->global_state_);
-      l.task_queue->Push(std::move(new_task));
+      l.executor.Schedule(std::move(new_task));
     }
 
     // Copy data to perfectly sized buffers
     /// TODO: make memory reservations
-    uint8_t** data_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
-    uint8_t** mask_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
-    uint64_t** offset_ptrs = gpu_buffer_manager->customCudaHostAlloc<uint64_t*>(num_columns);
-    for (idx_t col = 0; col < num_columns; ++col)
+    uint8_t** data_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(l.num_columns);
+    uint8_t** mask_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(l.num_columns);
+    uint64_t** offset_ptrs = gpu_buffer_manager->customCudaHostAlloc<uint64_t*>(l.num_columns);
+    for (idx_t col = 0; col < l.num_columns; ++col)
     {
       // Data buffer
       data_ptrs[col] = gpu_buffer_manager->customCudaHostAlloc<uint8_t>(l.byte_offsets[col]);

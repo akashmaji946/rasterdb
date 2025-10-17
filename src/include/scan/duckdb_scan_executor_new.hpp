@@ -15,12 +15,13 @@ class DuckDBScanExecutor : public ITaskExecutor
 {
 public:
   DuckDBScanExecutor(TaskExecutorConfig config, DataRepository& data_repository)
-      : ITaskExecutor(sirius::make_shared<DuckDBScanTaskQueue>(), config)
+      : ITaskExecutor(sirius::make_unique<DuckDBScanTaskQueue>(), config)
       , data_repository_(data_repository)
   {}
 
-  // Add a task to the scan queue  
-  void AddScanTask(sirius::unique_ptr<DuckDBScanTask> scan_task) {
+  // Add a task to the scan queue
+  void AddScanTask(sirius::unique_ptr<DuckDBScanTask> scan_task)
+  {
     Schedule(std::move(scan_task));
   }
 
