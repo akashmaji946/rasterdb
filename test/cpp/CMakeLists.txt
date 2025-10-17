@@ -18,6 +18,7 @@ add_subdirectory(pipeline)
 add_subdirectory(utils)
 add_subdirectory(memory_management)
 add_subdirectory(parallel)
+add_subdirectory(scan)
 
 set(TEST_SOURCES
   ${TEST_SOURCES}

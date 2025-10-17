@@ -162,6 +162,8 @@ class DuckDBScanTaskLocalState
     , public duckdb::LocalSourceState
 {
   static constexpr size_t DEFAULT_TARGET_BYTES = 2ULL << 30; // ~2GB
+  static constexpr size_t DEFAULT_VARCHAR_SIZE = 256;
+
 public:
   //----------Constructor----------//
   explicit DuckDBScanTaskLocalState(shared_ptr<DuckDBScanTaskQueue> task_queue,
@@ -189,9 +191,16 @@ public:
     for (duckdb::idx_t i = 0; i < num_columns; ++i)
     {
       scanned_types[i] = op.types[op.column_ids[i].GetPrimaryIndex()];
-      column_sizes[i]  = duckdb::GetTypeIdSize(scanned_types[i].InternalType());
-      byte_offsets[i]  = 0;
-      max_type_size    = std::max(max_type_size, column_sizes[i]);
+      if (scanned_types[i] == duckdb::LogicalTypeId::VARCHAR)
+      {
+        column_sizes[i] = DEFAULT_VARCHAR_SIZE;
+      }
+      else
+      {
+        column_sizes[i] = duckdb::GetTypeIdSize(scanned_types[i].InternalType());
+      }
+      byte_offsets[i] = 0;
+      max_type_size   = std::max(max_type_size, column_sizes[i]);
     }
 
     /// TODO: make memory reservations
@@ -410,10 +419,10 @@ public:
 
     // Copy data to perfectly sized buffers
     /// TODO: make memory reservations
-    uint8_t** data_ptrs   = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
-    uint8_t** mask_ptrs   = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
+    uint8_t** data_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
+    uint8_t** mask_ptrs    = gpu_buffer_manager->customCudaHostAlloc<uint8_t*>(num_columns);
     uint64_t** offset_ptrs = gpu_buffer_manager->customCudaHostAlloc<uint64_t*>(num_columns);
-    for(idx_t col = 0; col < num_columns; ++col)
+    for (idx_t col = 0; col < num_columns; ++col)
     {
       // Data buffer
       data_ptrs[col] = gpu_buffer_manager->customCudaHostAlloc<uint8_t>(l.byte_offsets[col]);
@@ -421,14 +430,14 @@ public:
 
       // Validity mask buffer (round up to nearest byte)
       auto const mask_bytes = CEIL_DIV_8(l.row_offset);
-      mask_ptrs[col]       = gpu_buffer_manager->customCudaHostAlloc<uint8_t>(mask_bytes);
+      mask_ptrs[col]        = gpu_buffer_manager->customCudaHostAlloc<uint8_t>(mask_bytes);
       memcpy(mask_ptrs[col], l.mask_ptrs[col], mask_bytes);
 
       // VARCHAR offset buffers
       if (l.scanned_types[col] == duckdb::LogicalTypeId::VARCHAR)
       {
         auto const offset_bytes = (l.row_offset + 1) * sizeof(uint64_t);
-        offset_ptrs[col]       = gpu_buffer_manager->customCudaHostAlloc<uint64_t>(l.row_offset + 1);
+        offset_ptrs[col] = gpu_buffer_manager->customCudaHostAlloc<uint64_t>(l.row_offset + 1);
         memcpy(offset_ptrs[col], l.offset_ptrs[col], offset_bytes);
       }
       else
