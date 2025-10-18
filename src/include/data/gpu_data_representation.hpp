@@ -75,11 +75,10 @@ public:
      */
     const cudf::table& get_table() const { return table_; }
 
-private:
-    // sirius::unique_ptr<IAllocatedMemory> allocation_; // TODO: Replace the actual allocation type
+public:
     cudf::table table_; // The actual cuDF table with the data
+private:
     std::size_t data_size_; // The size of the actual data in bytes
-
 };
 
 }

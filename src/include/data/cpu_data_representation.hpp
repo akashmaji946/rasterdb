@@ -90,7 +90,11 @@ public:
      */
     void* getBlock(size_t block_index) const { return allocation->getBlock(block_index); }
 
-    // get metadata
+    /**
+     * @brief Get the metadata required to reconstruct the cuDF columns
+     * 
+     * @return const sirius::vector<uint8_t>& Reference to the metadata
+     */
     const sirius::vector<uint8_t>& getMetadata() const { return *metadata; }
 
 private:
