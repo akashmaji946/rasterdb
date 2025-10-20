@@ -25,7 +25,7 @@
 namespace sirius {
 
 using sirius::memory::Tier;
-using sirius::memory::multiple_blocks_allocation;
+using sirius::multiple_blocks_allocation;
 
 /**
  * @brief Data representation for a table being stored in host memory.
@@ -60,13 +60,47 @@ public:
      * 
      * @return std::size_t The number of bytes used to store this representation
      */
-    std::size_t getSizeInBytes() const override { return data_size + metadata.size(); }
+    std::size_t getTotalBytes() const { return data_size + metadata->size(); }
+
+    /**
+     * @brief Get the size of the allocation in bytes
+     * 
+     * @return std::size_t The number of bytes used to store this allocation
+     */
+    std::size_t getSizeInBytes() const override { return data_size; }
+
+    /**
+    * @brief Get the underlying allocation owning the actual data
+    * 
+    * @return sirius::unique_ptr<multiple_blocks_allocation>& Reference to the allocation
+    */
+    size_t getNumBlocks() { return allocation->size(); }
+
+    /**
+     * @brief Get the size of each block in bytes
+     * @return std::size_t Size of each block
+     */
+    size_t getBlockSize() const { return allocation->getBlockSize(); }
+
+    /**
+     * @brief Access a specific block by index
+     * 
+     * @param block_index Index of the block to access
+     * @return void* Pointer to the block at index i
+     */
+    void* getBlock(size_t block_index) const { return allocation->getBlock(block_index); }
+
+    /**
+     * @brief Get the metadata required to reconstruct the cuDF columns
+     * 
+     * @return const sirius::vector<uint8_t>& Reference to the metadata
+     */
+    const sirius::vector<uint8_t>& getMetadata() const { return *metadata; }
 
 private:
     sirius::unique_ptr<multiple_blocks_allocation> allocation; // The allocation where the actual data resides
     sirius::unique_ptr<sirius::vector<uint8_t>> metadata; // The metadata required to reconstruct the cuDF columns
     std::size_t data_size; // The size of the actual data in bytes
-
 };
 
 }

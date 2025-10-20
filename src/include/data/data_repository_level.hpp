@@ -21,46 +21,65 @@
 namespace sirius {
 
 /**
- * @brief Interface for a level in the data repository hierarchy.
+ * @brief Abstract interface for a level within the data repository hierarchy.
  * 
- * Each level in the data repository is a thread-safe container to store the output of a specific pipeline in the query plan.
- * Thus, as a chunk of data goes through the various stages of the query plan, it gets stored in different levels of the data repository.
- * Thus each level doesn't have to reason about the query plan and the execution DAG when it comes to decision such as which DataBatch to downgrade.
+ * Each level in the data repository is a thread-safe container designed to store
+ * the output of a specific pipeline in the query execution plan. As data flows
+ * through various stages of the query plan, it gets stored in different levels
+ * of the data repository.
+ * 
+ * This design allows each level to implement its own data management policies
+ * without needing to understand the broader query plan or execution DAG when
+ * making decisions such as which DataBatch to prioritize for downgrading.
  */
 class IDataRepositoryLevel {
 public:
     /**
-     * @brief Method to add new data batch to the current level
+     * @brief Adds a new data batch to this level
      * 
-     * @param data_batch The data batch to add to this level
+     * @param data_batch The data batch to add to this level (ownership is transferred)
      */
     virtual void AddNewDataBatch(sirius::unique_ptr<DataBatch> data_batch) = 0;
 
     /**
-     * @brief Method to evict a data batch from the current level by its unique identifier
+     * @brief Removes and returns a data batch from this level
      * 
      * @return sirius::unique_ptr<DataBatch> The evicted data batch
-     * @throws std::invalid_argument if the data batch with the specified id does not exist
+     * @throws std::invalid_argument if no data batch is available for eviction
      */
     virtual sirius::unique_ptr<DataBatch> EvictDataBatch() = 0;
 
     /**
-     * @brief Method to get an ordered (priority wise) list of data batch ids that can be downgraded to a lower tier
+     * @brief Returns an ordered list of data batch IDs prioritized for downgrading
      * 
-     * The ids returned by this method should be ordered in the order of priority for downgrading in that the id at index 0 should be given 
-     * higher consideration for downgrading than the id at index 1 and so on. Each derived classs can implement its own logic for determining
-     * the priority of downgrading batches in the current level
+     * The returned IDs are ordered by downgrade priority, with the ID at index 0
+     * having the highest priority for downgrading, followed by index 1, and so on.
+     * Each derived class can implement its own logic for determining the priority
+     * of downgrading batches within this level.
      * 
-     * @param num_data_batches The number of data batches that should be returned (essentially returns the Top-K downgrable batches)
-     * @return std::vector<uint64_t> The ordered list of data batch ids that can be downgraded. Its size = max(num_data_batches, # of downgradable batches)
+     * @param num_data_batches The maximum number of data batches to return (Top-K downgradable batches)
+     * @return std::vector<uint64_t> Ordered list of data batch IDs for downgrading.
+     *         Size = min(num_data_batches, number of downgradable batches)
      */
     virtual std::vector<uint64_t> GetDowngradableDataBatches(size_t num_data_batches) = 0;
 
+    /**
+     * @brief Safely casts this interface to a specific derived type
+     * 
+     * @tparam TARGET The target type to cast to
+     * @return TARGET& Reference to the casted object
+     */
 	template <class TARGET>
 	TARGET &Cast() {
 		return reinterpret_cast<TARGET &>(*this);
 	}
 
+    /**
+     * @brief Safely casts this interface to a specific derived type (const version)
+     * 
+     * @tparam TARGET The target type to cast to
+     * @return const TARGET& Const reference to the casted object
+     */
 	template <class TARGET>
 	const TARGET &Cast() const {
 		return reinterpret_cast<const TARGET &>(*this);

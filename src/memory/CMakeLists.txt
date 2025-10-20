@@ -15,5 +15,6 @@
 set(EXTENSION_SOURCES
         ${EXTENSION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/memory_reservation.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixed_size_host_memory_resource.cpp
         PARENT_SCOPE
 )

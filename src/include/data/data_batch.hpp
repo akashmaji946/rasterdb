@@ -28,30 +28,46 @@ namespace sirius {
 using sirius::memory::Tier;
 
 /**
- * @brief A class that represents the input(s) and output(s) of the different pipelines in a query. 
+ * @brief A container representing input and output data units for pipeline operations.
  * 
- * The DataBatch in Sirius represents a batch/chunk/row group of the data that is processed by/outputed by a task of a pipeline,
- * based on the "morsel driven" execution model used by many systems. The underlying data can be stored in different memory tiers
- * and in different formats as and is owned by the underlying IDataRepresentation rather than the DataBatch itself.
+ * The DataBatch in Sirius represents a batch/chunk/row group of data that is processed
+ * by or output from a task within a pipeline, following the "morsel-driven" execution
+ * model used by many modern database systems. The underlying data can be stored in
+ * different memory tiers and formats, with ownership managed by the underlying
+ * IDataRepresentation rather than the DataBatch itself.
+ * 
+ * This design allows for efficient data movement between different memory hierarchies
+ * (GPU memory, CPU memory, disk) while maintaining a consistent interface for
+ * pipeline operations.
  */
 class DataBatch {
 public:
     /**
-     * @brief Construct a new Data Batch object
+     * @brief Constructs a new DataBatch object
      * 
-     * @param batch_id Unique identifier for the data batch
-     * @param data The actual data associated with this data batch
+     * @param batch_id Unique identifier for this data batch
+     * @param data The actual data representation associated with this batch
      */
     DataBatch(uint64_t batch_id, sirius::unique_ptr<IDataRepresentation> data) 
         : batch_id_(batch_id), data_(std::move(data)) {}
     
-    // Move constructors
+    /**
+     * @brief Move constructor for DataBatch
+     * 
+     * @param other The DataBatch object to move from
+     */
     DataBatch(DataBatch&& other) noexcept
         : batch_id_(other.batch_id_), data_(std::move(other.data_)) {
         other.batch_id_ = 0;
         other.data_ = nullptr;
     }
 
+    /**
+     * @brief Move assignment operator for DataBatch
+     * 
+     * @param other The DataBatch object to move from
+     * @return DataBatch& Reference to this object
+     */
     DataBatch& operator=(DataBatch&& other) noexcept {
         if (this != &other) {
             batch_id_ = other.batch_id_;
@@ -63,26 +79,26 @@ public:
     }
 
     /**
-     * @brief Get the tier that this data batch currently resides in
+     * @brief Gets the memory tier where this data batch currently resides
      * 
-     * @return Tier The memory tier
+     * @return Tier The memory tier (e.g., GPU, CPU, disk) where the data is stored
      */
     Tier getCurrentTier() const {
         return data_->getCurrentTier();
     }
 
     /**
-     * @brief Get this Data Batch's id
+     * @brief Gets this DataBatch's unique identifier
      * 
-     * @return The unique identifier associated with this Data Batch
+     * @return uint64_t The unique identifier associated with this DataBatch
      */
     uint64_t getBatchId() const {
         return batch_id_;
     }
 
 private:
-    uint64_t batch_id_; // Unique identifier for the data batch
-    sirius::unique_ptr<IDataRepresentation> data_; // Pointer to the actual data representation
+    uint64_t batch_id_;                                   ///< Unique identifier for this data batch
+    sirius::unique_ptr<IDataRepresentation> data_;       ///< Pointer to the actual data representation
 };
 
 } // namespace sirius

@@ -24,17 +24,19 @@ namespace sirius {
 namespace parallel {
 
 /**
- * GPU-specific task executor that inherits from ITaskExecutor and uses
- * GPUPipelineTaskQueue as its scheduler. Manages a pool of threads to
- * execute GPU pipeline tasks with specialized GPU resource management.
+ * @brief Executor specialized for executing GPU pipeline operations.
+ * 
+ * This executor inherits from ITaskExecutor and uses a GPUPipelineTaskQueue for
+ * task scheduling. It manages a pool of threads dedicated to executing GPU pipeline
+ * tasks with specialized GPU resource management.
  */
 class GPUPipelineExecutor : public ITaskExecutor {
 public:
     /**
-     * Constructor that creates a GPUPipelineExecutor with a GPUPipelineTaskQueue scheduler
+     * @brief Constructs a new GPUPipelineExecutor with task execution configuration
+     * 
      * @param config Configuration for the task executor (thread count, retry policy, etc.)
-     * @param data_repository Optional data repository for data access
-     * @param reservation_manager Reference to the memory reservation manager
+     * @param data_repository Reference to the data repository for accessing and storing data batches
      */
     explicit GPUPipelineExecutor(
         TaskExecutorConfig config,
@@ -54,9 +56,12 @@ public:
     GPUPipelineExecutor& operator=(GPUPipelineExecutor&&) = default;
 
     /**
-     * @brief Schedule a GPU pipeline task for execution
+     * @brief Schedules a GPU pipeline task for execution
      * 
-     * @param gpu_task The GPU pipeline task to schedule
+     * This is a type-safe wrapper that converts the GPU task to the base ITask
+     * interface and delegates to the parent's Schedule method.
+     * 
+     * @param gpu_task The GPU pipeline task to schedule for execution
      */
     void ScheduleGPUTask(sirius::unique_ptr<GPUPipelineTask> gpu_task) {
         // Convert to ITask and use parent's Schedule method
@@ -64,28 +69,45 @@ public:
     }
 
     /**
-     * @brief Override the Schedule method to provide GPU-specific scheduling logic
+     * @brief Schedules a task for execution with GPU-specific logic
      * 
-     * @param task The task to schedule
+     * Overrides the base class Schedule method to provide specialized scheduling
+     * behavior for GPU pipeline operations, including resource allocation and
+     * GPU context management.
+     * 
+     * @param task The task to schedule (must be a GPUPipelineTask)
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
     /**
-     * @brief Main worker loop for executing tasks
+     * @brief Main worker loop for executing GPU pipeline tasks
      * 
-     * @param worker_id The identifier for the worker thread
+     * Each worker thread runs this loop to continuously pull and execute GPU
+     * pipeline tasks from the queue. Handles GPU-specific operations including
+     * kernel launches, memory transfers, and synchronization.
+     * 
+     * @param worker_id The unique identifier for this worker thread
      */
     void WorkerLoop(int worker_id) override;
 
-    // Start worker threads
+    /**
+     * @brief Starts the executor and initializes worker threads
+     * 
+     * Initializes the thread pool and begins accepting tasks for execution.
+     */
     void Start() override;
 
-    // Stop accepting new tasks, and join worker threads.
+    /**
+     * @brief Stops the executor and cleanly shuts down worker threads
+     * 
+     * Stops accepting new tasks and waits for all worker threads to complete
+     * their current tasks before shutting down.
+     */
     void Stop() override;
 
 private:
     /**
-     * @brief Helper method to safely cast ITask to GPUPipelineTask
+     * @brief Safely casts ITask to GPUPipelineTask with type validation
      * 
      * @param task The ITask pointer to cast
      * @return GPUPipelineTask* The casted GPUPipelineTask pointer
@@ -94,7 +116,7 @@ private:
     GPUPipelineTask* CastToGPUPipelineTask(ITask* task);
 
 private:
-    DataRepository& data_repository_; // Reference to the data repository for data access
+    DataRepository& data_repository_;  ///< Reference to the data repository for accessing and storing data batches
 };
 
 } // namespace parallel

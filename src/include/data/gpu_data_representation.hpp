@@ -20,13 +20,14 @@
 
 #include "data/common.hpp"
 #include "memory/fixed_size_host_memory_resource.hpp"
+#include "cudf/cudf_utils.hpp"
 #include "helper/helper.hpp"
 
 namespace sirius {
 
 using sirius::memory::IAllocatedMemory;
 using sirius::memory::Tier;
-using sirius::memory::multiple_blocks_allocation;
+using sirius::multiple_blocks_allocation;
 
 /**
  * @brief Data representation for a table being stored in GPU memory.
@@ -47,8 +48,8 @@ public:
      * @param table The actual cuDF table with the data
      * @param data_sz The size of the actual data in bytes
      */
-    gpu_table_representation(sirius::unique_ptr<IAllocatedMemory> alloc, cudf::table table_, std::size_t data_sz)
-        : allocation_(std::move(alloc)), table_(std::move(table)), data_size_(data_sz) {}
+    gpu_table_representation(cudf::table table, std::size_t data_sz)
+        : table_(std::move(table)), data_size_(data_sz) {}
     
     /**
      * @brief Get the tier of memory that this representation resides in
@@ -60,11 +61,24 @@ public:
      */
     std::size_t getSizeInBytes() const override { return data_size_; }
 
-private:
-    // sirius::unique_ptr<IAllocatedMemory> allocation_; // TODO: Replace the actual allocation type
-    cudf::table table_; // The actual cuDF table with the data
-    std::size_t data_size_; // The size of the actual data in bytes
+    /**
+     * @brief Get the underlying cuDF table
+     * 
+     * @return const cudf::table& Reference to the cuDF table
+     */
+    size_t num_columns() const { return table_.num_columns(); }
 
+    /**
+     * @brief Get the underlying cuDF table
+     * 
+     * @return const cudf::table& Reference to the cuDF table
+     */
+    const cudf::table& get_table() const { return table_; }
+
+public:
+    cudf::table table_; // The actual cuDF table with the data
+private:
+    std::size_t data_size_; // The size of the actual data in bytes
 };
 
 }

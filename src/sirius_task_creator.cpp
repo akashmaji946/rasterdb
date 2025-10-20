@@ -75,14 +75,6 @@ TaskCreator::CreatePipelineTask(size_t pipeline_idx, sirius::vector<sirius::uniq
             nullptr, // local state can be initialized inside the task
             global_state  // global state can be initialized inside the task
         );
-
-    // parallel::GPUPipelineTask pipeline_task = parallel::GPUPipelineTask(
-    //     pipeline,
-    //     GetNextTaskId(), 
-    //     data_batches,
-    //     nullptr, // local state can be initialized inside the task
-    //     nullptr  // global state can be initialized inside the task
-    // );
     return pipeline_task;
 }
 
@@ -107,8 +99,6 @@ TaskCreator::WorkerLoop() {
     int pipeline_created = 0;
     while (true) {
         std::cout << "Creator: Waiting for task completion messages\n";
-        // poll for messages from task_completion_message_queue_
-        // implement polling on a queue
         auto message = task_completion_message_queue_.PullMessage();
 
         if (message->source == Source::PIPELINE) {

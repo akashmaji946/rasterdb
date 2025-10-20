@@ -24,6 +24,7 @@
 #include <atomic>
 #include <thread>
 #include <iostream>
+#include <nvtx3/nvtx3.hpp>
 
  namespace sirius {
 

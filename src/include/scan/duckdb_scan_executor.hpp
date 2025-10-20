@@ -29,17 +29,20 @@ namespace sirius {
 namespace parallel {
 
 /**
- * @brief Executor for performing DuckDB table scan operations
+ * @brief Executor specialized for performing DuckDB table scan operations.
  * 
- * In the current implementation, we assume that we will not run out of CPU memory while scanning the data from DuckDB.
+ * This executor manages a thread pool dedicated to executing DuckDB scan tasks that
+ * read data from DuckDB tables and convert it into DataBatch format for processing
+ * in the Sirius pipeline system. In the current implementation, we assume sufficient
+ * CPU memory is available during scanning operations.
  */
 class DuckDBScanExecutor : public ITaskExecutor {
 public:
     /**
-     * @brief Construct a new DuckDBScanExecutor object with task executor configuration
+     * @brief Constructs a new DuckDBScanExecutor with task execution configuration
      * 
-     * @param config The task executor configuration
-     * @param data_repository The data repository to push the output data batches to
+     * @param config The task executor configuration (thread count, retry policy, etc.)
+     * @param data_repository Reference to the data repository for storing output data batches
      */
     explicit DuckDBScanExecutor(
         TaskExecutorConfig config,
@@ -48,7 +51,7 @@ public:
           data_repository_(data_repository) {}
 
     /**
-     * @brief Destructor for the GPUPipelineExecutor.
+     * @brief Destructor for the DuckDBScanExecutor
      */
     ~DuckDBScanExecutor() override = default;
 
@@ -59,9 +62,12 @@ public:
     DuckDBScanExecutor& operator=(DuckDBScanExecutor&&) = default;
 
     /**
-     * @brief Schedule a DuckDB scan task for execution by converting it to ITask
+     * @brief Schedules a DuckDB scan task for execution
      * 
-     * @param scan_task The DuckDB scan task to schedule
+     * This is a type-safe wrapper that converts the scan task to the base ITask
+     * interface and delegates to the parent's Schedule method.
+     * 
+     * @param scan_task The DuckDB scan task to schedule for execution
      */
     void ScheduleScanTask(sirius::unique_ptr<DuckDBScanTask> scan_task) {
         // Convert to ITask and use parent's Schedule method
@@ -69,27 +75,42 @@ public:
     }
 
     /**
-     * @brief Override the Schedule method to provide GPU-specific scheduling logic
+     * @brief Schedules a task for execution with scan-specific logic
      * 
-     * @param task The task to schedule
+     * Overrides the base class Schedule method to provide specialized scheduling
+     * behavior for DuckDB scan operations.
+     * 
+     * @param task The task to schedule (must be a DuckDBScanTask)
      */
     void Schedule(sirius::unique_ptr<ITask> task) override;
 
     /**
-     * @brief Main worker loop for executing tasks
+     * @brief Main worker loop for executing scan tasks
      * 
-     * @param worker_id The identifier for the worker thread
+     * Each worker thread runs this loop to continuously pull and execute scan
+     * tasks from the queue. Handles DuckDB-specific operations and data conversion.
+     * 
+     * @param worker_id The unique identifier for this worker thread
      */
     void WorkerLoop(int worker_id) override;
 
-    // Start worker threads
+    /**
+     * @brief Starts the executor and initializes worker threads
+     * 
+     * Initializes the thread pool and begins accepting tasks for execution.
+     */
     void Start() override;
 
-    // Stop accepting new tasks, and join worker threads.
+    /**
+     * @brief Stops the executor and cleanly shuts down worker threads
+     * 
+     * Stops accepting new tasks and waits for all worker threads to complete
+     * their current tasks before shutting down.
+     */
     void Stop() override;
     
 private:
-    DataRepository& data_repository_; // The data repository to push the output data batches t
+    DataRepository& data_repository_;  ///< Reference to the data repository for storing output data batches
 };
 
 } // namespace parallel
