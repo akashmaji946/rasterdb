@@ -19,15 +19,14 @@ CompileFlags:
   Add:
     # Allow variadic CUDA functions
     - "-Xclang=-fcuda-allow-variadic-functions"
-
+    - -x
 ---
 
 # Tweak the clangd parse settings for all files
 CompileFlags:
-  Compiler: clang++-18
+  Compiler: clang
   CompilationDatabase: ./build/release
   Add:
-    - -x
     - cuda
     - -Wno-unknown-cuda-version
     - --no-cuda-version-check
