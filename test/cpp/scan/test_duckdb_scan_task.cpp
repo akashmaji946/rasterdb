@@ -8,22 +8,21 @@
 // sirius
 #include <data/data_repository.hpp>
 #include <data/simple_data_repository_level.hpp>
-#include <scan/duckdb_scan_executor_new.hpp>
+#include <scan/duckdb_scan_task_executor_new.hpp>
 #include <scan/duckdb_scan_task_new.hpp>
 
 // duckdb
-#include "duckdb/common/types/data_chunk.hpp"
-#include "duckdb/common/types/vector.hpp"
-#include "duckdb/execution/execution_context.hpp"
-#include "duckdb/function/table_function.hpp"
-#include "duckdb/parallel/thread_context.hpp"
-#include "duckdb/parser/tableref/table_function_ref.hpp"
+#include <duckdb/common/types/data_chunk.hpp>
+#include <duckdb/common/types/vector.hpp>
+#include <duckdb/execution/execution_context.hpp>
+#include <duckdb/function/table_function.hpp>
+#include <duckdb/parallel/thread_context.hpp>
+#include <duckdb/parser/tableref/table_function_ref.hpp>
 
 // standard library
 #include <atomic>
 
 using namespace sirius;
-using namespace std::chrono_literals;
 
 namespace
 {
@@ -40,7 +39,7 @@ struct TestScanBindData : public duckdb::FunctionData
   }
   duckdb::unique_ptr<FunctionData> Copy() const override
   {
-    return duckdb::make_unique<TestScanBindData>(total_rows);
+    return duckdb::make_uniq<TestScanBindData>(total_rows);
   }
 };
 
@@ -65,13 +64,13 @@ TestScanBind(duckdb::ClientContext& context,
   return_types     = {duckdb::LogicalType::INTEGER, duckdb::LogicalType::VARCHAR};
   names            = {"i", "s"};
   idx_t total_rows = 10; // fixed small dataset
-  return duckdb::make_unique<TestScanBindData>(total_rows);
+  return duckdb::make_uniq<TestScanBindData>(total_rows);
 }
 
 static duckdb::unique_ptr<duckdb::GlobalTableFunctionState>
 TestScanInitGlobal(duckdb::ClientContext& context, duckdb::TableFunctionInitInput& input)
 {
-  auto state = duckdb::make_unique<TestScanGlobalState>();
+  auto state = duckdb::make_uniq<TestScanGlobalState>();
   state->offset.store(0);
   return std::move(state);
 }
@@ -81,7 +80,7 @@ TestScanInitLocal(duckdb::ExecutionContext& context,
                   duckdb::TableFunctionInitInput& input,
                   duckdb::GlobalTableFunctionState* gstate)
 {
-  return duckdb::make_unique<TestScanLocalState>();
+  return duckdb::make_uniq<TestScanLocalState>();
 }
 
 static void TestScanFunc(duckdb::ClientContext& context,
@@ -97,26 +96,27 @@ static void TestScanFunc(duckdb::ClientContext& context,
     output.SetCardinality(0);
     return;
   }
-  // Vary chunk sizes to exercise aligned/unaligned validity writes
+
   idx_t remaining  = bind.total_rows - start;
   idx_t this_chunk = std::min<idx_t>(remaining, (start % 3 == 0) ? 1 : ((start % 3 == 1) ? 2 : 5));
-  output.Initialize(duckdb::Allocator::DefaultAllocator(),
-                    {duckdb::LogicalType::INTEGER, duckdb::LogicalType::VARCHAR});
+
   output.SetCardinality(this_chunk);
 
+  // Column 0: INTEGER
   auto icol = duckdb::FlatVector::GetData<int32_t>(output.data[0]);
   for (idx_t i = 0; i < this_chunk; ++i)
   {
     icol[i] = static_cast<int32_t>(start + i);
   }
 
+  // Column 1: VARCHAR
   auto& validity = duckdb::FlatVector::Validity(output.data[1]);
-  auto svec      = duckdb::FlatVector::GetData<duckdb::string_t>(output.data[1]);
+  validity.SetAllValid(this_chunk);
+  auto svec = duckdb::FlatVector::GetData<duckdb::string_t>(output.data[1]);
   for (idx_t i = 0; i < this_chunk; ++i)
   {
-    idx_t row    = start + i;
-    bool is_null = (row == 1 || row == 7);
-    if (is_null)
+    idx_t row = start + i;
+    if (row == 1 || row == 7)
     {
       validity.SetInvalid(i);
     }
@@ -126,6 +126,7 @@ static void TestScanFunc(duckdb::ClientContext& context,
       svec[i]         = duckdb::StringVector::AddString(output.data[1], str);
     }
   }
+
   g.offset.store(start + this_chunk);
 }
 
@@ -146,12 +147,25 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
   duckdb::Connection con(db);
   {
     auto res = con.Query("CREATE TABLE t(i INTEGER, s VARCHAR)");
-    REQUIRE(res && !res->HasError());
+    REQUIRE(res);
+    REQUIRE(!res->HasError());
   }
   {
-    auto res = con.Query("INSERT INTO t VALUES (0, 's0'), (1, NULL), (2, 's2'), (3, 's3'), (4, "
-                         "'s4'), (5, 's5'), (6, 's6'), (7, NULL), (8, 's8'), (9, 's9')");
-    REQUIRE(res && !res->HasError());
+    // clang-format off
+    auto res = con.Query("INSERT INTO t VALUES "
+                         "(0, 's0'),"
+                         "(1, NULL),"
+                         "(2, 's2')," 
+                         "(3, 's3'),"
+                         "(4, 's4'),"
+                         "(5, 's5'),"
+                         "(6, 's6'),"
+                         "(7, NULL),"
+                         "(8, 's8'),"
+                         "(9, 's9')");
+    // clang-format on
+    REQUIRE(res);
+    REQUIRE(!res->HasError());
   }
 
   // Create the data repository
@@ -160,15 +174,17 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
 
   // Create the scan task executor
   parallel::TaskExecutorConfig config{1, false};
-  parallel::DuckDBScanExecutor scan_executor(config, data_repository);
+  parallel::DuckDBScanExecutor scan_executor(config);
+
+  // Create the message queue
+  TaskCompletionMessageQueue message_queue{};
 
   // Create the duckdb contexts
   duckdb::ThreadContext thread(*con.context);
   duckdb::ExecutionContext exec_ctx(*con.context, thread, nullptr);
 
   // Creat the PhysicalTableScan operator
-  auto tf = MakeTestScanFunction();
-  // Prepare fields for PhysicalTableScan
+  auto tf                                            = MakeTestScanFunction();
   duckdb::vector<duckdb::LogicalType> returned_types = {duckdb::LogicalType::INTEGER,
                                                         duckdb::LogicalType::VARCHAR};
   duckdb::vector<duckdb::ColumnIndex> column_ids = {duckdb::ColumnIndex(0), duckdb::ColumnIndex(1)};
@@ -201,15 +217,22 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
                                params);
 
   // Create global state
-  auto gstate = sirius::make_shared<parallel::DuckDBScanTaskGlobalState>(*con.context, op);
-  REQUIRE(gstate->MaxThreads() == 1); /// ???
+  uint64_t pipeline_id = 0;
+  auto gstate =
+    sirius::make_shared<parallel::DuckDBScanTaskGlobalState>(pipeline_id, *con.context, op);
+  REQUIRE(gstate->MaxThreads() == 1);
 
   // Create local state
-  auto lstate =
-    sirius::make_unique<parallel::DuckDBScanTaskLocalState>(scan_executor, *gstate, exec_ctx, op);
+  auto lstate = sirius::make_unique<parallel::DuckDBScanTaskLocalState>(data_repository,
+                                                                        message_queue,
+                                                                        scan_executor,
+                                                                        *gstate,
+                                                                        exec_ctx,
+                                                                        op);
 
   // Create the scan task
-  auto task = sirius::make_unique<parallel::DuckDBScanTask>(std::move(lstate), gstate);
+  uint64_t task_id = 0;
+  auto task = sirius::make_unique<parallel::DuckDBScanTask>(task_id, std::move(lstate), gstate);
 
   // Run through executor with its own queue
   scan_executor.Start();
