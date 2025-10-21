@@ -122,9 +122,13 @@ void GPUExecutor::NewExecute() {
 	std::cout << "Coordinator: Got signal from Creator\n";
 
 	task_creator.Stop();
+	printf("Coordinator: Stopped Task Creator\n");
 	gpu_pipeline_executor.Stop();
+	printf("Coordinator: Stopped GPU Pipeline Executor\n");
 	duckdb_scan_executor.Stop();
+	printf("Coordinator: Stopped DuckDB Scan Executor\n");
 	downgrade_executor.Stop();
+	printf("Coordinator: Stopped Downgrade Executor\n");
 	downgrade_task_creator.Stop();
 }
 

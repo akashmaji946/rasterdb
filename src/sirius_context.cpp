@@ -16,14 +16,15 @@
 
 #include "include/sirius_context.hpp"
 #include "helper/helper.hpp"
+#include "config.hpp"
 
 namespace sirius {
 
 SiriusContext::SiriusContext() :
     data_repository_(),
-    gpu_pipeline_executor_(parallel::GPUPipelineExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
-    downgrade_executor_(parallel::DowngradeExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
-    duckdb_scan_executor_(parallel::DuckDBScanExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
+    gpu_pipeline_executor_(parallel::GPUPipelineExecutor(parallel::TaskExecutorConfig(Config::NUM_GPU_PIPELINE_EXECUTOR_THREADS, 0), data_repository_)),
+    downgrade_executor_(parallel::DowngradeExecutor(parallel::TaskExecutorConfig(Config::NUM_DOWNGRADE_EXECUTOR_THREADS, 0), data_repository_)),
+    duckdb_scan_executor_(parallel::DuckDBScanExecutor(parallel::TaskExecutorConfig(Config::NUM_DUCKDB_SCAN_EXECUTOR_THREADS, 0), data_repository_)),
     task_creator_(data_repository_, gpu_pipeline_executor_, duckdb_scan_executor_),
     downgrade_task_creator_(data_repository_, downgrade_executor_) {}
 

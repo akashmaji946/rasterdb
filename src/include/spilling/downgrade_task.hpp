@@ -19,6 +19,7 @@
 #include "task_completion.hpp"
 #include "helper/helper.hpp"
 #include "data/data_repository.hpp"
+#include "config.hpp"
 
 namespace sirius {
 namespace parallel {
@@ -155,7 +156,10 @@ public:
      * This method is thread-safe.
      */
     void Close() override {
-        sem_.release(); // signal that one item is available
+        // Wake up all waiting threads by releasing the semaphore enough times
+        for (int i = 0; i < Config::NUM_DOWNGRADE_EXECUTOR_THREADS; ++i) {
+            sem_.release();
+        }
         sirius::lock_guard<sirius::mutex> lock(mutex_);
         is_open_ = false;
     }
@@ -237,12 +241,20 @@ public:
     sirius::unique_ptr<DowngradeTask> DequeueTask() {
         sem_.acquire(); // wait until there's something
         sirius::lock_guard<sirius::mutex> lock(mutex_);
-        if (task_queue_.empty()) {
+        // If the queue is closed and empty, return nullptr to signal shutdown
+        if (!is_open_ && task_queue_.empty()) {
             return nullptr;
         }
-        auto task = std::move(task_queue_.front());
-        task_queue_.pop();
-        return task;
+        
+        // If there's a task available, return it
+        if (!task_queue_.empty()) {
+            auto task = std::move(task_queue_.front());
+            task_queue_.pop();
+            return task;
+        }
+        
+        // Queue is empty but might be open (spurious semaphore release from Close())
+        return nullptr;
     }
 
     /**
