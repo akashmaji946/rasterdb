@@ -33,6 +33,8 @@ namespace sirius::parallel
 //===--------------------------------------------------===//
 class DuckDBScanTaskQueue : public ITaskQueue
 {
+  static constexpr size_t PULL_TIMEOUT_US = 100;
+
 public:
   DuckDBScanTaskQueue()           = default;
   ~DuckDBScanTaskQueue() override = default;
@@ -47,13 +49,9 @@ public:
     is_open_.store(false, std::memory_order::release);
   }
 
-  // Use base-type tasks directly; just gate on is_open_
   void Push(sirius::unique_ptr<ITask> task) override
   {
-    if (!is_open_.load(std::memory_order::acquire))
-    {
-      return; // ignore pushes when closed
-    }
+    // We must assume the queue is open as a precondition, given the implementation in ITaskQueue
     task_queue_.enqueue(std::move(task));
   }
 
@@ -63,13 +61,12 @@ public:
     unique_ptr<ITask> scan_task;
     while (true)
     {
-      // Spin (for now -- will produce contention on is_open)
-      if (task_queue_.try_dequeue(scan_task))
+      if (task_queue_.wait_dequeue_timed(scan_task, PULL_TIMEOUT_US))
       {
         return scan_task;
       }
       // If closed, return
-      if (!is_open_.load(std::memory_order::acquire))
+      if (!is_open_.load(std::memory_order::acquire) && task_queue_.size_approx() == 0)
       {
         return nullptr;
       }

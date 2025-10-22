@@ -23,7 +23,7 @@
 #include "spilling/downgrade_executor.hpp"
 #include "spilling/downgrade_task.hpp"
 #include "spilling/downgrade_task_creator.hpp"
-#include "scan/duckdb_scan_executor.hpp"
+#include "scan/duckdb_scan_task_executor.hpp"
 #include "scan/duckdb_scan_task.hpp"
 #include "memory/memory_reservation.hpp"
 #include "helper/helper.hpp"
@@ -110,8 +110,8 @@ public:
      * 
      * @return parallel::DuckDBScanExecutor& Reference to the DuckDB scan executor
      */
-    parallel::DuckDBScanExecutor& GetDuckDBScanExecutor() {
-        return duckdb_scan_executor_;
+    parallel::DuckDBScanTaskExecutor& GetDuckDBScanTaskExecutor() {
+        return duckdb_scan_task_executor_;
     }
 
     /**
@@ -133,12 +133,12 @@ public:
     }
 
 private:
-    TaskCreator task_creator_;                                ///< Main task creator for coordinating task scheduling
-    DowngradeTaskCreator downgrade_task_creator_;             ///< Specialized task creator for memory downgrade operations
-    DataRepository data_repository_;                          ///< Central repository for managing data batches
-    parallel::GPUPipelineExecutor gpu_pipeline_executor_;     ///< Executor for GPU pipeline operations
-    parallel::DowngradeExecutor downgrade_executor_;          ///< Executor for memory tier downgrade operations
-    parallel::DuckDBScanExecutor duckdb_scan_executor_;       ///< Executor for DuckDB scan operations
+    TaskCreator task_creator_;                                   ///< Main task creator for coordinating task scheduling
+    DowngradeTaskCreator downgrade_task_creator_;                ///< Specialized task creator for memory downgrade operations
+    DataRepository data_repository_;                             ///< Central repository for managing data batches
+    parallel::GPUPipelineExecutor gpu_pipeline_executor_;        ///< Executor for GPU pipeline operations
+    parallel::DowngradeExecutor downgrade_executor_;             ///< Executor for memory tier downgrade operations
+    parallel::DuckDBScanTaskExecutor duckdb_scan_task_executor_; ///< Executor for DuckDB scan operations
 };
 
 } // namespace sirius

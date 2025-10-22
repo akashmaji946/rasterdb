@@ -17,7 +17,6 @@
 #pragma once
 #include "data/data_repository.hpp"
 #include "pipeline/gpu_pipeline_executor.hpp"
-#include "scan/duckdb_scan_executor.hpp"
 #include "parallel/task_executor.hpp"
 #include "parallel/task.hpp"
 #include "parallel/task_creator.hpp"
@@ -25,6 +24,13 @@
 #include "task_completion.hpp"
 
 namespace sirius {
+
+// Forward declarations
+namespace parallel
+{
+class DuckDBScanTask;
+class DuckDBScanTaskExecutor;
+} // namespace parallel
 
 /**
  * @brief Main task creator responsible for coordinating task scheduling across the system.
@@ -49,7 +55,7 @@ public:
      */
     TaskCreator(DataRepository& data_repository,
         parallel::GPUPipelineExecutor &gpu_pipeline_executor,
-        parallel::DuckDBScanExecutor& duckdb_scan_executor);
+        parallel::DuckDBScanTaskExecutor& duckdb_scan_executor);
           
     /**
      * @brief Destructor for TaskCreator
@@ -152,11 +158,20 @@ public:
         return next_task_id_++;
     }
 
+    /**
+     * @brief Gets the task completion message queue
+     * 
+     * @return TaskCompletionMessageQueue& Reference to the task completion message queue
+     */
+    TaskCompletionMessageQueue& GetTaskCompletionMessageQueue() {
+        return task_completion_message_queue_;
+    }
+
 private:
     TaskCompletionMessageQueue task_completion_message_queue_;         ///< Queue for receiving task completion notifications
     DataRepository& data_repository_;                                  ///< Reference to the central data repository
     parallel::GPUPipelineExecutor& gpu_pipeline_executor_;             ///< Reference to the GPU pipeline executor
-    parallel::DuckDBScanExecutor& duckdb_scan_executor_;               ///< Reference to the DuckDB scan executor
+    parallel::DuckDBScanTaskExecutor& duckdb_scan_executor_;               ///< Reference to the DuckDB scan executor
     duckdb::GPUExecutor* coordinator_;                                 ///< Pointer to the GPU executor coordinator
     sirius::shared_ptr<GPUPipelineHashMap> gpu_pipeline_hashmap_;      ///< Shared pointer to the GPU pipeline hash map
 

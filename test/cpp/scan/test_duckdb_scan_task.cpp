@@ -3,13 +3,12 @@
  */
 
 // catch2
-#include "catch.hpp"
+#include <catch.hpp>
 
 // sirius
-#include <data/data_repository.hpp>
-#include <data/simple_data_repository_level.hpp>
-#include <scan/duckdb_scan_task_executor_new.hpp>
-#include <scan/duckdb_scan_task_new.hpp>
+#include <sirius_context.hpp>
+#include <scan/duckdb_scan_task.hpp>
+#include <scan/duckdb_scan_task_executor.hpp>
 
 // duckdb
 #include <duckdb/common/types/data_chunk.hpp>
@@ -142,6 +141,7 @@ duckdb::TableFunction MakeTestScanFunction()
 
 TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
 {
+  //===----------DuckDB Setup----------===//
   // Set up in-memory DuckDB database with test table
   duckdb::DuckDB db(nullptr);
   duckdb::Connection con(db);
@@ -168,22 +168,11 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
     REQUIRE(!res->HasError());
   }
 
-  // Create the data repository
-  DataRepository data_repository;
-  data_repository.AddNewLevel(0, sirius::make_unique<SimpleDataRepositoryLevel>());
-
-  // Create the scan task executor
-  parallel::TaskExecutorConfig config{1, false};
-  parallel::DuckDBScanExecutor scan_executor(config);
-
-  // Create the message queue
-  TaskCompletionMessageQueue message_queue{};
-
   // Create the duckdb contexts
   duckdb::ThreadContext thread(*con.context);
   duckdb::ExecutionContext exec_ctx(*con.context, thread, nullptr);
 
-  // Creat the PhysicalTableScan operator
+  // Creae the PhysicalTableScan operator
   auto tf                                            = MakeTestScanFunction();
   duckdb::vector<duckdb::LogicalType> returned_types = {duckdb::LogicalType::INTEGER,
                                                         duckdb::LogicalType::VARCHAR};
@@ -193,7 +182,6 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
   duckdb::unique_ptr<duckdb::TableFilterSet> table_filters;
   duckdb::ExtraOperatorInfo extra_info;
   duckdb::vector<duckdb::Value> params;
-  // Bind using our bind function
   duckdb::vector<duckdb::LogicalType> dummy_types;
   duckdb::vector<string> dummy_names;
   duckdb::vector<duckdb::Value> in_vals;
@@ -204,17 +192,24 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
   duckdb::TableFunctionBindInput
     bind_input(in_vals, named, input_tbl_types, input_tbl_names, nullptr, nullptr, tf, ref);
   auto bind_data = tf.bind(*con.context, bind_input, dummy_types, dummy_names);
-  duckdb::PhysicalTableScan op(returned_types,
-                               tf,
-                               std::move(bind_data),
-                               returned_types,
-                               column_ids,
-                               projection_ids,
-                               names,
-                               std::move(table_filters),
-                               /*estimated_cardinality*/ 10,
-                               extra_info,
-                               params);
+  duckdb::DuckDBPhysicalTableScan op(returned_types,
+                                     tf,
+                                     std::move(bind_data),
+                                     returned_types,
+                                     column_ids,
+                                     projection_ids,
+                                     names,
+                                     std::move(table_filters),
+                                     /*estimated_cardinality*/ 10,
+                                     extra_info,
+                                     params);
+
+  //===----------Sirius Setup----------===//
+  // Create sirius context
+  auto& sirius_context = SiriusContext::GetInstance();
+
+  // Extract the scan executor
+  auto& scan_executor = sirius_context.GetDuckDBScanTaskExecutor();
 
   // Create global state
   uint64_t pipeline_id = 0;
@@ -223,14 +218,14 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
   REQUIRE(gstate->MaxThreads() == 1);
 
   // Create local state
-  auto lstate = sirius::make_unique<parallel::DuckDBScanTaskLocalState>(data_repository,
-                                                                        message_queue,
-                                                                        scan_executor,
-                                                                        *gstate,
-                                                                        exec_ctx,
-                                                                        op);
+  auto lstate = sirius::make_unique<parallel::DuckDBScanTaskLocalState>(
+    sirius_context.GetTaskCreator().GetTaskCompletionMessageQueue(),
+    *gstate,
+    exec_ctx,
+    op);
 
   // Create the scan task
+  /// TODO: create pipeline, etc.
   uint64_t task_id = 0;
   auto task = sirius::make_unique<parallel::DuckDBScanTask>(task_id, std::move(lstate), gstate);
 

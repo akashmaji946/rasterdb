@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include "scan/duckdb_physical_table_scan.hpp"
 #include "gpu_pipeline.hpp"
 #include "helper/helper.hpp"
 
@@ -23,14 +24,14 @@ namespace sirius {
 class DuckDBScanMetadata {
 public:
     //constructor initializing function and op
-    DuckDBScanMetadata(duckdb::ExecutionContext& context, duckdb::GPUPhysicalTableScan& op)
+    DuckDBScanMetadata(duckdb::ExecutionContext& context, duckdb::DuckDBPhysicalTableScan& op)
         : context_(context), op_(op) {
 
         }
     //
     ~DuckDBScanMetadata() = default;   
     duckdb::ExecutionContext& context_; // The execution context for the scan operation 
-    duckdb::GPUPhysicalTableScan& op_; // The GPU physical table scan operator associated with this executor
+    duckdb::DuckDBPhysicalTableScan& op_; // The GPU physical table scan operator associated with this executor
 };
 
 class GPUPipelineHashMap {
