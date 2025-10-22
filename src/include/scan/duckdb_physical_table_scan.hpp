@@ -33,6 +33,8 @@ namespace duckdb
 class DuckDBPhysicalTableScan : GPUPhysicalOperator
 {
 public:
+  static constexpr PhysicalOperatorType TYPE = PhysicalOperatorType::TABLE_SCAN;
+  
   //===----------Constructor----------===//
   DuckDBPhysicalTableScan(vector<duckdb::LogicalType> types,
                           TableFunction function,

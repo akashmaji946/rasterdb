@@ -83,7 +83,7 @@ void GPUExecutor::NewExecute() {
 
 	// Get all the executors from sirius context
 	sirius::parallel::GPUPipelineExecutor& gpu_pipeline_executor = sirius_context.GetGPUPipelineExecutor();
-	sirius::parallel::DuckDBScanExecutor& duckdb_scan_executor = sirius_context.GetDuckDBScanExecutor();
+	sirius::parallel::DuckDBScanTaskExecutor& duckdb_scan_executor = sirius_context.GetDuckDBScanTaskExecutor();
 	sirius::parallel::DowngradeExecutor& downgrade_executor = sirius_context.GetDowngradeExecutor();
 	sirius::DowngradeTaskCreator& downgrade_task_creator = sirius_context.GetDowngradeTaskCreator();
 	sirius::DataRepository& data_repository = sirius_context.GetDataRepository();
@@ -99,7 +99,7 @@ void GPUExecutor::NewExecute() {
 			Pipeline duckdb_pipeline(*executor);
 			ThreadContext thread_context(context);
 			ExecutionContext exec_context(context, thread_context, &duckdb_pipeline);
-			auto &table_scan = pipeline->source->Cast<GPUPhysicalTableScan>();
+			auto &table_scan = pipeline->source->Cast<DuckDBPhysicalTableScan>();
 			//construct shared_ptr DuckDBScanMetadata
 			sirius::shared_ptr<sirius::DuckDBScanMetadata> scan_metadata = 
 				sirius::make_shared<sirius::DuckDBScanMetadata>(exec_context, table_scan);

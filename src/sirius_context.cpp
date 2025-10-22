@@ -23,8 +23,8 @@ SiriusContext::SiriusContext() :
     data_repository_(),
     gpu_pipeline_executor_(parallel::GPUPipelineExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
     downgrade_executor_(parallel::DowngradeExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
-    duckdb_scan_executor_(parallel::DuckDBScanExecutor(parallel::TaskExecutorConfig(1, 0), data_repository_)),
-    task_creator_(data_repository_, gpu_pipeline_executor_, duckdb_scan_executor_),
+    duckdb_scan_task_executor_(parallel::DuckDBScanTaskExecutor(parallel::TaskExecutorConfig(1, false))),
+    task_creator_(data_repository_, gpu_pipeline_executor_, duckdb_scan_task_executor_),
     downgrade_task_creator_(data_repository_, downgrade_executor_) {}
 
 } // namespace sirius
