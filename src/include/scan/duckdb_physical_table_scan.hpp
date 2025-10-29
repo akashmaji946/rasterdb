@@ -34,7 +34,7 @@ class DuckDBPhysicalTableScan : GPUPhysicalOperator
 {
 public:
   static constexpr PhysicalOperatorType TYPE = PhysicalOperatorType::TABLE_SCAN;
-  
+
   //===----------Constructor----------===//
   DuckDBPhysicalTableScan(vector<duckdb::LogicalType> types,
                           TableFunction function,
@@ -48,20 +48,20 @@ public:
                           ExtraOperatorInfo extra_info,
                           vector<Value> parameters)
       : GPUPhysicalOperator(PhysicalOperatorType::TABLE_SCAN, types, estimated_cardinality)
-      , physical_table_scan(std::move(types),
-                            std::move(function),
-                            std::move(bind_data),
-                            std::move(returned_types),
-                            std::move(column_ids),
-                            std::move(projection_ids),
-                            std::move(names),
-                            std::move(table_filters),
-                            estimated_cardinality,
-                            extra_info,
-                            std::move(parameters)) {};
+      , physical_table_scan_ptr(make_uniq<duckdb::PhysicalTableScan>(std::move(types),
+                                                                     std::move(function),
+                                                                     std::move(bind_data),
+                                                                     std::move(returned_types),
+                                                                     std::move(column_ids),
+                                                                     std::move(projection_ids),
+                                                                     std::move(names),
+                                                                     std::move(table_filters),
+                                                                     estimated_cardinality,
+                                                                     extra_info,
+                                                                     std::move(parameters))) {};
 
   //===----------Fields----------===//
-  duckdb::PhysicalTableScan physical_table_scan;
+  unique_ptr<duckdb::PhysicalTableScan> physical_table_scan_ptr;
 };
 
 } // namespace duckdb

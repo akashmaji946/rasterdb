@@ -27,8 +27,67 @@
 #include <iostream> /// DEBUG
 #include <string>
 
+namespace duckdb::experimental
+{
+
+void BatchBuilder::SliceChunk(duckdb::DataChunk& chunk,
+                              BatchSinkGlobalState& g,
+                              BatchSinkLocalState& l)
+{
+  rows_accumulated += chunk.size(); // dummy placeholder
+  bytes_accumulated += chunk.size();
+}
+
+} // namespace duckdb::experimental
+
 namespace sirius::parallel
 {
+
+namespace experimental
+{
+
+void DuckDBScanTask::Execute()
+{
+  auto& g = global_state_->Cast<DuckDBScanTaskGlobalState>();
+  auto& l = local_state_->Cast<DuckDBScanTaskLocalState>();
+
+  // Initialize the executor
+  auto& ctx = l.context;
+  duckdb::Executor executor(l.context);
+  executor.Initialize(*l.batch_sink);
+
+  for (;;)
+  {
+    executor.WorkOnTasks(); // run what we can on this thread
+
+    if (executor.HasError())
+    {                            // if something failed inside, rethrow it here
+      executor.ThrowException(); // will throw the captured ErrorData as an exception
+    }
+    if (executor.ExecutionIsFinished())
+    { // pipelines done
+      break;
+    }
+    executor.WaitForTask(); // block until more work is available, then loop
+  }
+
+  // Execute the scan pipeline
+  // std::cout << "\n[DuckDBScanTask] Starting Execute()" << std::endl; // DEBUG
+  // executor.WorkOnTasks();
+  // std::cout << "\n[DuckDBScanTask] Finished Execute()" << std::endl; // DEBUG
+
+  // // Check for errors
+  // // if (executor.HasError())
+  // // {
+  // //   executor.ThrowException();
+  // // }
+  // // Sanity check for execution completion
+  // if (!executor.ExecutionIsFinished())
+  // {
+  //   throw duckdb::InternalException("[DuckDBScanTask] Execute() did not finish.");
+  // }
+}
+} // namespace experimental
 
 // Byte arithmetic and bit manipulation macros
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
@@ -46,7 +105,7 @@ DuckDBScanTaskGlobalState::DuckDBScanTaskGlobalState(size_t pipeline_id,
                                                      const duckdb::DuckDBPhysicalTableScan& pts)
     : pipeline_id(pipeline_id)
 {
-  const auto& op = pts.physical_table_scan;
+  const auto& op = *pts.physical_table_scan_ptr;
   if (op.dynamic_filters && op.dynamic_filters->HasFilters())
   {
     table_filters = op.dynamic_filters->GetFinalTableFilters(op, op.table_filters.get());
@@ -86,7 +145,7 @@ DuckDBScanTaskLocalState::DuckDBScanTaskLocalState(TaskCompletionMessageQueue& m
     , context(context)
     , op(op)
 {
-  auto const& pts = op.physical_table_scan;
+  auto const& pts = *op.physical_table_scan_ptr;
   num_columns     = pts.column_ids.size();
   if (pts.function.init_local)
   {
@@ -170,7 +229,7 @@ void DuckDBScanTask::Execute()
   // Cast base task states to our concrete states
   auto& g = this->global_state_->Cast<DuckDBScanTaskGlobalState>();
   auto& l = this->local_state_->Cast<DuckDBScanTaskLocalState>();
-  l.chunk.Initialize(duckdb::Allocator::Get(l.context.client), l.op.physical_table_scan.types);
+  l.chunk.Initialize(duckdb::Allocator::Get(l.context.client), l.op.physical_table_scan_ptr->types);
 
   // Drive the table function directly until ~2GB (approximate) or source exhaustion
   bool is_finished = g.IsSourceDrained();
@@ -178,10 +237,10 @@ void DuckDBScanTask::Execute()
   {
     std::cout << "[DuckDBScanTask] Loop start: pulling next data chunk...\n";
     // Get a DataChunk
-    duckdb::TableFunctionInput input(l.op.physical_table_scan.bind_data.get(),
+    duckdb::TableFunctionInput input(l.op.physical_table_scan_ptr->bind_data.get(),
                                      l.local_tf_state.get(),
                                      g.global_tf_state.get());
-    l.op.physical_table_scan.function.function(l.context.client, input, l.chunk);
+    l.op.physical_table_scan_ptr->function.function(l.context.client, input, l.chunk);
     if (l.chunk.size() == 0)
     {
       // Source is exhausted
@@ -316,7 +375,7 @@ void DuckDBScanTask::Execute()
       task_creator.GetNextTaskId(),
       sirius::make_unique<DuckDBScanTaskLocalState>(l.message_queue, g, l.context, l.op),
       std::dynamic_pointer_cast<DuckDBScanTaskGlobalState>(this->global_state_));
-    scan_task_executor.Schedule(std::move(new_task));
+    // scan_task_executor.Schedule(std::move(new_task));
   }
 
   // Copy data to correctly sized buffers

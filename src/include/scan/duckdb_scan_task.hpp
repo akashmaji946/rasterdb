@@ -34,10 +34,250 @@
 #include <atomic>
 #include <climits>
 
+namespace duckdb
+{
+
+// Simpler duckdb scan implementation
+namespace experimental
+{
+
+// Forward declarations
+class BatchSinkGlobalState;
+class BatchSinkLocalState;
+struct BatchBuilder ///< Dummy builder
+{
+  vector<LogicalType> types;
+  size_t rows_accumulated  = 0;
+  size_t bytes_accumulated = 0;
+  explicit BatchBuilder(const vector<LogicalType>& types)
+      : types(types)
+  {}
+  sirius::unique_ptr<sirius::DataBatch> MakeDataBatch(uint64_t batch_id) // dummy placeholder
+  {
+    return sirius::make_unique<sirius::DataBatch>(batch_id, nullptr);
+  }
+  void SliceChunk(DataChunk& chunk, BatchSinkGlobalState& g, BatchSinkLocalState& l);
+  bool BatchIsReady(size_t target_bytes) const
+  {
+    return true;
+  }
+  void Reset()
+  {
+    rows_accumulated  = 0;
+    bytes_accumulated = 0;
+  }
+};
+
+struct BatchSinkGlobalState : public GlobalSinkState
+{
+  BatchSinkGlobalState(const vector<LogicalType>& types,
+                       sirius::DataRepository& data_repository,
+                       size_t target_bytes)
+      : types(types)
+      , data_repository(data_repository)
+      , target_bytes(target_bytes)
+  {}
+
+  const vector<LogicalType> types;
+  sirius::DataRepository& data_repository;
+  const size_t target_bytes;
+  std::atomic<uint64_t> batches_emitted{0};
+};
+
+struct BatchSinkLocalState : public LocalSinkState
+{
+  explicit BatchSinkLocalState(const vector<LogicalType>& types)
+      : builder(types)
+  {}
+
+  BatchBuilder builder; /// TODO: initialize
+};
+
+class PhysicalBatchSink final : public PhysicalOperator
+{
+public:
+  PhysicalBatchSink(vector<LogicalType> types,
+                    idx_t estimated_cardinality,
+                    unique_ptr<PhysicalOperator> child,
+                    sirius::DataRepository& repo,
+                    sirius::TaskCompletionMessageQueue& message_queue,
+                    uint64_t pipeline_id,
+                    uint64_t task_id,
+                    size_t target_bytes)
+      : PhysicalOperator(PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality)
+      , repo(repo)
+      , message_queue(message_queue)
+      , pipeline_id(pipeline_id)
+      , task_id(task_id)
+      , target_bytes(target_bytes)
+  {
+    children.push_back(std::move(child));
+  }
+
+  unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext& ctx) const override
+  {
+    return make_uniq<BatchSinkLocalState>(types);
+  }
+  unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext& ctx) const override
+  {
+    return make_uniq<BatchSinkGlobalState>(types, repo, target_bytes);
+  }
+  bool IsSink() const override
+  {
+    return true;
+  }
+  bool ParallelSink() const override
+  {
+    return true;
+  }
+  bool SinkOrderDependent() const override
+  {
+    return false;
+  }
+
+  // SINK, COMBINE, FINALIZE
+  SinkResultType Sink(ExecutionContext&, DataChunk& chunk, OperatorSinkInput& input) const override
+  {
+    // Get global and local states
+    auto& g = input.global_state.Cast<BatchSinkGlobalState>();
+    auto& l = input.local_state.Cast<BatchSinkLocalState>();
+
+    // Slice the chunk into columns and append to builder buffers
+    l.builder.SliceChunk(chunk, g, l);
+
+    if (l.builder.BatchIsReady(target_bytes))
+    {
+      PushDataBatch(g, l);
+    }
+    return duckdb::SinkResultType::NEED_MORE_INPUT;
+  }
+
+  SinkCombineResultType Combine(ExecutionContext&, OperatorSinkCombineInput& input) const override
+  {
+    // Get global and local states
+    auto& g = input.global_state.Cast<BatchSinkGlobalState>();
+    auto& l = input.local_state.Cast<BatchSinkLocalState>();
+
+    // Push a data batch if there are remaining rows
+    if (l.builder.rows_accumulated > 0)
+    {
+      PushDataBatch(g, l);
+    }
+    return SinkCombineResultType::FINISHED;
+  }
+
+  void PushDataBatch(BatchSinkGlobalState& g, BatchSinkLocalState& l) const
+  {
+    // Push data batch to the data repository
+    const auto batch_id = g.data_repository.GetNextDataBatchId();
+    auto batch          = l.builder.MakeDataBatch(batch_id);
+    g.data_repository.AddNewDataBatch(pipeline_id, std::move(batch));
+
+    // Send a message to the message queue that a batch is ready
+    message_queue.EnqueueMessage(
+      sirius::make_unique<sirius::TaskCompletionMessage>(task_id,
+                                                         pipeline_id,
+                                                         sirius::Source::SCAN));
+
+    // Reset the builder for the next batch
+    l.builder.Reset();
+
+    // Update emitted batch count
+    g.batches_emitted.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  SinkFinalizeType
+  Finalize(Pipeline&, Event&, ClientContext&, OperatorSinkFinalizeInput&) const override
+  {
+    // Nothing to do
+    return duckdb::SinkFinalizeType::READY;
+  }
+
+private:
+  sirius::TaskCompletionMessageQueue& message_queue;
+  sirius::DataRepository& repo;
+  size_t target_bytes;
+  uint64_t pipeline_id;
+  uint64_t task_id;
+};
+
+} // namespace experimental
+
+} // namespace duckdb
+
 namespace sirius::parallel
 {
 
 using idx_t = duckdb::idx_t;
+
+namespace experimental
+{
+class DuckDBScanTaskGlobalState : public ITaskGlobalState
+{
+public:
+  DuckDBScanTaskGlobalState() = default; // Empty
+};
+class DuckDBScanTaskLocalState : public ITaskLocalState
+{
+  static constexpr size_t DEFAULT_TARGET_BATCH_BYTES = 256ULL << 20; // 256MB
+public:
+  DuckDBScanTaskLocalState(uint64_t pipeline_id,
+                           uint64_t task_id,
+                           duckdb::unique_ptr<duckdb::PhysicalTableScan> op,
+                           duckdb::ClientContext& context,
+                           DataRepository& data_repository,
+                           TaskCompletionMessageQueue& message_queue,
+                           size_t target_batch_bytes = DEFAULT_TARGET_BATCH_BYTES)
+      : pipeline_id(pipeline_id)
+      , context(context)
+      , data_repository(data_repository)
+      , message_queue(message_queue)
+      , target_batch_bytes(target_batch_bytes)
+  {
+    // Copy out what you need BEFORE moving
+    duckdb::vector<duckdb::LogicalType> sink_types = op->types;
+    duckdb::idx_t est_card                         = op->estimated_cardinality;
+
+    //auto child = duckdb::make_uniq<duckdb::PhysicalOperator>(std::move(op));
+
+    batch_sink = duckdb::make_uniq<duckdb::experimental::PhysicalBatchSink>(
+      std::move(sink_types), // vector by value in sink ctor
+      est_card,
+      std::move(op),
+      data_repository,
+      message_queue,
+      pipeline_id,
+      task_id,
+      target_batch_bytes);
+  }
+
+  uint64_t pipeline_id;
+  duckdb::ClientContext& context;
+  duckdb::unique_ptr<duckdb::experimental::PhysicalBatchSink> batch_sink;
+  DataRepository& data_repository;
+  TaskCompletionMessageQueue& message_queue;
+  size_t target_batch_bytes;
+};
+
+class DuckDBScanTask : public ITask
+{
+public:
+  DuckDBScanTask(sirius::unique_ptr<DuckDBScanTaskLocalState> local_state,
+                 sirius::shared_ptr<DuckDBScanTaskGlobalState> global_state)
+      : sirius::parallel::ITask(std::move(local_state), std::move(global_state))
+  {}
+
+  void Execute() override;
+  void SetNumThreads(uint64_t num_threads)
+  {
+    auto& l     = local_state_->Cast<DuckDBScanTaskLocalState>();
+    auto& sched = duckdb::TaskScheduler::GetScheduler(l.context);
+    // The duckdb counts the thread executing Execute() as an external thread,
+    // so we set external_threads = 1.
+    sched.SetThreads(num_threads, 1);
+  }
+};
+} // namespace experimental
 
 //===--------------------------------------------------===//
 // DuckDBScanTaskGlobalState
@@ -61,7 +301,7 @@ public:
   duckdb::optional_ptr<duckdb::TableFilterSet>
   GetTableFilters(const duckdb::DuckDBPhysicalTableScan& op) const
   {
-    return table_filters ? table_filters.get() : op.physical_table_scan.table_filters.get();
+    return table_filters ? table_filters.get() : op.physical_table_scan_ptr->table_filters.get();
   }
 
   bool IsSourceDrained() const

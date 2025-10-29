@@ -17,6 +17,7 @@
 #pragma once
 
 // sirius
+#include "parallel/task.hpp"
 #include <parallel/task_queue.hpp>
 
 // duckdb
@@ -27,50 +28,45 @@
 
 namespace sirius::parallel
 {
-
-//===--------------------------------------------------===//
-// DuckDBScanTaskQueue
-//===--------------------------------------------------===//
 class DuckDBScanTaskQueue : public ITaskQueue
 {
-  static constexpr size_t PULL_TIMEOUT_US = 100;
-
 public:
   DuckDBScanTaskQueue()           = default;
   ~DuckDBScanTaskQueue() override = default;
 
   void Open() override
   {
-    is_open_.store(true, std::memory_order::release);
+    is_open_.store(true, std::memory_order_release);
   }
 
   void Close() override
   {
-    is_open_.store(false, std::memory_order::release);
+    bool was_open = is_open_.exchange(false, std::memory_order_acq_rel);
+    if (was_open)
+    {
+      // First close. Push nullptr sentinel to signal closure.
+      task_queue_.enqueue(sirius::unique_ptr<ITask>{});
+    }
   }
 
   void Push(sirius::unique_ptr<ITask> task) override
   {
-    // We must assume the queue is open as a precondition, given the implementation in ITaskQueue
+    // Caller ensures queue is open (as per ITaskQueue contract).
     task_queue_.enqueue(std::move(task));
   }
 
-  // Wait until a task is available or the queue is closed.
-  unique_ptr<ITask> Pull() override
+  // Single-consumer, blocking, drain-and-stop
+  sirius::unique_ptr<ITask> Pull() override
   {
-    unique_ptr<ITask> scan_task;
-    while (true)
+    sirius::unique_ptr<ITask> task;
+    // Blocks until an task appears (or sentinel is seen).
+    task_queue_.wait_dequeue(task);
+    if (!task)
     {
-      if (task_queue_.wait_dequeue_timed(scan_task, PULL_TIMEOUT_US))
-      {
-        return scan_task;
-      }
-      // If closed, return
-      if (!is_open_.load(std::memory_order::acquire) && task_queue_.size_approx() == 0)
-      {
-        return nullptr;
-      }
+      // nullptr sentinel signals closed + drained
+      return nullptr;
     }
+    return task;
   }
 
 private:

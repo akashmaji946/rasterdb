@@ -37,7 +37,7 @@ TaskCreator::TaskCreator(
         coordinator_(nullptr) {
 }
 
-sirius::unique_ptr<parallel::DuckDBScanTask> TaskCreator::CreateScanTask(size_t pipeline_idx)
+sirius::unique_ptr<parallel::experimental::DuckDBScanTask> TaskCreator::CreateScanTask(size_t pipeline_idx)
 {
   // Search the scan metadata map for the given pipeline id
   auto it = gpu_pipeline_hashmap_->scan_metadata_map_.find(pipeline_idx);
@@ -49,23 +49,21 @@ sirius::unique_ptr<parallel::DuckDBScanTask> TaskCreator::CreateScanTask(size_t 
   auto& scan_metadata = it->second;
 
   // Create global state
-  auto global_state =
-    sirius::make_shared<parallel::DuckDBScanTaskGlobalState>(pipeline_idx,
-                                                             scan_metadata->context_.client,
-                                                             scan_metadata->op_);
+  auto global_state = sirius::make_shared<parallel::experimental::DuckDBScanTaskGlobalState>();
 
   // Create local state
-  auto local_state =
-    sirius::make_unique<parallel::DuckDBScanTaskLocalState>(task_completion_message_queue_,
-                                                            *global_state,
-                                                            scan_metadata->context_,
-                                                            scan_metadata->op_);
+  auto const task_idx = GetNextTaskId();
+  auto local_state    = sirius::make_unique<parallel::experimental::DuckDBScanTaskLocalState>(
+    pipeline_idx,
+    task_idx,
+    std::move(scan_metadata->op_.physical_table_scan_ptr),
+    scan_metadata->context_.client,
+    data_repository_,
+    task_completion_message_queue_); /// TODO: default target batch bytes.
 
   // Create and return scan task
-
-  return sirius::make_unique<parallel::DuckDBScanTask>(GetNextTaskId(),
-                                                       std::move(local_state),
-                                                       global_state);
+  return sirius::make_unique<parallel::experimental::DuckDBScanTask>(std::move(local_state),
+                                                                     global_state);
 }
 
 sirius::unique_ptr<parallel::GPUPipelineTask>
@@ -177,7 +175,7 @@ TaskCreator::ScanRepository(size_t pipeline_idx) {
 }
 
 void
-TaskCreator::ScheduleDuckDBScan(sirius::unique_ptr<parallel::DuckDBScanTask> scan_task) {
+TaskCreator::ScheduleDuckDBScan(sirius::unique_ptr<parallel::experimental::DuckDBScanTask> scan_task) {
     std::cout << "Creator: Scheduling scan task " << "\n";
     duckdb_scan_executor_.Schedule(std::move(scan_task));
 }

@@ -28,7 +28,10 @@ namespace sirius {
 // Forward declarations
 namespace parallel
 {
+namespace experimental
+{
 class DuckDBScanTask;
+} // namespace experimental
 class DuckDBScanTaskExecutor;
 } // namespace parallel
 
@@ -108,7 +111,7 @@ public:
      * @param pipeline_idx The index of the pipeline requiring a scan task
      * @return sirius::unique_ptr<parallel::DuckDBScanTask> The created scan task
      */
-    sirius::unique_ptr<parallel::DuckDBScanTask> CreateScanTask(size_t pipeline_idx);
+    sirius::unique_ptr<parallel::experimental::DuckDBScanTask> CreateScanTask(size_t pipeline_idx);
     
     /**
      * @brief Creates a new GPU pipeline task with the provided data batches
@@ -125,7 +128,7 @@ public:
      * 
      * @param scan_task The scan task to schedule
      */
-    void ScheduleDuckDBScan(sirius::unique_ptr<parallel::DuckDBScanTask> scan_task);
+    void ScheduleDuckDBScan(sirius::unique_ptr<parallel::experimental::DuckDBScanTask> scan_task);
 
     /**
      * @brief Schedules a GPU pipeline task for execution

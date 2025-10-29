@@ -130,13 +130,21 @@ namespace sirius::parallel
 //===--------------------------------------------------===//
 // DuckDBScanTaskExecutor
 //===--------------------------------------------------===//
+// This task executor has 1 worker thread that spans the configured number of duckdb threads when
+// executing a duckdb table scan.
 class DuckDBScanTaskExecutor : public ITaskExecutor
 {
 public:
   //===----------Constructor----------===//
   explicit DuckDBScanTaskExecutor(TaskExecutorConfig config)
-      : ITaskExecutor(sirius::make_unique<DuckDBScanTaskQueue>(), config)
+      : ITaskExecutor(sirius::make_unique<DuckDBScanTaskQueue>(), {1, config.retry_on_error})
+      , num_duckdb_threads_(config.num_threads)
   {}
+
+  void Schedule(sirius::unique_ptr<experimental::DuckDBScanTask> task);
+
+private:
+  int num_duckdb_threads_;
 };
 
 } // namespace sirius::parallel
