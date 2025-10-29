@@ -6,9 +6,9 @@
 #include <catch.hpp>
 
 // sirius
-#include <sirius_context.hpp>
 #include <scan/duckdb_scan_task.hpp>
 #include <scan/duckdb_scan_task_executor.hpp>
+#include <sirius_context.hpp>
 
 // duckdb
 #include <duckdb/common/types/data_chunk.hpp>
@@ -223,15 +223,25 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
     *gstate,
     exec_ctx,
     op);
+  auto another_lstate = sirius::make_unique<parallel::DuckDBScanTaskLocalState>(
+    sirius_context.GetTaskCreator().GetTaskCompletionMessageQueue(),
+    *gstate,
+    exec_ctx,
+    op);
 
   // Create the scan task
   /// TODO: create pipeline, etc.
   uint64_t task_id = 0;
   auto task = sirius::make_unique<parallel::DuckDBScanTask>(task_id, std::move(lstate), gstate);
+  uint64_t another_task_id = 1;
+  auto another_task        = sirius::make_unique<parallel::DuckDBScanTask>(another_task_id,
+                                                                    std::move(another_lstate),
+                                                                    gstate);
 
   // Run through executor with its own queue
-  scan_executor.Start();
   scan_executor.Schedule(std::move(task));
+  scan_executor.Schedule(std::move(another_task));
+  scan_executor.Start();
   scan_executor.Wait();
   scan_executor.Stop();
 
