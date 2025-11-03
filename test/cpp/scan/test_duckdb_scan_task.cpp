@@ -205,11 +205,11 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
                                      params);
 
   //===----------Sirius Setup----------===//
-  // Create sirius context
-  auto& sirius_context = SiriusContext::GetInstance();
-
-  // Extract the scan executor
-  auto& scan_executor = sirius_context.GetDuckDBScanTaskExecutor();
+  // Create sirius context, extract the scan executor, data repository, message queue
+  auto& sirius_context  = SiriusContext::GetInstance();
+  auto& scan_executor   = sirius_context.GetDuckDBScanTaskExecutor();
+  auto& data_repository = sirius_context.GetDataRepository();
+  auto& message_queue   = sirius_context.GetTaskCreator().GetTaskCompletionMessageQueue();
 
   // Create global state
   uint64_t pipeline_id = 0;
@@ -230,7 +230,6 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
     op);
 
   // Create the scan task
-  /// TODO: create pipeline, etc.
   uint64_t task_id = 0;
   auto task = sirius::make_unique<parallel::DuckDBScanTask>(task_id, std::move(lstate), gstate);
   uint64_t another_task_id = 1;
@@ -247,6 +246,48 @@ TEST_CASE("DuckDBScanTask drains source and completes", "[duckdb_scan_task]")
 
   // Verify source drained
   REQUIRE(gstate->IsSourceDrained());
+
+  // Verify that a message is in the message queue
+  auto message = message_queue.DequeueMessage();
+  REQUIRE(message != nullptr);
+  // REQUIRE(message->task_id == task_id || message->task_id == another_task_id);
+  // REQUIRE(message->pipeline_id == pipeline_id);
+  REQUIRE(message->source == Source::SCAN);
+
+  // Verify that an empty data batch has been created in the data repository
+  int num_batches = 0;
+  for (;;)
+  {
+    auto data_batch = data_repository.EvictDataBatch(0);
+    if (data_batch == nullptr)
+    {
+      break;
+    }
+    num_batches++;
+
+    // Print result
+    for (int i = 0; i < data_batch->num_rows; ++i)
+    {
+      int32_t ival = *(reinterpret_cast<int32_t*>(data_batch->data_ptrs[0] + i * sizeof(int32_t)));
+      if (data_batch->mask_ptrs[1][i / 8] & (1 << (i % 8)))
+      {
+        uint64_t offset_start = data_batch->offset_ptrs[1][i];
+        uint64_t offset_end   = data_batch->offset_ptrs[1][i + 1];
+        std::string str(reinterpret_cast<char*>(data_batch->data_ptrs[1] + offset_start),
+                        offset_end - offset_start);
+        std::cout << "Row " << i << ": " << ival << ", " << str << "\n";
+      }
+      else
+      {
+        std::cout << "Row " << i << ": " << ival << ", NULL\n";
+      }
+    }
+  }
+
+  if (num_batches == 0)
+  {
+    FAIL("Failed to evict data batch from data repository");
+  }
 }
 
 // struct NoOpTask : public ITask
