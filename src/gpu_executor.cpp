@@ -22,6 +22,8 @@
 #include "gpu_physical_operator.hpp"
 #include "operator/gpu_physical_result_collector.hpp"
 #include "operator/gpu_physical_hash_join.hpp"
+#include "operator/gpu_physical_dummy_source.hpp"
+#include "operator/gpu_physical_dummy_sink.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "operator/gpu_physical_table_scan.hpp"
@@ -44,6 +46,8 @@ GPUExecutor::Reset() {
 	total_pipelines = 0;
 	// error_manager.Reset();
 	pipelines.clear();
+	dummy_operators.clear();
+	// gpuBufferManager->ResetBuffer();
 	// events.clear();
 	// to_be_rescheduled_tasks.clear();
 	// execution_result = PendingExecutionResult::RESULT_NOT_READY;
@@ -76,6 +80,8 @@ void GPUExecutor::Execute() {
 		// if (pipeline->source->type == PhysicalOperatorType::HASH_JOIN || pipeline->source->type == PhysicalOperatorType::RESULT_COLLECTOR) {
 		// 	continue;
 		// }
+
+		printf("Executing pipeline %d\n", pipeline_idx);
 
 		vector<shared_ptr<GPUIntermediateRelation>> intermediate_relations;
 		shared_ptr<GPUIntermediateRelation> final_relation;
@@ -123,6 +129,7 @@ void GPUExecutor::Execute() {
 		// pipeline->source->GetData(exec_context, source_relation, source_input);
 		auto source_type = pipeline->source.get()->type;
 		SIRIUS_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
+		printf("pipeline source type %s\n", PhysicalOperatorToString(source_type).c_str());
 		if (source_type == PhysicalOperatorType::TABLE_SCAN) {
 			// initialize pipeline
 			Pipeline duckdb_pipeline(*executor);
@@ -144,6 +151,7 @@ void GPUExecutor::Execute() {
 			auto op = pipeline->operators[current_idx-1];
 			auto op_type = op.get().type;
 			SIRIUS_LOG_DEBUG("pipeline operator type {}", PhysicalOperatorToString(op_type));
+			printf("pipeline operator type %s\n", PhysicalOperatorToString(op_type).c_str());
 			// SIRIUS_LOG_DEBUG("{}", op.get().GetName());
 			//call operator
 
@@ -170,6 +178,7 @@ void GPUExecutor::Execute() {
 		if (pipeline->sink) {
 			auto sink_type = pipeline->sink.get()->type;
 			SIRIUS_LOG_DEBUG("pipeline sink type {}", PhysicalOperatorToString(sink_type));
+			printf("pipeline sink type %s\n", PhysicalOperatorToString(sink_type).c_str());
 			// SIRIUS_LOG_DEBUG("{}", pipeline->sink.get()->GetName());
 			//call sink
 			auto &sink_relation = final_relation;
@@ -257,13 +266,81 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				to_schedule[to_schedule.size() - 1 - meta]->GetPipelines(pipeline_inside, false);
 				for (int pipeline_idx = 0; pipeline_idx < pipeline_inside.size(); pipeline_idx++) {
 					auto &pipeline = pipeline_inside[pipeline_idx];
-					if (pipeline_inside[pipeline_idx]->source->type == PhysicalOperatorType::HASH_JOIN) {
-						auto& temp = pipeline_inside[pipeline_idx]->source.get()->Cast<GPUPhysicalHashJoin>();
-						if (temp.join_type == JoinType::RIGHT || temp.join_type == JoinType::RIGHT_SEMI || temp.join_type == JoinType::RIGHT_ANTI) {
-							scheduled.push_back(pipeline);
+					
+					// Check if HASH_JOIN is the sink - if so, don't split
+					bool hash_join_is_sink = pipeline->sink && pipeline->sink->type == PhysicalOperatorType::HASH_JOIN;
+					bool hash_join_is_source = pipeline->source && pipeline->source->type == PhysicalOperatorType::HASH_JOIN;
+
+					if (hash_join_is_source) continue;
+					
+					// Find all HASH_JOIN operators in the pipeline (but not if it's the sink)
+					vector<idx_t> hash_join_indices;
+					if (!hash_join_is_sink) {
+						for (idx_t i = 0; i < pipeline->operators.size(); i++) {
+							if (pipeline->operators[i].get().type == PhysicalOperatorType::HASH_JOIN) {
+								hash_join_indices.push_back(i);
+							}
 						}
-					} else {
+					}
+					
+					if (hash_join_indices.empty()) {
+						// No HASH_JOIN in operators (or HASH_JOIN is sink), schedule as-is
 						scheduled.push_back(pipeline);
+					} else {
+						// Split pipeline at each HASH_JOIN
+						vector<shared_ptr<GPUPipeline>> split_pipelines;
+						
+						// Process each segment
+						for (idx_t segment = 0; segment <= hash_join_indices.size(); segment++) {
+							auto new_pipeline = make_shared_ptr<GPUPipeline>(*this);
+							
+							// Determine the range of operators for this segment
+							idx_t start_idx = (segment == 0) ? 0 : hash_join_indices[segment - 1] + 1;
+							idx_t end_idx = (segment == hash_join_indices.size()) ? pipeline->operators.size() : hash_join_indices[segment] + 1;
+							
+							// Set source for this segment
+							if (segment == 0) {
+								// First segment uses original source
+								new_pipeline->source = pipeline->source;
+							} else {
+								// Other segments use DUMMY_SOURCE
+								auto &prev_op = pipeline->operators[hash_join_indices[segment - 1]].get();
+								auto dummy_source = make_uniq<GPUPhysicalDummySource>(prev_op.GetTypes(), prev_op.estimated_cardinality);
+								new_pipeline->source = dummy_source.get();
+								dummy_operators.push_back(std::move(dummy_source));
+							}
+							
+							// Add operators for this segment
+							for (idx_t i = start_idx; i < end_idx; i++) {
+								new_pipeline->operators.push_back(pipeline->operators[i]);
+							}
+							
+							// Set sink for this segment
+							if (segment == hash_join_indices.size()) {
+								// Last segment uses original sink
+								new_pipeline->sink = pipeline->sink;
+							} else {
+								// Other segments use DUMMY_SINK
+								auto &hash_join_op = pipeline->operators[hash_join_indices[segment]].get();
+								auto dummy_sink = make_uniq<GPUPhysicalDummySink>(hash_join_op.GetTypes(), hash_join_op.estimated_cardinality);
+								new_pipeline->sink = dummy_sink.get();
+								dummy_operators.push_back(std::move(dummy_sink));
+							}
+							
+							// Add dependency on previous segment
+							if (segment > 0) {
+								new_pipeline->AddDependency(split_pipelines[segment - 1]);
+							}
+							
+							split_pipelines.push_back(new_pipeline);
+						}
+						
+						// Schedule all split pipelines
+						for (auto &split_pipeline : split_pipelines) {
+							scheduled.push_back(split_pipeline);
+						}
+						
+						SIRIUS_LOG_DEBUG("Split pipeline with {} HASH_JOIN operator(s)", hash_join_indices.size());
 					}
 				}
 				// scheduled.push_back(base_pipeline);
