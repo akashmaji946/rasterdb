@@ -334,6 +334,48 @@ GPUExecutor::CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op) 
     return child_pipeline;
 }
 
+shared_ptr<GPUPipeline> GPUExecutor::SplitPipeline(GPUPipeline &current) {
+  D_ASSERT(current.operators.size() >= 2);
+  D_ASSERT(current.source);
+  D_ASSERT(current.sink);
+    
+  idx_t split_point = current.operators.size() / 2;
+  
+  // TODO find a way to make these persist? right now this code definitely does not work
+  auto dummy_sink = make_uniq<GPUPhysicalDummySink>();
+  auto dummy_source = make_uniq<GPUPhysicalDummySource>();
+  auto original_sink = current.sink;
+  auto original_source = current.source;
+
+  GPUPhysicalDummySink *dummy_sink_ptr = dummy_sink.get();
+  GPUPhysicalDummySource *dummy_source_ptr = dummy_source.get();
+  dummy_source_ptr->SetPairedSink(dummy_sink_ptr);
+    
+  vector<reference<GPUPhysicalOperator>> first_half_ops;
+  for (idx_t i = 0; i < split_point; i++) {
+    first_half_ops.push_back(current.operators[i]);
+  }
+
+  vector<reference<GPUPhysicalOperator>> second_half_ops;
+  for (idx_t i = split_point; i < current.operators.size(); i++) {
+    second_half_ops.push_back(current.operators[i]);
+  }
+
+  pipeline.operators = std::move(first_half_ops);
+  pipeline.sink = dummy_sink_ptr;
+  pipeline.source = original_source;
+
+
+  auto second_pipeline = make_shared_ptr<GPUPipeline>();
+  second_pipeline.operators = std::move(second_half_ops);
+  second_pipeline.sink = original_sink;
+  second_pipeline.source = dummy_source_ptr;
+  
+  second_pipeline->AddDependency(pipeline.shared_from_this());
+    
+  return second_pipeline;
+}
+
 bool 
 GPUExecutor::HasResultCollector() {
 	return gpu_physical_plan->type == PhysicalOperatorType::RESULT_COLLECTOR;
