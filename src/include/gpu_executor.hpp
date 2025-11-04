@@ -76,6 +76,7 @@ public:
 	void Execute();
 	void Reset();
 	shared_ptr<GPUPipeline> CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op);
+  shared_ptr<GPUPipeline> SplitPipeline(GPUPipeline &current);
 
 	Executor* executor;
 
