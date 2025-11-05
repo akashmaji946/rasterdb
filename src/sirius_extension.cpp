@@ -562,6 +562,11 @@ static void SetEnableRegexJitImpl(ClientContext &context, SetScope scope, Value 
     SIRIUS_LOG_DEBUG("Updated config ENABLE_REGEX_JIT_IMPL to {}", Config::ENABLE_REGEX_JIT_IMPL);
 }
 
+static void SetModifiedPipeline(ClientContext &context, SetScope scope, Value &parameter) {
+	Config::MODIFIED_PIPELINE = BooleanValue::Get(parameter);
+	SIRIUS_LOG_DEBUG("Updated config MODIFIED_PIPELINE to {}", Config::MODIFIED_PIPELINE);
+}
+
 void SiriusExtension::InitialGPUConfigs(DuckDB &db) {
 	auto &config = DBConfig::GetConfig(*db.instance);
 
@@ -596,6 +601,10 @@ void SiriusExtension::InitialGPUConfigs(DuckDB &db) {
     // Add in config options for special JIT implemention for regex
     config.AddExtensionOption("enable_regex_jit_impl", "Whether to use special JIT implementation for particular regex evaluation", LogicalType::BOOLEAN, 
 		Value::BOOLEAN(Config::ENABLE_REGEX_JIT_IMPL), SetEnableRegexJitImpl);
+
+	// Add in config options for modified pipeline
+	config.AddExtensionOption("modified_pipeline", "Whether to use modified pipeline for GPU execution", LogicalType::BOOLEAN, 
+		Value::BOOLEAN(Config::MODIFIED_PIPELINE), SetModifiedPipeline);
 }
 
 void SiriusExtension::Load(DuckDB &db) {
