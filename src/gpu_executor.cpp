@@ -22,11 +22,10 @@
 #include "gpu_physical_operator.hpp"
 #include "operator/gpu_physical_result_collector.hpp"
 #include "operator/gpu_physical_hash_join.hpp"
-#include "operator/gpu_physical_dummy_source.hpp"
-#include "operator/gpu_physical_dummy_sink.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "operator/gpu_physical_table_scan.hpp"
+#include "operator/gpu_physical_dummy_partition.hpp"
 #include "log/logging.hpp"
 #include <iostream>
 #include <stdio.h>
@@ -81,8 +80,6 @@ void GPUExecutor::Execute() {
 		// 	continue;
 		// }
 
-		printf("Executing pipeline %d\n", pipeline_idx);
-
 		vector<shared_ptr<GPUIntermediateRelation>> intermediate_relations;
 		shared_ptr<GPUIntermediateRelation> final_relation;
 		// vector<unique_ptr<OperatorState>> intermediate_states;
@@ -129,7 +126,6 @@ void GPUExecutor::Execute() {
 		// pipeline->source->GetData(exec_context, source_relation, source_input);
 		auto source_type = pipeline->source.get()->type;
 		SIRIUS_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
-		printf("pipeline source type %s\n", PhysicalOperatorToString(source_type).c_str());
 		if (source_type == PhysicalOperatorType::TABLE_SCAN) {
 			// initialize pipeline
 			Pipeline duckdb_pipeline(*executor);
@@ -151,7 +147,6 @@ void GPUExecutor::Execute() {
 			auto op = pipeline->operators[current_idx-1];
 			auto op_type = op.get().type;
 			SIRIUS_LOG_DEBUG("pipeline operator type {}", PhysicalOperatorToString(op_type));
-			printf("pipeline operator type %s\n", PhysicalOperatorToString(op_type).c_str());
 			// SIRIUS_LOG_DEBUG("{}", op.get().GetName());
 			//call operator
 
@@ -178,7 +173,6 @@ void GPUExecutor::Execute() {
 		if (pipeline->sink) {
 			auto sink_type = pipeline->sink.get()->type;
 			SIRIUS_LOG_DEBUG("pipeline sink type {}", PhysicalOperatorToString(sink_type));
-			printf("pipeline sink type %s\n", PhysicalOperatorToString(sink_type).c_str());
 			// SIRIUS_LOG_DEBUG("{}", pipeline->sink.get()->GetName());
 			//call sink
 			auto &sink_relation = final_relation;
@@ -271,87 +265,107 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				to_schedule[to_schedule.size() - 1 - meta]->GetPipelines(pipeline_inside, false);
 				for (int pipeline_idx = 0; pipeline_idx < pipeline_inside.size(); pipeline_idx++) {
 					auto &pipeline = pipeline_inside[pipeline_idx];
-					
-					// Check if HASH_JOIN is the sink - if so, don't split
-					bool hash_join_is_sink = pipeline->sink && pipeline->sink->type == PhysicalOperatorType::HASH_JOIN;
-					bool hash_join_is_source = pipeline->source && pipeline->source->type == PhysicalOperatorType::HASH_JOIN;
-
-					if (hash_join_is_source) continue;
-					
-					// Find all HASH_JOIN operators in the pipeline (but not if it's the sink)
-					vector<idx_t> hash_join_indices;
-					if (!hash_join_is_sink) {
-						for (idx_t i = 0; i < pipeline->operators.size(); i++) {
-							if (pipeline->operators[i].get().type == PhysicalOperatorType::HASH_JOIN) {
-								hash_join_indices.push_back(i);
-							}
+					if (pipeline_inside[pipeline_idx]->source->type == PhysicalOperatorType::HASH_JOIN) {
+						auto& temp = pipeline_inside[pipeline_idx]->source.get()->Cast<GPUPhysicalHashJoin>();
+						if (temp.join_type == JoinType::RIGHT || temp.join_type == JoinType::RIGHT_SEMI || temp.join_type == JoinType::RIGHT_ANTI) {
+							scheduled.push_back(pipeline);
 						}
-					}
-					
-					if (hash_join_indices.empty()) {
-						// No HASH_JOIN in operators (or HASH_JOIN is sink), schedule as-is
-						scheduled.push_back(pipeline);
+						continue;
 					} else {
-						// Split pipeline at each HASH_JOIN
-						vector<shared_ptr<GPUPipeline>> split_pipelines;
-						
-						// Process each segment
-						for (idx_t segment = 0; segment <= hash_join_indices.size(); segment++) {
-							auto new_pipeline = make_shared_ptr<GPUPipeline>(*this);
-							
-							// Determine the range of operators for this segment
-							idx_t start_idx = (segment == 0) ? 0 : hash_join_indices[segment - 1] + 1;
-							idx_t end_idx = (segment == hash_join_indices.size()) ? pipeline->operators.size() : hash_join_indices[segment] + 1;
-							
-							// Set source for this segment
-							if (segment == 0) {
-								// First segment uses original source
-								new_pipeline->source = pipeline->source;
-							} else {
-								// Other segments use DUMMY_SOURCE
-								auto &prev_op = pipeline->operators[hash_join_indices[segment - 1]].get();
-								auto dummy_source = make_uniq<GPUPhysicalDummySource>(prev_op.GetTypes(), prev_op.estimated_cardinality);
-								new_pipeline->source = dummy_source.get();
-								dummy_operators.push_back(std::move(dummy_source));
-							}
-							
-							// Add operators for this segment
-							for (idx_t i = start_idx; i < end_idx; i++) {
-								new_pipeline->operators.push_back(pipeline->operators[i]);
-							}
-							
-							// Set sink for this segment
-							if (segment == hash_join_indices.size()) {
-								// Last segment uses original sink
-								new_pipeline->sink = pipeline->sink;
-							} else {
-								// Other segments use DUMMY_SINK
-								auto &hash_join_op = pipeline->operators[hash_join_indices[segment]].get();
-								auto dummy_sink = make_uniq<GPUPhysicalDummySink>(hash_join_op.GetTypes(), hash_join_op.estimated_cardinality);
-								new_pipeline->sink = dummy_sink.get();
-								dummy_operators.push_back(std::move(dummy_sink));
-							}
-							
-							// Add dependency on previous segment
-							if (segment > 0) {
-								new_pipeline->AddDependency(split_pipelines[segment - 1]);
-							}
-							
-							split_pipelines.push_back(new_pipeline);
-						}
-						
-						// Schedule all split pipelines
-						for (auto &split_pipeline : split_pipelines) {
-							scheduled.push_back(split_pipeline);
-						}
-						
-						SIRIUS_LOG_DEBUG("Split pipeline with {} HASH_JOIN operator(s)", hash_join_indices.size());
+						scheduled.push_back(pipeline);
 					}
 				}
-				// scheduled.push_back(base_pipeline);
 				schedule_count++;
 			}
 			meta = (meta + 1) % to_schedule.size();
+		}
+
+		if (Config::MODIFIED_PIPELINE) {
+			printf("Modified pipeline is enabled.\n");
+			printf("Scheduled pipelines: %zu\n", scheduled.size());
+
+			vector<shared_ptr<GPUPipeline>> new_scheduled;
+			for (int i = 0; i < scheduled.size(); i++) {
+				auto current_pipeline = scheduled[i];  // Copy shared_ptr to avoid invalidation
+				
+				// Store original dependencies to preserve them
+				auto original_dependencies = current_pipeline->dependencies;
+				
+				vector<idx_t> hash_join_positions;
+				
+				// Find all HASH_JOIN operators in the pipeline (not SOURCE or SINK)
+				for (idx_t op_idx = 0; op_idx < current_pipeline->operators.size(); op_idx++) {
+					if (current_pipeline->operators[op_idx].get().type == PhysicalOperatorType::HASH_JOIN) {
+						hash_join_positions.push_back(op_idx);
+					}
+				}
+
+				shared_ptr<GPUPipeline> previous_pipeline = nullptr;
+				GPUPhysicalDummyPartition* prev_partition_ptr = nullptr;
+				if (!hash_join_positions.empty()) {
+					for (int hj_idx = 0; hj_idx < hash_join_positions.size(); hj_idx++) {
+						idx_t hash_join_pos = hash_join_positions[hj_idx];
+						
+						// Create a PARTITION operator
+						auto partition_op = make_uniq<GPUPhysicalDummyPartition>(current_pipeline->operators[hash_join_pos].get().types,
+																				current_pipeline->operators[hash_join_pos].get().estimated_cardinality);
+						dummy_operators.push_back(std::move(partition_op));
+						GPUPhysicalDummyPartition* partition_ptr = 
+							static_cast<GPUPhysicalDummyPartition*>(dummy_operators.back().get());
+
+						// Create new pipeline: PARTITION -> HASH_JOIN -> ... -> SINK
+						auto new_pipeline = make_shared_ptr<GPUPipeline>(*this);
+						
+						new_pipeline->sink = partition_ptr;
+					
+						if (hj_idx == 0) {
+							// Move operators from current pipeline to new pipeline
+							for (idx_t j = 0; j < hash_join_pos; j++) {
+								new_pipeline->operators.push_back(current_pipeline->operators[j]);
+							}
+							new_pipeline->source = current_pipeline->source;
+							new_pipeline->dependencies = original_dependencies;
+						} else {
+							// Move operators from current pipeline to new pipeline
+							for (idx_t j = hash_join_positions[hj_idx - 1]; j < hash_join_pos; j++) {
+								new_pipeline->operators.push_back(current_pipeline->operators[j]);
+							}
+							new_pipeline->source = prev_partition_ptr;
+							new_pipeline->dependencies.push_back(previous_pipeline);
+						}
+
+						new_scheduled.push_back(new_pipeline);
+						if (hj_idx == hash_join_positions.size() - 1) {
+							// remove operators from current pipeline
+							current_pipeline->operators.erase(
+								current_pipeline->operators.begin(),
+								current_pipeline->operators.begin() + hash_join_pos
+							);
+
+							// add new pipeline to dependencies
+							current_pipeline->source = partition_ptr;
+							current_pipeline->dependencies.push_back(new_pipeline);
+							new_scheduled.push_back(current_pipeline);
+						}
+
+						// create a shared ptr from new pipeline
+						previous_pipeline = new_pipeline;
+						prev_partition_ptr = partition_ptr;
+					}
+				} else {
+					new_scheduled.push_back(current_pipeline);
+				}
+			}
+
+			printf("Final Scheduled pipelines: %zu\n", new_scheduled.size());
+			for (int i = 0; i < new_scheduled.size(); i++) {
+				auto pipeline = new_scheduled[i];
+				printf("Source %s\n", pipeline->source->GetName().c_str());
+				for (int j = 0; j < pipeline->operators.size(); j++) {
+					printf(" Op %s\n", pipeline->operators[j].get().GetName().c_str());
+				}
+				printf("Sink %s\n", pipeline->sink->GetName().c_str());
+			}
 		}
 
 		// collect all pipelines from the root pipelines (recursively) for the progress bar and verify them
@@ -410,47 +424,47 @@ GPUExecutor::CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op) 
     return child_pipeline;
 }
 
-shared_ptr<GPUPipeline> GPUExecutor::SplitPipeline(GPUPipeline &current) {
-  D_ASSERT(current.operators.size() >= 2);
-  D_ASSERT(current.source);
-  D_ASSERT(current.sink);
+// shared_ptr<GPUPipeline> GPUExecutor::SplitPipeline(GPUPipeline &current) {
+//   D_ASSERT(current.operators.size() >= 2);
+//   D_ASSERT(current.source);
+//   D_ASSERT(current.sink);
     
-  idx_t split_point = current.operators.size() / 2;
+//   idx_t split_point = current.operators.size() / 2;
   
-  // TODO find a way to make these persist? right now this code definitely does not work
-  auto dummy_sink = make_uniq<GPUPhysicalDummySink>();
-  auto dummy_source = make_uniq<GPUPhysicalDummySource>();
-  auto original_sink = current.sink;
-  auto original_source = current.source;
+//   // TODO find a way to make these persist? right now this code definitely does not work
+//   auto dummy_sink = make_uniq<GPUPhysicalDummySink>();
+//   auto dummy_source = make_uniq<GPUPhysicalDummySource>();
+//   auto original_sink = current.sink;
+//   auto original_source = current.source;
 
-  GPUPhysicalDummySink *dummy_sink_ptr = dummy_sink.get();
-  GPUPhysicalDummySource *dummy_source_ptr = dummy_source.get();
-  dummy_source_ptr->SetPairedSink(dummy_sink_ptr);
+//   GPUPhysicalDummySink *dummy_sink_ptr = dummy_sink.get();
+//   GPUPhysicalDummySource *dummy_source_ptr = dummy_source.get();
+//   dummy_source_ptr->SetPairedSink(dummy_sink_ptr);
     
-  vector<reference<GPUPhysicalOperator>> first_half_ops;
-  for (idx_t i = 0; i < split_point; i++) {
-    first_half_ops.push_back(current.operators[i]);
-  }
+//   vector<reference<GPUPhysicalOperator>> first_half_ops;
+//   for (idx_t i = 0; i < split_point; i++) {
+//     first_half_ops.push_back(current.operators[i]);
+//   }
 
-  vector<reference<GPUPhysicalOperator>> second_half_ops;
-  for (idx_t i = split_point; i < current.operators.size(); i++) {
-    second_half_ops.push_back(current.operators[i]);
-  }
+//   vector<reference<GPUPhysicalOperator>> second_half_ops;
+//   for (idx_t i = split_point; i < current.operators.size(); i++) {
+//     second_half_ops.push_back(current.operators[i]);
+//   }
 
-  pipeline.operators = std::move(first_half_ops);
-  pipeline.sink = dummy_sink_ptr;
-  pipeline.source = original_source;
+//   pipeline.operators = std::move(first_half_ops);
+//   pipeline.sink = dummy_sink_ptr;
+//   pipeline.source = original_source;
 
 
-  auto second_pipeline = make_shared_ptr<GPUPipeline>();
-  second_pipeline.operators = std::move(second_half_ops);
-  second_pipeline.sink = original_sink;
-  second_pipeline.source = dummy_source_ptr;
+//   auto second_pipeline = make_shared_ptr<GPUPipeline>();
+//   second_pipeline.operators = std::move(second_half_ops);
+//   second_pipeline.sink = original_sink;
+//   second_pipeline.source = dummy_source_ptr;
   
-  second_pipeline->AddDependency(pipeline.shared_from_this());
+//   second_pipeline->AddDependency(pipeline.shared_from_this());
     
-  return second_pipeline;
-}
+//   return second_pipeline;
+// }
 
 bool 
 GPUExecutor::HasResultCollector() {

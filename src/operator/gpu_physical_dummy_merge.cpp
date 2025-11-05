@@ -14,24 +14,24 @@
  * limitations under the License.
  */
 
-#include "config.hpp"
+#include "gpu_physical_dummy_merge.hpp"
+#include "log/logging.hpp"
 
 namespace duckdb {
 
-bool Config::USE_PIN_MEM_FOR_CPU_PROCESSING = true;
-
-bool Config::USE_CUDF_EXPR = true;
-
-bool Config::USE_CUSTOM_TOP_N = true;
-
-bool Config::USE_OPT_TABLE_SCAN = true;
-int Config::OPT_TABLE_SCAN_NUM_CUDA_STREAMS = 8;
-uint64_t Config::OPT_TABLE_SCAN_CUDA_MEMCPY_SIZE = 64UL * 1024 * 1024;  // 64 MB
-
-uint64_t Config::PRINT_GPU_TABLE_MAX_ROWS = 1000;
-
-bool Config::ENABLE_FALLBACK_CHECK = true;
-
-bool Config::MODIFIED_PIPELINE = false;
-
+string 
+GPUPhysicalDummyMerge::GetName() const {
+  return "GPUPhysicalDummyMerge";
 }
+
+SourceResultType 
+GPUPhysicalDummyMerge::GetData(GPUIntermediateRelation &output_relation) const {
+	return SourceResultType::FINISHED;
+}
+
+SinkResultType 
+GPUPhysicalDummyMerge::Sink(GPUIntermediateRelation &input_relation) const {
+	return SinkResultType::FINISHED;
+}
+
+} // namespace duckdb

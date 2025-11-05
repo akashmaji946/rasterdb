@@ -43,6 +43,8 @@ struct Config {
 
   // For checking whether to fall back to duckdb execution
   static bool ENABLE_FALLBACK_CHECK;
+
+  static bool MODIFIED_PIPELINE;
 };
 
 }
