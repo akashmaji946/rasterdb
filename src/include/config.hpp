@@ -46,3 +46,14 @@ struct Config {
 };
 
 }
+
+namespace sirius {
+
+struct Config {
+    static const uint64_t NUM_GPU_EXECUTOR_THREADS = 2;
+    static const uint64_t NUM_PIPELINE_EXECUTOR_THREADS = 2;
+    static const uint64_t NUM_DUCKDB_SCAN_EXECUTOR_THREADS = 2;
+    static const uint64_t NUM_DOWNGRADE_EXECUTOR_THREADS = 2;
+};
+
+}

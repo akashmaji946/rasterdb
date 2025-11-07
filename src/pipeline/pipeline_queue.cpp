@@ -14,27 +14,27 @@
  * limitations under the License.
  */
 
-#include "pipeline/gpu_pipeline_queue.hpp"
+#include "pipeline/pipeline_queue.hpp"
 #include "config.hpp"
 
 namespace sirius {
 namespace parallel {
 
-void gpu_pipeline_queue::open() {
+void pipeline_queue::open() {
     sirius::lock_guard<sirius::mutex> lock(_mutex);
     _is_open = true;
 }
 
-void gpu_pipeline_queue::close() {
+void pipeline_queue::close() {
     // Wake up all waiting threads by releasing the semaphore enough times
-    for (int i = 0; i < Config::NUM_GPU_EXECUTOR_THREADS; ++i) {
+    for (int i = 0; i < Config::NUM_PIPELINE_EXECUTOR_THREADS; ++i) {
         _sem.release();
     }
     sirius::lock_guard<sirius::mutex> lock(_mutex);
     _is_open = false;
 }
 
-void gpu_pipeline_queue::push(sirius::unique_ptr<itask> task) {
+void pipeline_queue::push(sirius::unique_ptr<itask> task) {
     // Convert itask to gpu_pipeline_task - since we know it's a gpu_pipeline_task
     auto gpu_task = sirius::unique_ptr<gpu_pipeline_task>(static_cast<gpu_pipeline_task*>(task.release()));
     sirius::lock_guard<sirius::mutex> lock(_mutex);
@@ -44,7 +44,7 @@ void gpu_pipeline_queue::push(sirius::unique_ptr<itask> task) {
     _sem.release(); // signal that one item is available
 }
 
-sirius::unique_ptr<itask> gpu_pipeline_queue::pull() {
+sirius::unique_ptr<itask> pipeline_queue::pull() {
     _sem.acquire(); // wait until there's something
     sirius::lock_guard<sirius::mutex> lock(_mutex);
     
@@ -64,7 +64,7 @@ sirius::unique_ptr<itask> gpu_pipeline_queue::pull() {
     return nullptr;
 }
 
-bool gpu_pipeline_queue::is_empty() const {
+bool pipeline_queue::is_empty() const {
     sirius::lock_guard<sirius::mutex> lock(_mutex);
     return _task_queue.empty();
 }

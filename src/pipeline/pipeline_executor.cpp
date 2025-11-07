@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-#include "pipeline/gpu_pipeline_executor.hpp"
-#include "pipeline/gpu_pipeline_queue.hpp"
+#include "pipeline/pipeline_executor.hpp"
+#include "pipeline/pipeline_queue.hpp"
 
 namespace sirius {
 namespace parallel {
 
-gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config)
-    : itask_executor(sirius::make_unique<gpu_pipeline_queue>(), config) {}
+pipeline_executor::pipeline_executor(task_executor_config config)
+    : itask_executor(sirius::make_unique<pipeline_queue>(), config) {}
 
-void gpu_pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
+void pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
     _task_queue->push(std::move(task));
 }
  
-void gpu_pipeline_executor::start() {
+void pipeline_executor::start() {
     bool expected = false;
     if (!_running.compare_exchange_strong(expected, true)) {
         return;
@@ -36,11 +36,11 @@ void gpu_pipeline_executor::start() {
     _threads.reserve(_config.num_threads);
     for (int i = 0; i < _config.num_threads; ++i) {
         _threads.push_back(
-        sirius::make_unique<task_executor_thread>(sirius::make_unique<sirius::thread>(&gpu_pipeline_executor::worker_loop, this, i)));
+        sirius::make_unique<task_executor_thread>(sirius::make_unique<sirius::thread>(&pipeline_executor::worker_loop, this, i)));
     }
 }
- 
-void gpu_pipeline_executor::stop() {
+
+void pipeline_executor::stop() {
     bool expected = true;
     if (!_running.compare_exchange_strong(expected, false)) {
         return;
@@ -53,32 +53,36 @@ void gpu_pipeline_executor::stop() {
     }
     _threads.clear();
 }
- 
-void gpu_pipeline_executor::worker_loop(int worker_id) {
+
+void pipeline_executor::worker_loop(int worker_id) {
     while (true) {
         if (!_running.load()) {
             // Executor is stopped.
             break;
         }
         auto task = _task_queue->pull();
-        if (task == nullptr) {
+            if (task == nullptr) {
             // Task queue is closed.
             break;
         }
         try {
-            // TODO:
-            // set stream reservation
-            task->execute();
-            // reset memory resource
+            // TODO
+            // Make reservation (prioritize GPU with the same memory space as the input)
+            // If there is a reservation, dispatch to the corresponding GPU executor
+            // If no reservation, use some policy to pick a GPU executor
+            // Dispatch to the selected GPU executor
+            dispatch_to_gpu_executor(std::move(task), 0); // For now we just dispatch to GPU 0
         } catch (const std::exception& e) {
             on_task_error(worker_id, std::move(task), e);
         }
     }
 }
 
-gpu_pipeline_task* gpu_pipeline_executor::cast_to_gpu_pipeline_task(itask* task) {
-    // Safely cast to gpu_pipeline_task
-    return dynamic_cast<gpu_pipeline_task*>(task);
+void pipeline_executor::dispatch_to_gpu_executor(sirius::unique_ptr<itask> task, int gpu_id) {
+    if (gpu_id < 0 || gpu_id >= static_cast<int>(_gpu_executors.size())) {
+        throw std::runtime_error("Invalid GPU ID: " + std::to_string(gpu_id));
+    }
+    _gpu_executors[gpu_id]->schedule(std::move(task));
 }
 
 } // namespace parallel

@@ -15,31 +15,33 @@
  */
 
 #include "pipeline/gpu_pipeline_task.hpp"
+#include "data/data_repository_manager.hpp"
 
 namespace sirius {
 namespace parallel {
 
-gpu_pipeline_task::gpu_pipeline_task(uint64_t task_id, sirius::unique_ptr<itask_local_state> local_state,
+gpu_pipeline_task::gpu_pipeline_task(sirius::unique_ptr<itask_local_state> local_state,
                                      sirius::shared_ptr<itask_global_state> global_state)
-    : itask(std::move(local_state), std::move(global_state)), _task_id(task_id) {}
+    : itask(std::move(local_state), std::move(global_state)) {}
 
 uint64_t gpu_pipeline_task::get_task_id() const {
-    return _task_id;
+    return _local_state->cast<gpu_pipeline_task_local_state>()._task_id;
 }
 
 const duckdb::GPUPipeline* gpu_pipeline_task::get_pipeline() const {
-    return _global_state->cast<gpu_pipeline_task_local_state>()._pipeline.get();
+    return _global_state->cast<gpu_pipeline_task_global_state>()._pipeline.get();
 }
 
 void gpu_pipeline_task::execute() {
    // Execute the task
+   // Call cudf operators
    mark_task_completion();
 }
 
 void gpu_pipeline_task::mark_task_completion() {
     // notify TaskCreator about task completion
     uint64_t task_id = _local_state->cast<gpu_pipeline_task_local_state>()._task_id;
-    uint64_t pipeline_id = _local_state->cast<gpu_pipeline_task_local_state>()._pipeline_id;
+    uint64_t pipeline_id = _local_state->cast<gpu_pipeline_task_global_state>()._pipeline_id;
     auto message = sirius::make_unique<sirius::task_completion_message>();
     message->task_id = task_id;
     message->pipeline_id = pipeline_id;
@@ -48,7 +50,7 @@ void gpu_pipeline_task::mark_task_completion() {
 }
 
 void gpu_pipeline_task::push_data_batch(sirius::unique_ptr<data_batch> batch, uint64_t pipeline_id) {
-    _global_state->cast<gpu_pipeline_task_global_state>()._data_repository_manager.add_new_data_batch(std::move(batch), {pipeline_id});
+    _global_state->cast<gpu_pipeline_task_global_state>()._data_repo_mgr.add_new_data_batch(std::move(batch), {pipeline_id});
 }
 
 } // namespace parallel

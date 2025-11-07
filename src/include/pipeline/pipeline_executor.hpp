@@ -18,6 +18,7 @@
 #include "parallel/task_executor.hpp"
 #include "memory/memory_reservation.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
+#include "pipeline/gpu_pipeline_executor.hpp"
 #include "data/data_repository.hpp"
 
 namespace sirius {
@@ -30,25 +31,25 @@ namespace parallel {
  * task scheduling. It manages a pool of threads dedicated to executing GPU pipeline
  * tasks with specialized GPU resource management.
  */
-class gpu_pipeline_executor : public itask_executor {
+class pipeline_executor : public itask_executor {
 public:
 /**
  * @brief Constructs a new gpu_pipeline_executor with task execution configuration
  * 
  * @param config Configuration for the task executor (thread count, retry policy, etc.)
  */
-explicit gpu_pipeline_executor(task_executor_config config);
+explicit pipeline_executor(task_executor_config config);
 
     /**
      * @brief Destructor for the gpu_pipeline_executor.
      */
-    ~gpu_pipeline_executor() override = default;
+    ~pipeline_executor() override = default;
 
     // Non-copyable but movable
-    gpu_pipeline_executor(const gpu_pipeline_executor&) = delete;
-    gpu_pipeline_executor& operator=(const gpu_pipeline_executor&) = delete;
-    gpu_pipeline_executor(gpu_pipeline_executor&&) = default;
-    gpu_pipeline_executor& operator=(gpu_pipeline_executor&&) = default;
+    pipeline_executor(const pipeline_executor&) = delete;
+    pipeline_executor& operator=(const pipeline_executor&) = delete;
+    pipeline_executor(pipeline_executor&&) = default;
+    pipeline_executor& operator=(pipeline_executor&&) = default;
 
     /**
      * @brief Schedules a task for execution with GPU-specific logic
@@ -87,15 +88,16 @@ explicit gpu_pipeline_executor(task_executor_config config);
      */
     void stop() override;
 
-private:
     /**
-     * @brief Safely casts itask to gpu_pipeline_task with type validation
+     * @brief Dispatch a task to a specific GPU executor based on GPU ID
      * 
-     * @param task The itask pointer to cast
-     * @return gpu_pipeline_task* The casted gpu_pipeline_task pointer
-     * @throws std::bad_cast if the task is not of type gpu_pipeline_task
+     * @param task The task to schedule
+     * @param gpu_id The GPU ID to which the task should be scheduled
      */
-    gpu_pipeline_task* cast_to_gpu_pipeline_task(itask* task);
+    void dispatch_to_gpu_executor(sirius::unique_ptr<itask> task, int gpu_id);
+
+private:
+    sirius::vector<sirius::unique_ptr<gpu_pipeline_executor>> _gpu_executors; ///< Vector of GPU executors
 };
 
 } // namespace parallel
