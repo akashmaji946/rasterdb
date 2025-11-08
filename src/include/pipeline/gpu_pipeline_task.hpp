@@ -78,11 +78,19 @@ public:
      */
     explicit gpu_pipeline_task_local_state(uint64_t task_id, 
         sirius::vector<sirius::unique_ptr<data_batch_view>> batch_views,
-        sirius::memory::reservation reservation) : 
-        _task_id(task_id), _batch_views(std::move(batch_views)) {}
+        sirius::unique_ptr<sirius::memory::reservation> res = nullptr) : 
+        _task_id(task_id), _batch_views(std::move(batch_views)), 
+        _reservation(std::move(res)) {}
     
     uint64_t _task_id; ///< Unique identifier for this task
     sirius::vector<sirius::unique_ptr<data_batch_view>> _batch_views; ///< Input data batch views for the pipeline
+
+    void set_reservation(sirius::unique_ptr<sirius::memory::reservation> res) {
+        _reservation = std::move(res);
+    }
+private:
+    sirius::unique_ptr<sirius::memory::reservation> _reservation; ///< Memory reservation for GPU resources
+    // TODO: for now, reservation is passed as a local state, will be null when the task is first created, and will be set when reservation is made
 };
 
 /**
