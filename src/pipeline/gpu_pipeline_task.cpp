@@ -35,7 +35,9 @@ const duckdb::GPUPipeline* gpu_pipeline_task::get_pipeline() const {
 void gpu_pipeline_task::execute() {
    // Execute the task
    // Transfer data batch to GPU memory if not in GPU memory
+   // set reservation_aware_memory_resource_ref as the default cudf allocator
    // Call cudf operators
+   // after each cudf operator, get the peak total bytes to collect statistics
    mark_task_completion();
 }
 
