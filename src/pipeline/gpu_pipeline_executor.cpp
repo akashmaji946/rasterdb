@@ -20,8 +20,8 @@
 namespace sirius {
 namespace parallel {
 
-gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config)
-    : itask_executor(sirius::make_unique<gpu_pipeline_queue>(), config) {}
+gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config, memory::memory_space* mem_space)
+    : itask_executor(sirius::make_unique<gpu_pipeline_queue>(), config), _memory_space_view(mem_space) {}
 
 void gpu_pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
     _task_queue->push(std::move(task));
@@ -67,6 +67,7 @@ void gpu_pipeline_executor::worker_loop(int worker_id) {
         }
         try {
             // TODO:
+            // if reservation hasn't been made, request reservation (blocking)
             // set stream reservation
             task->execute();
             // reset memory resource

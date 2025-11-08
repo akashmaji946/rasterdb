@@ -34,6 +34,7 @@ const duckdb::GPUPipeline* gpu_pipeline_task::get_pipeline() const {
 
 void gpu_pipeline_task::execute() {
    // Execute the task
+   // Transfer data batch to GPU memory if not in GPU memory
    // Call cudf operators
    mark_task_completion();
 }

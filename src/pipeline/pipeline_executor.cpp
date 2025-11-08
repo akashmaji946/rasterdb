@@ -68,9 +68,9 @@ void pipeline_executor::worker_loop(int worker_id) {
         try {
             // TODO
             // Make reservation (prioritize GPU with the same memory space as the input)
-            // If there is a reservation, dispatch to the corresponding GPU executor
-            // If no reservation, use some policy to pick a GPU executor
-            // Dispatch to the selected GPU executor
+            // If approved, dispatch to the corresponding GPU executor
+            // If no reservation, use some policy to pick the best GPU executor
+            // Dispatch to the selected GPU executor (the gpu executor will be the one making reservation later)
             dispatch_to_gpu_executor(std::move(task), 0); // For now we just dispatch to GPU 0
         } catch (const std::exception& e) {
             on_task_error(worker_id, std::move(task), e);

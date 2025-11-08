@@ -20,7 +20,6 @@
  #include "parallel/task_executor.hpp"
  #include "helper/helper.hpp"
  #include "pipeline/gpu_pipeline_task.hpp"
-//  #include "task_completion.hpp"
  #include <semaphore>
  #include "config.hpp"
  

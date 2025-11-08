@@ -19,6 +19,7 @@
 #include "memory/memory_reservation.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "data/data_repository.hpp"
+#include "memory/memory_space.hpp"
 
 namespace sirius {
 namespace parallel {
@@ -32,12 +33,12 @@ namespace parallel {
  */
 class gpu_pipeline_executor : public itask_executor {
 public:
-/**
- * @brief Constructs a new gpu_pipeline_executor with task execution configuration
- * 
- * @param config Configuration for the task executor (thread count, retry policy, etc.)
- */
-explicit gpu_pipeline_executor(task_executor_config config);
+    /**
+     * @brief Constructs a new gpu_pipeline_executor with task execution configuration
+     * 
+     * @param config Configuration for the task executor (thread count, retry policy, etc.)
+     */
+    explicit gpu_pipeline_executor(task_executor_config config, memory::memory_space* mem_space);
 
     /**
      * @brief Destructor for the gpu_pipeline_executor.
@@ -87,6 +88,13 @@ explicit gpu_pipeline_executor(task_executor_config config);
      */
     void stop() override;
 
+    /**
+     * @brief Get the memory space view associated with this executor
+     * 
+     * @return memory::memory_space* Pointer to the memory space
+     */
+    memory::memory_space* get_memory_space_view();
+
 private:
     /**
      * @brief Safely casts itask to gpu_pipeline_task with type validation
@@ -96,6 +104,7 @@ private:
      * @throws std::bad_cast if the task is not of type gpu_pipeline_task
      */
     gpu_pipeline_task* cast_to_gpu_pipeline_task(itask* task);
+    memory::memory_space* _memory_space_view; // this is supposed to be the memory space associated with this pipeline executor
 };
 
 } // namespace parallel

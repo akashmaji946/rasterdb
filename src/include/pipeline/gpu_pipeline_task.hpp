@@ -78,7 +78,7 @@ public:
      */
     explicit gpu_pipeline_task_local_state(uint64_t task_id, 
         sirius::vector<sirius::unique_ptr<data_batch_view>> batch_views,
-        ::sirius::memory::reservation reservation) : 
+        sirius::memory::reservation reservation) : 
         _task_id(task_id), _batch_views(std::move(batch_views)) {}
     
     uint64_t _task_id; ///< Unique identifier for this task
