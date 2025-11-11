@@ -1,0 +1,672 @@
+{
+  "lockfile-version": 1,
+  "manifest": {
+    "version": 1,
+    "install": {
+      "ccache": {
+        "pkg-path": "ccache"
+      },
+      "cmake": {
+        "pkg-path": "cmake"
+      },
+      "cuda_cccl": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_cccl"
+      },
+      "cuda_cudart": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_cudart",
+        "priority": 1
+      },
+      "cuda_cuobjdump": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_cuobjdump"
+      },
+      "cuda_gdb": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_gdb"
+      },
+      "cuda_nsight": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_nsight"
+      },
+      "cuda_nvcc": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_nvcc"
+      },
+      "cuda_nvml_dev": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_nvml_dev"
+      },
+      "cuda_nvtx": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_nvtx"
+      },
+      "cuda_profiler_api": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_profiler_api"
+      },
+      "cuda_sanitizer_api": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cuda_sanitizer_api"
+      },
+      "cudatoolkit": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.cudatoolkit"
+      },
+      "libcufile": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.libcufile"
+      },
+      "ninja": {
+        "pkg-path": "ninja"
+      },
+      "nsight_compute": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.nsight_compute"
+      },
+      "nsight_systems": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.nsight_systems",
+        "priority": 2
+      },
+      "nvidia_fs": {
+        "pkg-path": "flox-cuda/cudaPackages_13_0.nvidia_fs"
+      },
+      "sccache": {
+        "pkg-path": "sccache"
+      }
+    },
+    "vars": {
+      "CMAKE_PREFIX_PATH": "/home/aaramoon/miniconda3/envs/libcudf-env",
+      "DUCKDB_PLATFORM": "linux_amd64",
+      "LIBCUDF_ENV_PREFIX": "/home/aaramoon/miniconda3/envs/libcudf-env"
+    },
+    "hook": {},
+    "profile": {},
+    "options": {
+      "systems": [
+        "x86_64-linux"
+      ]
+    },
+    "services": {
+      "sccache": {
+        "command": "sccache --start-server"
+      }
+    }
+  },
+  "packages": [
+    {
+      "attr_path": "ccache",
+      "broken": false,
+      "derivation": "/nix/store/pza1vmi8wa1ibfji4586zx1qvqg18nm1-ccache-4.11.3.drv",
+      "description": "Compiler cache for fast recompilation of C/C++ code",
+      "install_id": "ccache",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "ccache-4.11.3",
+      "pname": "ccache",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-05T17:10:00.934255Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "4.11.3",
+      "outputs_to_install": [
+        "man",
+        "out"
+      ],
+      "outputs": {
+        "man": "/nix/store/mb7hp9d7i64rhv3ygd696z2v4kzkc88x-ccache-4.11.3-man",
+        "out": "/nix/store/5bhzas8rqsspzsk9mz4n5i65xkfralw4-ccache-4.11.3"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cmake",
+      "broken": false,
+      "derivation": "/nix/store/gd0nv11wipc8750vqd4vx1f9hpk0pmp0-cmake-4.1.2.drv",
+      "description": "Cross-platform, open-source build system generator",
+      "install_id": "cmake",
+      "license": "BSD-3-Clause",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cmake-4.1.2",
+      "pname": "cmake",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-05T17:10:01.152437Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "4.1.2",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/6xgz1k0maw0pf5jmnrpfrir9zzk9bxmj-cmake-4.1.2-debug",
+        "out": "/nix/store/5bn5f4ivqf4xn19khh4kcg4ngnjs6spg-cmake-4.1.2"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_cccl",
+      "broken": false,
+      "derivation": "/nix/store/9vj1dhl0bmmzilcdrwizxzbn5aax4i3y-cuda13.0-cuda_cccl-13.0.85.drv",
+      "description": "Building blocks that make it easier to write safe and efficient CUDA C++ code",
+      "install_id": "cuda_cccl",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_cccl-13.0.85",
+      "pname": "cuda_cccl",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748286513Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/jrmdcny53xnc620mkjdczip0lar3axjd-cuda13.0-cuda_cccl-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_cudart",
+      "broken": false,
+      "derivation": "/nix/store/cd7i3mw6qfjb9rpw44c5cbs7b4ak01dv-cuda13.0-cuda_cudart-13.0.96.drv",
+      "description": "CUDA Runtime",
+      "install_id": "cuda_cudart",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_cudart-13.0.96",
+      "pname": "cuda_cudart",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748287653Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.96",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/fdbvz8gfj0gbk3w9pcm762n7r4kva94w-cuda13.0-cuda_cudart-13.0.96"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 1
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_cuobjdump",
+      "broken": false,
+      "derivation": "/nix/store/c6cw9xm977h0zh8j07jk8id0bh5nwn85-cuda13.0-cuda_cuobjdump-13.0.85.drv",
+      "description": "Extracts information from CUDA binary files (both standalone and those embedded in host binaries) and presents them in human readable format",
+      "install_id": "cuda_cuobjdump",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_cuobjdump-13.0.85",
+      "pname": "cuda_cuobjdump",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748288604Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/i2bjlgfkyn73939ppwc7pcpy056nvipg-cuda13.0-cuda_cuobjdump-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_gdb",
+      "broken": false,
+      "derivation": "/nix/store/fa376f89f1kzji374zqyhhhif2362g0m-cuda13.0-cuda_gdb-13.0.85.drv",
+      "description": "NVIDIA tool for debugging CUDA applications on Linux and QNX systems",
+      "install_id": "cuda_gdb",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_gdb-13.0.85",
+      "pname": "cuda_gdb",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748290844Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "bin"
+      ],
+      "outputs": {
+        "bin": "/nix/store/mq9vd9mnkyswi23h0x1vzknaxkm4fwba-cuda13.0-cuda_gdb-13.0.85-bin",
+        "out": "/nix/store/q3wvcq57brw0xsyyiad6670zxqfz6pzy-cuda13.0-cuda_gdb-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_nsight",
+      "broken": false,
+      "derivation": "/nix/store/98av4b9np0iaaa564b582in72n97cknj-cuda13.0-cuda_nsight-13.0.85.drv",
+      "description": "Nsight Eclipse Plugins Edition",
+      "install_id": "cuda_nsight",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_nsight-13.0.85",
+      "pname": "cuda_nsight",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748292013Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/rx51fwwjsb301cqwxsfhqv870zvykisx-cuda13.0-cuda_nsight-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_nvcc",
+      "broken": false,
+      "derivation": "/nix/store/9y1q4s1mhhhkx0kx20mq961myhl9xbss-cuda13.0-cuda_nvcc-13.0.88.drv",
+      "description": "CUDA compiler driver",
+      "install_id": "cuda_nvcc",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_nvcc-13.0.88",
+      "pname": "cuda_nvcc",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748293144Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.88",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/xx34wa470ycnbacbpkx77x78kn51hvwz-cuda13.0-cuda_nvcc-13.0.88"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_nvml_dev",
+      "broken": false,
+      "derivation": "/nix/store/jnzbxlv56vz6xlmppdzkdmrp4gg2jghb-cuda13.0-cuda_nvml_dev-13.0.87.drv",
+      "description": "C-based programmatic interface for monitoring and managing various states within Data Center GPUs",
+      "install_id": "cuda_nvml_dev",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_nvml_dev-13.0.87",
+      "pname": "cuda_nvml_dev",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748294474Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.87",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/dwpnwrgl778qkkn4842h89aygg6ahlsj-cuda13.0-cuda_nvml_dev-13.0.87-dev",
+        "include": "/nix/store/fbsdf6yjwfkb26gqavb07hf6yrprnh9x-cuda13.0-cuda_nvml_dev-13.0.87-include",
+        "out": "/nix/store/1qngy4bpw291br96ps4xs7495j1kw1ij-cuda13.0-cuda_nvml_dev-13.0.87",
+        "stubs": "/nix/store/q9v7vlrs3939ygrwiglfy37lqf15ca54-cuda13.0-cuda_nvml_dev-13.0.87-stubs"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_nvtx",
+      "broken": false,
+      "derivation": "/nix/store/6ky9pmsxdxdhik55nvjmqpdys9hwfxgw-cuda13.0-cuda_nvtx-13.0.85.drv",
+      "description": "C-based Application Programming Interface (API) for annotating events, code ranges, and resources in your applications",
+      "install_id": "cuda_nvtx",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_nvtx-13.0.85",
+      "pname": "cuda_nvtx",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748296684Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/bshs9l54i77v47dfyk81vs0fwm05nk83-cuda13.0-cuda_nvtx-13.0.85-dev",
+        "include": "/nix/store/kjcxazg7r0jhnnz3zhnw193jz60hbcf4-cuda13.0-cuda_nvtx-13.0.85-include",
+        "lib": "/nix/store/9k62g3dp7acy2wx3vbc0mwnmwbhkqds5-cuda13.0-cuda_nvtx-13.0.85-lib",
+        "out": "/nix/store/n3b2ymh1d1v9vlq605l1hj90h340771c-cuda13.0-cuda_nvtx-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_profiler_api",
+      "broken": false,
+      "derivation": "/nix/store/dd22nkbi88kb62lnhp6hb3aswia5jbd0-cuda13.0-cuda_profiler_api-13.0.85.drv",
+      "description": "API for profiling CUDA runtime",
+      "install_id": "cuda_profiler_api",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_profiler_api-13.0.85",
+      "pname": "cuda_profiler_api",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748298074Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/y8l5r183p4gl4vxaq2l4cybfpgr464n9-cuda13.0-cuda_profiler_api-13.0.85-dev",
+        "include": "/nix/store/26nnzj4q4gw6dmkggmywifvdcpmjbgcg-cuda13.0-cuda_profiler_api-13.0.85-include",
+        "out": "/nix/store/zn42jdqqcslwrndp15bqyxrdyj6afsm0-cuda13.0-cuda_profiler_api-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cuda_sanitizer_api",
+      "broken": false,
+      "derivation": "/nix/store/76f91kqnqvv6g1lj6avqhw1n6hjl71xn-cuda13.0-cuda_sanitizer_api-13.0.85.drv",
+      "description": "Enables the creation of sanitizing and tracing tools that target CUDA applications",
+      "install_id": "cuda_sanitizer_api",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-cuda_sanitizer_api-13.0.85",
+      "pname": "cuda_sanitizer_api",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748298834Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0.85",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/9pglyw9p9db60274pgz8s0cq50csd295-cuda13.0-cuda_sanitizer_api-13.0.85"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.cudatoolkit",
+      "broken": false,
+      "derivation": "/nix/store/0y00lz69llqkxy5ag6hbdm3yhym9jmnk-cuda-merged-13.0.drv",
+      "description": "Wrapper substituting the deprecated runfile-based CUDA installation",
+      "install_id": "cudatoolkit",
+      "license": "CUDA Toolkit End User License Agreement (EULA)",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda-merged-13.0",
+      "pname": "cuda-merged-13.0",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748299544Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "13.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/n460yg40fbk1088vy5m2qqcphnxs0xir-cuda-merged-13.0"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.libcufile",
+      "broken": false,
+      "derivation": "/nix/store/lbnzlxn4xga12a5pizpdahin09ykjhgy-cuda13.0-libcufile-1.15.1.6.drv",
+      "description": "Library to leverage GDS technology",
+      "install_id": "libcufile",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-libcufile-1.15.1.6",
+      "pname": "libcufile",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748301004Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "1.15.1.6",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/wspzr9y796k1424ak5q4w4nq323cb0qp-cuda13.0-libcufile-1.15.1.6-dev",
+        "include": "/nix/store/6fflcax87qyvwr6np4f2rbqflqzigpb1-cuda13.0-libcufile-1.15.1.6-include",
+        "lib": "/nix/store/xikzkrb0vrsc9618n1s3xpmps3a4rfbd-cuda13.0-libcufile-1.15.1.6-lib",
+        "out": "/nix/store/6a2pzf6izgnaa8mgv3fvwhmqh11bj2n3-cuda13.0-libcufile-1.15.1.6",
+        "static": "/nix/store/99a3p4cjdzp9812kz12hi5jly741qxia-cuda13.0-libcufile-1.15.1.6-static"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "ninja",
+      "broken": false,
+      "derivation": "/nix/store/kyvklhz1bwf48pxcdmfhsjamdxgj1l4h-ninja-1.13.1.drv",
+      "description": "Small build system with a focus on speed",
+      "install_id": "ninja",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "ninja-1.13.1",
+      "pname": "ninja",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-05T17:10:38.848369Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.13.1",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/asj4vdlgiqpcqc45lq29r4hv4wlfbl63-ninja-1.13.1"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.nsight_compute",
+      "broken": false,
+      "derivation": "/nix/store/7cdb58a1qya7rhzx7jw45n2s2vsnadz0-cuda13.0-nsight_compute-2025.3.1.4.drv",
+      "description": "Interactive profiler for CUDA and NVIDIA OptiX",
+      "install_id": "nsight_compute",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-nsight_compute-2025.3.1.4",
+      "pname": "nsight_compute",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748302994Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "2025.3.1.4",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/2l4ll3x13183yjpn0zs38dak2pamzm9j-cuda13.0-nsight_compute-2025.3.1.4"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cudaPackages_13_0.nsight_systems",
+      "broken": false,
+      "derivation": "/nix/store/2v4ihkzrs8hrwpa65bdxvslhz37yliyz-cuda13.0-nsight_systems-2025.3.2.474.drv",
+      "description": "System-wide performance analysis and visualization tool",
+      "install_id": "nsight_systems",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-nsight_systems-2025.3.2.474",
+      "pname": "nsight_systems",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748303754Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "2025.3.2.474",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/v0n2a0q5xkndn5wqr0izamzp5vss9zki-cuda13.0-nsight_systems-2025.3.2.474"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 2
+    },
+    {
+      "attr_path": "cudaPackages_13_0.nvidia_fs",
+      "broken": false,
+      "derivation": "/nix/store/9i7jiwwgc69l9n4mzyhfgmdmrw22fq6c-cuda13.0-nvidia_fs-2.26.6.drv",
+      "description": "GPUDirect Storage kernel driver to read/write data from supported storage using cufile APIs",
+      "install_id": "nvidia_fs",
+      "license": "[ CUDA Toolkit End User License Agreement (EULA) ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "cuda13.0-nvidia_fs-2.26.6",
+      "pname": "nvidia_fs",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-10T23:59:33.748304514Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": true,
+      "version": "2.26.6",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/hqhv0vvpl3gyjq2jn8rq6a60sszy4gnz-cuda13.0-nvidia_fs-2.26.6"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "sccache",
+      "broken": false,
+      "derivation": "/nix/store/m8rj6v7dxgg23qw90wrjnd96199dgqcw-sccache-0.12.0.drv",
+      "description": "Ccache with Cloud Storage",
+      "install_id": "sccache",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "name": "sccache-0.12.0",
+      "pname": "sccache",
+      "rev": "08dacfca559e1d7da38f3cf05f1f45ee9bfd213c",
+      "rev_count": 886100,
+      "rev_date": "2025-10-28T17:26:24Z",
+      "scrape_date": "2025-11-05T17:12:25.070046Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.12.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/zq7ldp4p3mzpnipkpai2vhbr3kr8spf6-sccache-0.12.0"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    }
+  ]
+}

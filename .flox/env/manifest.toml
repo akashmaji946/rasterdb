@@ -1,0 +1,126 @@
+## Flox Environment Manifest -----------------------------------------
+##
+##   _Everything_ you need to know about the _manifest_ is here:
+##
+##   https://flox.dev/docs/reference/command-reference/manifest.toml/
+##
+## -------------------------------------------------------------------
+# Flox manifest version managed by Flox CLI
+version = 1
+
+
+## Install Packages --------------------------------------------------
+##  $ flox install gum  <- puts a package in [install] section below
+##  $ flox search gum   <- search for a package
+##  $ flox show gum     <- show all versions of a package
+## -------------------------------------------------------------------
+[install]
+cuda_nvcc.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_nvcc"
+cuda_cudart.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_cudart"
+cuda_cudart.priority = 1
+cudatoolkit.pkg-path = "flox-cuda/cudaPackages_13_0.cudatoolkit"
+cuda_sanitizer_api.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_sanitizer_api"
+cuda_profiler_api.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_profiler_api"
+nsight_systems.pkg-path = "flox-cuda/cudaPackages_13_0.nsight_systems"
+nsight_systems.priority = 2
+nsight_compute.pkg-path = "flox-cuda/cudaPackages_13_0.nsight_compute"
+cuda_cuobjdump.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_cuobjdump"
+cuda_nvml_dev.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_nvml_dev"
+cuda_nsight.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_nsight"
+nvidia_fs.pkg-path = "flox-cuda/cudaPackages_13_0.nvidia_fs"
+libcufile.pkg-path = "flox-cuda/cudaPackages_13_0.libcufile"
+cuda_nvtx.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_nvtx"
+cuda_cccl.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_cccl"
+cuda_gdb.pkg-path = "flox-cuda/cudaPackages_13_0.cuda_gdb"
+cmake.pkg-path = "cmake"
+ninja.pkg-path = "ninja"
+ccache.pkg-path = "ccache"
+sccache.pkg-path = "sccache"
+# gum.pkg-path = "gum"
+# gum.version = "^0.14.5"
+
+
+## Environment Variables ---------------------------------------------
+##  ... available for use in the activated environment
+##      as well as [hook], [profile] scripts and [services] below.
+## -------------------------------------------------------------------
+[vars]
+# INTRO_MESSAGE = "It's gettin' Flox in here"
+LIBCUDF_ENV_PREFIX = "/home/aaramoon/miniconda3/envs/libcudf-env" 
+DUCKDB_PLATFORM = "linux_amd64"
+CMAKE_PREFIX_PATH = "/home/aaramoon/miniconda3/envs/libcudf-env" 
+
+## Activation Hook ---------------------------------------------------
+##  ... run by _bash_ shell when you run 'flox activate'.
+## -------------------------------------------------------------------
+[hook]
+# on-activate = '''
+#   # -> Set variables, create files and directories
+#   # -> Perform initialization steps, e.g. create a python venv
+#   # -> Useful environment variables:
+#   #      - FLOX_ENV_PROJECT=/home/user/example
+#   #      - FLOX_ENV=/home/user/example/.flox/run
+#   #      - FLOX_ENV_CACHE=/home/user/example/.flox/cache
+# '''
+
+
+## Profile script ----------------------------------------------------
+## ... sourced by _your shell_ when you run 'flox activate'.
+## -------------------------------------------------------------------
+[profile]
+# common = '''
+#   gum style \
+#   --foreground 212 --border-foreground 212 --border double \
+#   --align center --width 50 --margin "1 2" --padding "2 4" \
+#     $INTRO_MESSAGE
+# '''
+## Shell-specific customizations such as setting aliases go here:
+# bash = ...
+# zsh  = ...
+# fish = ...
+
+
+## Services ---------------------------------------------------------
+##  $ flox services start             <- Starts all services
+##  $ flox services status            <- Status of running services
+##  $ flox activate --start-services  <- Activates & starts all
+## ------------------------------------------------------------------
+[services]
+sccache.command = "sccache --start-server"
+
+
+## Include ----------------------------------------------------------
+## ... environments to create a composed environment
+## ------------------------------------------------------------------
+[include]
+# environments = [
+#     { dir = "../common" }
+# ]
+
+
+## Build and publish your own packages ------------------------------
+##  $ flox build
+##  $ flox publish
+## ------------------------------------------------------------------
+[build]
+# [build.myproject]
+# description = "The coolest project ever"
+# version = "0.0.1"
+# command = """
+#   mkdir -p $out/bin
+#   cargo build --release
+#   cp target/release/myproject $out/bin/myproject
+# """
+
+
+## Other Environment Options -----------------------------------------
+[options]
+# Systems that environment is compatible with
+systems = [
+#   "aarch64-darwin",
+#   "aarch64-linux",
+#   "x86_64-darwin",
+   "x86_64-linux",
+]
+# Uncomment to disable CUDA detection.
+# cuda-detection = false
