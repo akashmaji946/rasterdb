@@ -85,3 +85,4 @@ COPY customer FROM 'test_datasets/tpch-dbgen/s1/customer.tbl' WITH (HEADER false
 COPY partsupp FROM 'test_datasets/tpch-dbgen/s1/partsupp.tbl' WITH (HEADER false, DELIMITER '|');
 COPY nation FROM 'test_datasets/tpch-dbgen/s1/nation.tbl' WITH (HEADER false, DELIMITER '|');
 COPY region FROM 'test_datasets/tpch-dbgen/s1/region.tbl' WITH (HEADER false, DELIMITER '|');
+
