@@ -95,6 +95,7 @@ public:
 	virtual unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const;
 
 	virtual OperatorResultType Execute(GPUIntermediateRelation &input_relation, GPUIntermediateRelation &output_relation) const;
+	// virtual sirius::vector<sirius::unique_ptr<sirius::data_batch>> Execute(sirius::vector<sirius::unique_ptr<data_batch_view>> input_batch);
 
 	virtual bool ParallelOperator() const {
 		return false;
@@ -112,6 +113,8 @@ public:
 public:
 	//Source Interface
 	virtual SourceResultType GetData(GPUIntermediateRelation &output_relation) const;
+	// virtual sirius::vector<sirius::unique_ptr<sirius::data_batch>> SourceExecute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch);
+
 	virtual unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context,
 	                                                         GlobalSourceState &gstate) const;
 	virtual unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const;
@@ -132,6 +135,8 @@ public:
 public:
 	//Sink interface
 	virtual SinkResultType Sink(GPUIntermediateRelation &input_relation) const;
+	// virtual sirius::vector<sirius::unique_ptr<sirius::data_batch>> SinkExecute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch);
+
 	virtual SinkFinalizeType CombineFinalize(vector<shared_ptr<GPUIntermediateRelation>> &input,
 																	  			 GPUIntermediateRelation& output) const;
 	virtual unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const;

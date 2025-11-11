@@ -50,6 +50,11 @@ OperatorResultType GPUPhysicalOperator::Execute(GPUIntermediateRelation &input_r
 	throw InternalException("Calling Execute on a node that is not an operator!");
 }
 
+// sirius::vector<sirius::unique_ptr<sirius::data_batch>> 
+// GPUPhysicalOperator::Execute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch) {
+// 	throw InternalException("Calling Execute on a node that is not an operator!");
+// }
+
 //===--------------------------------------------------------------------===//
 // Source
 //===--------------------------------------------------------------------===//
@@ -65,6 +70,11 @@ unique_ptr<GlobalSourceState> GPUPhysicalOperator::GetGlobalSourceState(ClientCo
 SourceResultType GPUPhysicalOperator::GetData(GPUIntermediateRelation& output_relation) const {
 	throw InternalException("Calling GetData on a node that is not a source!");
 }
+
+// sirius::vector<sirius::unique_ptr<sirius::data_batch>>
+// GPUPhysicalOperator::SourceExecute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch) {
+// 	throw InternalException("Calling SourceExecute on a node that is not a source!");
+// }
 
 
 //===--------------------------------------------------------------------===//
@@ -86,6 +96,11 @@ SinkFinalizeType GPUPhysicalOperator::CombineFinalize(vector<shared_ptr<GPUInter
 																				 					  	GPUIntermediateRelation& output) const {
 	throw InternalException("Calling CombineFinalize on a node that is not a sink!");
 }
+
+// sirius::vector<sirius::vector<sirius::unique_ptr<sirius::data_batch>>> 
+// GPUPhysicalOperator::SinkExecute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch) {
+// 	throw InternalException("Calling SinkExecute on a node that is not a source!");
+// }
 
 //===--------------------------------------------------------------------===//
 // Pipeline Construction
