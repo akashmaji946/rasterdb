@@ -16,8 +16,6 @@ set(EXTENSION_SOURCES
         ${EXTENSION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_column_data_scan.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_dummy_scan.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_dummy_merge.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_dummy_partition.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_limit.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_delim_join.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_physical_empty_result.cpp

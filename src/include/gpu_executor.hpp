@@ -58,8 +58,8 @@ public:
 	vector<shared_ptr<GPUPipeline>> scheduled;
 	//! The recursive CTE's in this query plan
 	vector<reference<GPUPhysicalOperator>> recursive_ctes;
-	//! Storage for dummy operators created during pipeline splitting
-	vector<unique_ptr<GPUPhysicalOperator>> dummy_operators;
+	//! Storage for pipeline breaker created during pipeline splitting
+	vector<unique_ptr<GPUPhysicalOperator>> new_pipeline_breakers;
 	//! The current root pipeline index
 	idx_t root_pipeline_idx;
 	//! The amount of completed pipelines of the query
