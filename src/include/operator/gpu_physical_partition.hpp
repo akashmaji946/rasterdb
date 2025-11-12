@@ -21,15 +21,18 @@
 
 namespace duckdb {
 
-class GPUPhysicalDummyMerge : public GPUPhysicalOperator {
+class GPUPhysicalPartition : public GPUPhysicalOperator {
 public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::INVALID;
 
-	explicit GPUPhysicalDummyMerge(vector<LogicalType> types, idx_t estimated_cardinality)
+	explicit GPUPhysicalPartition(vector<LogicalType> types, idx_t estimated_cardinality)
 	    : GPUPhysicalOperator(PhysicalOperatorType::INVALID, std::move(types), estimated_cardinality) {
 	}
 
-  	string GetName() const override; 
+  	string GetName() const override {
+		return "PARTITION";
+	}
+	
 	bool IsSource() const override {
 		return true;
 	}
@@ -38,8 +41,7 @@ public:
 		return true;
 	}
 
-	SourceResultType GetData(GPUIntermediateRelation& output_relation) const override;
-	
-	SinkResultType Sink(GPUIntermediateRelation &input_relation) const override;
+private:
+    vector<idx_t> _partition_keys;
 };
 } // namespace duckdb

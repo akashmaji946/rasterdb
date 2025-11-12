@@ -25,7 +25,7 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "operator/gpu_physical_table_scan.hpp"
-#include "operator/gpu_physical_dummy_partition.hpp"
+#include "operator/gpu_physical_partition.hpp"
 #include "log/logging.hpp"
 #include <iostream>
 #include <stdio.h>
@@ -45,7 +45,7 @@ GPUExecutor::Reset() {
 	total_pipelines = 0;
 	// error_manager.Reset();
 	pipelines.clear();
-	dummy_operators.clear();
+	new_pipeline_breakers.clear();
 	// gpuBufferManager->ResetBuffer();
 	// events.clear();
 	// to_be_rescheduled_tasks.clear();
@@ -289,29 +289,89 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				auto current_pipeline = scheduled[i];  // Copy shared_ptr to avoid invalidation
 				
 				// Store original dependencies to preserve them
-				auto original_dependencies = current_pipeline->dependencies;
+				auto original_dependencies = std::move(current_pipeline->dependencies);
 				
 				vector<idx_t> hash_join_positions;
 				
-				// Find all HASH_JOIN operators in the pipeline (not SOURCE or SINK)
 				for (idx_t op_idx = 0; op_idx < current_pipeline->operators.size(); op_idx++) {
 					if (current_pipeline->operators[op_idx].get().type == PhysicalOperatorType::HASH_JOIN) {
 						hash_join_positions.push_back(op_idx);
 					}
 				}
 
+				bool group_sort_topn_source = false;
+				if (current_pipeline->source->type == PhysicalOperatorType::HASH_GROUP_BY || current_pipeline->source->type == PhysicalOperatorType::ORDER_BY ||
+					current_pipeline->source->type == PhysicalOperatorType::TOP_N) {
+					group_sort_topn_source = true;
+				}
+
+				bool hash_join_sink = false;
+				if (current_pipeline->sink->type == PhysicalOperatorType::HASH_JOIN) {
+					hash_join_sink = true;
+				}
+
 				shared_ptr<GPUPipeline> previous_pipeline = nullptr;
-				GPUPhysicalDummyPartition* prev_partition_ptr = nullptr;
+				GPUPhysicalPartition* prev_partition_ptr = nullptr;
+
+				if (group_sort_topn_source) {
+					// Create a PARTITION operator
+					auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSource()->types,
+																		current_pipeline->GetSource()->estimated_cardinality);
+					new_pipeline_breakers.push_back(std::move(partition_op));	
+					
+					GPUPhysicalPartition* partition_ptr = 
+						static_cast<GPUPhysicalPartition*>(new_pipeline_breakers.back().get());
+
+					// Create new pipeline: PARTITION -> SINK
+					auto new_pipeline = make_shared_ptr<GPUPipeline>(*this);
+					
+					new_pipeline->sink = partition_ptr;
+					new_pipeline->source = current_pipeline->source;
+					new_pipeline->dependencies = std::move(original_dependencies);
+
+					new_scheduled.push_back(new_pipeline);
+
+					// modify current pipeline
+					current_pipeline->source = partition_ptr;
+					current_pipeline->dependencies.clear();
+					current_pipeline->dependencies.push_back(new_pipeline);
+					new_scheduled.push_back(current_pipeline);
+					previous_pipeline = new_pipeline;
+
+					new_pipeline_breakers.push_back(std::move(partition_op));
+				}
+
+				if (hash_join_sink) {
+					// replace hash join sink with partition
+					// Create a PARTITION operator
+					auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSink()->types,
+																		current_pipeline->GetSink()->estimated_cardinality);
+
+					// replace sink with partition_op
+					GPUPhysicalPartition* partition_ptr = 
+							static_cast<GPUPhysicalPartition*>(partition_op.get());
+
+					current_pipeline->sink = partition_ptr;
+					new_pipeline_breakers.push_back(std::move(partition_op));
+				}
+
 				if (!hash_join_positions.empty()) {
 					for (int hj_idx = 0; hj_idx < hash_join_positions.size(); hj_idx++) {
 						idx_t hash_join_pos = hash_join_positions[hj_idx];
 						
 						// Create a PARTITION operator
-						auto partition_op = make_uniq<GPUPhysicalDummyPartition>(current_pipeline->operators[hash_join_pos].get().types,
-																				current_pipeline->operators[hash_join_pos].get().estimated_cardinality);
-						dummy_operators.push_back(std::move(partition_op));
-						GPUPhysicalDummyPartition* partition_ptr = 
-							static_cast<GPUPhysicalDummyPartition*>(dummy_operators.back().get());
+						if (hash_join_pos == 0) {
+							auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSource()->types,
+																					current_pipeline->GetSource()->estimated_cardinality);
+							new_pipeline_breakers.push_back(std::move(partition_op));	
+						} else {
+							auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->operators[hash_join_pos - 1].get().types,
+																					current_pipeline->operators[hash_join_pos - 1].get().estimated_cardinality);
+							new_pipeline_breakers.push_back(std::move(partition_op));	
+						}
+
+						GPUPhysicalPartition* partition_ptr = 
+							static_cast<GPUPhysicalPartition*>(new_pipeline_breakers.back().get());
 
 						// Create new pipeline: PARTITION -> HASH_JOIN -> ... -> SINK
 						auto new_pipeline = make_shared_ptr<GPUPipeline>(*this);
@@ -324,7 +384,8 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 								new_pipeline->operators.push_back(current_pipeline->operators[j]);
 							}
 							new_pipeline->source = current_pipeline->source;
-							new_pipeline->dependencies = original_dependencies;
+							if (group_sort_topn_source) new_pipeline->dependencies.push_back(previous_pipeline);
+							else new_pipeline->dependencies = std::move(original_dependencies);
 						} else {
 							// Move operators from current pipeline to new pipeline
 							for (idx_t j = hash_join_positions[hj_idx - 1]; j < hash_join_pos; j++) {
@@ -344,6 +405,8 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 
 							// add new pipeline to dependencies
 							current_pipeline->source = partition_ptr;
+							// current_pipeline->dependencies.push_back(new_pipeline);
+							current_pipeline->dependencies.clear();
 							current_pipeline->dependencies.push_back(new_pipeline);
 							new_scheduled.push_back(current_pipeline);
 						}
@@ -352,7 +415,9 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 						previous_pipeline = new_pipeline;
 						prev_partition_ptr = partition_ptr;
 					}
-				} else {
+				} 
+				
+				if (hash_join_positions.empty() && !group_sort_topn_source) {
 					new_scheduled.push_back(current_pipeline);
 				}
 			}
@@ -365,6 +430,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 					printf(" Op %s\n", pipeline->operators[j].get().GetName().c_str());
 				}
 				printf("Sink %s\n", pipeline->sink->GetName().c_str());
+				printf("\n\n");
 			}
 		}
 
@@ -380,27 +446,8 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 
 void 
 GPUExecutor::CancelTasks() {
-	// task.reset();
-
-	// {
-	// 	lock_guard<mutex> elock(executor_lock);
-	// 	// mark the query as cancelled so tasks will early-out
-	// 	cancelled = true;
-		// destroy all pipelines, events and states
-		// TODO: SUPPORT RECURSIVE CTE FOR GPU
-		// for (auto &rec_cte_ref : recursive_ctes) {
-		// 	auto &rec_cte = rec_cte_ref.get().Cast<PhysicalRecursiveCTE>();
-		// 	rec_cte.recursive_meta_pipeline.reset();
-		// }
-		pipelines.clear();
-		root_pipelines.clear();
-	// 	to_be_rescheduled_tasks.clear();
-	// 	events.clear();
-	// }
-	// // Take all pending tasks and execute them until they cancel
-	// while (executor_tasks > 0) {
-	// 	WorkOnTasks();
-	// }
+	pipelines.clear();
+	root_pipelines.clear();
 }
 
 shared_ptr<GPUPipeline> 
@@ -423,48 +470,6 @@ GPUExecutor::CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op) 
 
     return child_pipeline;
 }
-
-// shared_ptr<GPUPipeline> GPUExecutor::SplitPipeline(GPUPipeline &current) {
-//   D_ASSERT(current.operators.size() >= 2);
-//   D_ASSERT(current.source);
-//   D_ASSERT(current.sink);
-    
-//   idx_t split_point = current.operators.size() / 2;
-  
-//   // TODO find a way to make these persist? right now this code definitely does not work
-//   auto dummy_sink = make_uniq<GPUPhysicalDummySink>();
-//   auto dummy_source = make_uniq<GPUPhysicalDummySource>();
-//   auto original_sink = current.sink;
-//   auto original_source = current.source;
-
-//   GPUPhysicalDummySink *dummy_sink_ptr = dummy_sink.get();
-//   GPUPhysicalDummySource *dummy_source_ptr = dummy_source.get();
-//   dummy_source_ptr->SetPairedSink(dummy_sink_ptr);
-    
-//   vector<reference<GPUPhysicalOperator>> first_half_ops;
-//   for (idx_t i = 0; i < split_point; i++) {
-//     first_half_ops.push_back(current.operators[i]);
-//   }
-
-//   vector<reference<GPUPhysicalOperator>> second_half_ops;
-//   for (idx_t i = split_point; i < current.operators.size(); i++) {
-//     second_half_ops.push_back(current.operators[i]);
-//   }
-
-//   pipeline.operators = std::move(first_half_ops);
-//   pipeline.sink = dummy_sink_ptr;
-//   pipeline.source = original_source;
-
-
-//   auto second_pipeline = make_shared_ptr<GPUPipeline>();
-//   second_pipeline.operators = std::move(second_half_ops);
-//   second_pipeline.sink = original_sink;
-//   second_pipeline.source = dummy_source_ptr;
-  
-//   second_pipeline->AddDependency(pipeline.shared_from_this());
-    
-//   return second_pipeline;
-// }
 
 bool 
 GPUExecutor::HasResultCollector() {
