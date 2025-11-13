@@ -26,6 +26,8 @@
 #include "duckdb/execution/execution_context.hpp"
 #include "operator/gpu_physical_table_scan.hpp"
 #include "operator/gpu_physical_partition.hpp"
+#include "operator/gpu_physical_grouped_aggregate.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "log/logging.hpp"
 #include <iostream>
 #include <stdio.h>
@@ -312,6 +314,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 					// Create a PARTITION operator
 					auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSource()->types,
 																		current_pipeline->GetSource()->estimated_cardinality);
+					partition_op->GetPartitionKeys(current_pipeline->GetSource().get());													
 					new_pipeline_breakers.push_back(std::move(partition_op));	
 					
 					GPUPhysicalPartition* partition_ptr = 
@@ -341,6 +344,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 					// Create a PARTITION operator
 					auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSink()->types,
 																		current_pipeline->GetSink()->estimated_cardinality);
+					partition_op->GetPartitionKeys(current_pipeline->GetSink().get(), true);
 
 					// replace sink with partition_op
 					GPUPhysicalPartition* partition_ptr = 
@@ -358,10 +362,12 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 						if (hash_join_pos == 0) {
 							auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->GetSource()->types,
 																					current_pipeline->GetSource()->estimated_cardinality);
+							partition_op->GetPartitionKeys(&current_pipeline->operators[hash_join_pos].get());
 							new_pipeline_breakers.push_back(std::move(partition_op));	
 						} else {
 							auto partition_op = make_uniq<GPUPhysicalPartition>(current_pipeline->operators[hash_join_pos - 1].get().types,
 																					current_pipeline->operators[hash_join_pos - 1].get().estimated_cardinality);
+							partition_op->GetPartitionKeys(&current_pipeline->operators[hash_join_pos].get());
 							new_pipeline_breakers.push_back(std::move(partition_op));	
 						}
 

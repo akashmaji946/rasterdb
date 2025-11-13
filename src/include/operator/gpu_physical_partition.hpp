@@ -18,6 +18,13 @@
 
 #include "duckdb/execution/physical_operator.hpp"
 #include "gpu_physical_operator.hpp"
+#include "operator/gpu_physical_hash_join.hpp"
+#include "operator/gpu_physical_grouped_aggregate.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "operator/gpu_physical_order.hpp"
+#include "operator/gpu_physical_top_n.hpp"
+
+#define PARTITION_SIZE 10000000
 
 namespace duckdb {
 
@@ -25,23 +32,18 @@ class GPUPhysicalPartition : public GPUPhysicalOperator {
 public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::INVALID;
 
-	explicit GPUPhysicalPartition(vector<LogicalType> types, idx_t estimated_cardinality)
-	    : GPUPhysicalOperator(PhysicalOperatorType::INVALID, std::move(types), estimated_cardinality) {
-	}
+	explicit GPUPhysicalPartition(vector<LogicalType> types, idx_t estimated_cardinality);
 
-  	string GetName() const override {
-		return "PARTITION";
-	}
-	
-	bool IsSource() const override {
-		return true;
-	}
+  	string GetName() const override;
 
-    bool IsSink() const override {
-		return true;
-	}
+	bool IsSource() const override;
+
+    bool IsSink() const override;
+
+	void GetPartitionKeys(GPUPhysicalOperator* op, bool is_build = false);
 
 private:
     vector<idx_t> _partition_keys;
+	idx_t _num_partitions;
 };
 } // namespace duckdb
