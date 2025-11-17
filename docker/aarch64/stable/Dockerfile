@@ -25,7 +25,7 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 # Create conda env with libcudf
 RUN conda update -n base -c defaults conda && \
     conda create -n libcudf-env -y && \
-    conda run -n libcudf-env conda install -y -c rapidsai -c conda-forge -c nvidia rapidsai::libcudf=25.04
+    conda run -n libcudf-env conda install -y -c rapidsai -c conda-forge -c nvidia rapidsai::libcudf
 ENV USE_CUDF=1
 ENV LIBCUDF_ENV_PREFIX=$CONDA_DIR/envs/libcudf-env
 ENV LDFLAGS="-Wl,-rpath,$CONDA_PREFIX/lib -L$CONDA_PREFIX/lib $LDFLAGS"
