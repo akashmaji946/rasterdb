@@ -19,7 +19,9 @@
 #include "memory/memory_reservation.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "pipeline/gpu_pipeline_executor.hpp"
+#include "pipeline/task_request.hpp"
 #include "data/data_repository.hpp"
+#include <blockingconcurrentqueue.h>
 
 namespace sirius {
 namespace parallel {
@@ -73,6 +75,9 @@ explicit pipeline_executor(task_executor_config config);
      */
     void worker_loop(int worker_id) override;
 
+    void on_start() override;
+    void on_stop() override;
+
     /**
      * @brief Starts the executor and initializes worker threads
      * 
@@ -96,8 +101,14 @@ explicit pipeline_executor(task_executor_config config);
      */
     void dispatch_to_gpu_executor(sirius::unique_ptr<itask> task, int gpu_id);
 
+    /**
+     * @brief Submit a task request to task_request_queue
+     */
+    void submit_task_request(sirius::unique_ptr<task_request> request);
+
 private:
     sirius::vector<sirius::unique_ptr<gpu_pipeline_executor>> _gpu_executors; ///< Vector of GPU executors
+    sirius::unique_ptr<task_request_queue> _task_request_queue;
 };
 
 } // namespace parallel

@@ -21,6 +21,7 @@
 #include "helper/helper.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "config.hpp"
+#include <blockingconcurrentqueue.h>
 
 namespace sirius {
 namespace parallel {
@@ -36,50 +37,42 @@ class gpu_pipeline_queue : public itask_queue {
 public:
     /**
      * @brief Construct a new gpu_pipeline_queue object
- */
-gpu_pipeline_queue() = default;
+    */
+    gpu_pipeline_queue(size_t num_threads) : _num_threads(num_threads) {};
 
-/**
- * @brief Setups the task queue to start accepting and returning tasks
- */
-void open() override;
+    /**
+     * @brief Setups the task queue to start accepting and returning tasks
+     */
+    void open() override;
 
-/**
- * @brief Closes the task queue from accepting new tasks or returning tasks
- */
-void close() override;
+    /**
+     * @brief Closes the task queue from accepting new tasks or returning tasks
+     */
+    void close() override;
 
-/**
- * @brief Push a new task to be scheduled.
- * 
- * @param task The task to be scheduled
- * @throws sirius::runtime_error If the scheduler is not currently accepting requests
- */
-void push(sirius::unique_ptr<itask> task) override;
+    /**
+     * @brief Push a new task to be scheduled.
+     * 
+     * @param task The task to be scheduled
+     * @throws sirius::runtime_error If the scheduler is not currently accepting requests
+     */
+    void push(sirius::unique_ptr<itask> task) override;
 
-/**
- * @brief Pull a task to execute.
- * 
- * Note that this is a non blocking call and will return nullptr if no task is available. In the future we should
- * consider this call blocking. 
- * 
- * @return A unique pointer to the task to execute if there is one, nullptr otherwise
- * @throws sirius::runtime_error If the scheduler is not currently stopped and thus not returning tasks
- */
-sirius::unique_ptr<itask> pull() override;
-
-/**
- * @brief Check if the task queue is empty
- * 
- * @return true if the queue is empty, false otherwise
- */
-bool is_empty() const;
+    /**
+     * @brief Pull a task to execute.
+     * 
+     * Note that this is a non blocking call and will return nullptr if no task is available. In the future we should
+     * consider this call blocking. 
+     * 
+     * @return A unique pointer to the task to execute if there is one, nullptr otherwise
+     * @throws sirius::runtime_error If the scheduler is not currently stopped and thus not returning tasks
+     */
+    sirius::unique_ptr<itask> pull() override;
 
 private:
-    sirius::queue<sirius::unique_ptr<gpu_pipeline_task>> _task_queue; // The underlying queue storing the tasks
-    bool _is_open = false; // Whether the queue is open for accepting and returning tasks
-    mutable sirius::mutex _mutex;  // mutable to allow locking in const methods
-    std::counting_semaphore<> _sem{0}; // Semaphore to manage task availability
+    size_t _num_threads;
+    duckdb_moodycamel::BlockingConcurrentQueue<sirius::unique_ptr<itask>> _task_queue;
+    std::atomic<bool> _is_open{false}; ///< Whether the queue is open for pushing/pulling tasks
 };
 
 } // namespace parallel

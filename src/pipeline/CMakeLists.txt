@@ -19,5 +19,6 @@ set(EXTENSION_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_pipeline_executor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_queue.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_executor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/task_request.cpp
         PARENT_SCOPE
 )

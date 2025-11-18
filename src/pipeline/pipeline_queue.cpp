@@ -21,52 +21,33 @@ namespace sirius {
 namespace parallel {
 
 void pipeline_queue::open() {
-    sirius::lock_guard<sirius::mutex> lock(_mutex);
-    _is_open = true;
+    _is_open.store(true, std::memory_order_release); 
 }
 
 void pipeline_queue::close() {
-    // Wake up all waiting threads by releasing the semaphore enough times
-    for (int i = 0; i < Config::NUM_PIPELINE_EXECUTOR_THREADS; ++i) {
-        _sem.release();
+    _is_open.store(false, std::memory_order_release);
+    // Wake up all threads blocked in wait_dequeue by pushing nullptr sentinels
+    for (size_t i = 0; i < _num_threads; ++i) {
+        _task_queue.enqueue(nullptr);
     }
-    sirius::lock_guard<sirius::mutex> lock(_mutex);
-    _is_open = false;
 }
 
 void pipeline_queue::push(sirius::unique_ptr<itask> task) {
-    // Convert itask to gpu_pipeline_task - since we know it's a gpu_pipeline_task
-    auto gpu_task = sirius::unique_ptr<gpu_pipeline_task>(static_cast<gpu_pipeline_task*>(task.release()));
-    sirius::lock_guard<sirius::mutex> lock(_mutex);
-    if (gpu_task && _is_open) {
-        _task_queue.push(std::move(gpu_task));
-    }
-    _sem.release(); // signal that one item is available
+    _task_queue.enqueue(std::move(task)); 
 }
 
 sirius::unique_ptr<itask> pipeline_queue::pull() {
-    _sem.acquire(); // wait until there's something
-    sirius::lock_guard<sirius::mutex> lock(_mutex);
-    
-    // If the queue is closed and empty, return nullptr to signal shutdown
-    if (!_is_open && _task_queue.empty()) {
-        return nullptr;
-    }
-    
-    // If there's a task available, return it
-    if (!_task_queue.empty()) {
-        auto task = std::move(_task_queue.front());
-        _task_queue.pop();
-        return task;
-    }
-    
-    // Queue is empty but might be open (spurious semaphore release from close())
-    return nullptr;
-}
+    sirius::unique_ptr<itask> task;
+    while (true) {
+        if (_task_queue.try_dequeue(task)) { return task; }
 
-bool pipeline_queue::is_empty() const {
-    sirius::lock_guard<sirius::mutex> lock(_mutex);
-    return _task_queue.empty();
+        // If the queue is closed and empty, return nullptr to indicate no more tasks.
+        if (!_is_open.load(std::memory_order_acquire)) { return nullptr; }
+
+        // Otherwise, wait for a task to become available.
+        _task_queue.wait_dequeue(task);
+        if (task) { return task; }
+    }
 }
 
 } // namespace parallel

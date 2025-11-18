@@ -20,9 +20,25 @@
 #include "pipeline/gpu_pipeline_task.hpp"
 #include "data/data_repository.hpp"
 #include "memory/memory_space.hpp"
+#include "pipeline/task_request.hpp"
+#include <blockingconcurrentqueue.h>
 
 namespace sirius {
 namespace parallel {
+
+class pipeline_executor;
+
+class local_task_buffer {
+public:
+    local_task_buffer() = default;
+    void produce(sirius::unique_ptr<itask> task);
+    sirius::unique_ptr<itask> consume();
+
+private:
+    std::binary_semaphore _empty{1};
+    std::binary_semaphore _full{0};
+    sirius::unique_ptr<itask> _task;
+};
 
 /**
  * @brief Executor specialized for executing GPU pipeline operations.
@@ -38,7 +54,7 @@ public:
      * 
      * @param config Configuration for the task executor (thread count, retry policy, etc.)
      */
-    explicit gpu_pipeline_executor(task_executor_config config, memory::memory_space* mem_space);
+    explicit gpu_pipeline_executor(task_executor_config config, const memory::memory_space* mem_space, pipeline_executor* pipeline_exec);
 
     /**
      * @brief Destructor for the gpu_pipeline_executor.
@@ -95,6 +111,16 @@ public:
      */
     memory::memory_space* get_memory_space_view();
 
+    /**
+     * @brief Manager loop to consume task from local buffer and dispatch to the thread pool
+     */
+    void manager_loop();
+
+    /**
+     * @brief Submit a task request to task_request_queue
+     */
+    void submit_task_request(sirius::unique_ptr<task_request> request);
+
 private:
     /**
      * @brief Safely casts itask to gpu_pipeline_task with type validation
@@ -104,7 +130,11 @@ private:
      * @throws std::bad_cast if the task is not of type gpu_pipeline_task
      */
     gpu_pipeline_task* cast_to_gpu_pipeline_task(itask* task);
-    memory::memory_space* _memory_space_view; // this is supposed to be the memory space associated with this pipeline executor
+    
+    sirius::unique_ptr<std::thread> _gpu_pipeline_executor_manager_thread;
+    sirius::unique_ptr<local_task_buffer> _local_task_buffer;
+    pipeline_executor* _pipeline_exec;
+    const memory::memory_space* _memory_space_view; // this is supposed to be the memory space associated with this pipeline executor
 };
 
 } // namespace parallel

@@ -16,15 +16,37 @@
 
 #include "pipeline/pipeline_executor.hpp"
 #include "pipeline/pipeline_queue.hpp"
+#include "memory/memory_reservation.hpp"
+#include "config.hpp"
 
 namespace sirius {
 namespace parallel {
 
 pipeline_executor::pipeline_executor(task_executor_config config)
-    : itask_executor(sirius::make_unique<pipeline_queue>(), config) {}
+    : itask_executor(sirius::make_unique<pipeline_queue>(config.num_threads), config) {
+    // Initialize GPU pipeline executors for each available GPU
+    _gpu_executors.reserve(Config::NUM_GPU);
+    for (int i = 0; i < Config::NUM_GPU; ++i) {
+        // TODO: Initialize memory space for each GPU
+        auto& mem_res_mgr = memory::memory_reservation_manager::get_instance();
+        const memory::memory_space* gpu_mem_space = mem_res_mgr.get_memory_space(memory::Tier::GPU, i); // Placeholder
+        _gpu_executors.push_back(sirius::make_unique<gpu_pipeline_executor>(config, gpu_mem_space, this));
+    }
+    _task_request_queue = sirius::make_unique<task_request_queue>(config.num_threads);
+}
 
 void pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
     _task_queue->push(std::move(task));
+}
+
+void pipeline_executor::on_start() {
+    _task_queue->open();
+    _task_request_queue->open();
+}
+
+void pipeline_executor::on_stop() {
+    _task_queue->close();
+    _task_request_queue->close();
 }
  
 void pipeline_executor::start() {
@@ -60,6 +82,7 @@ void pipeline_executor::worker_loop(int worker_id) {
             // Executor is stopped.
             break;
         }
+        auto request = _task_request_queue->pull();
         auto task = _task_queue->pull();
             if (task == nullptr) {
             // Task queue is closed.
@@ -70,12 +93,17 @@ void pipeline_executor::worker_loop(int worker_id) {
             // Make reservation (prioritize GPU with the same memory space as the input)
             // If approved, dispatch to the corresponding GPU executor
             // If no reservation, use some policy to pick the best GPU executor
-            // Dispatch to the selected GPU executor (the gpu executor will be the one making reservation later)
-            dispatch_to_gpu_executor(std::move(task), 0); // For now we just dispatch to GPU 0
+            // Dispatch to the selected GPU executor based on the request
+            int gpu_id = request ? request->device_id : 0;
+            dispatch_to_gpu_executor(std::move(task), gpu_id); // For now we just dispatch to GPU 0
         } catch (const std::exception& e) {
             on_task_error(worker_id, std::move(task), e);
         }
     }
+}
+
+void pipeline_executor::submit_task_request(sirius::unique_ptr<task_request> request) {
+    _task_request_queue->push(std::move(request));
 }
 
 void pipeline_executor::dispatch_to_gpu_executor(sirius::unique_ptr<itask> task, int gpu_id) {
