@@ -1,0 +1,364 @@
+/*
+ * Copyright 2025, Sirius Contributors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
+
+#include <cuda_runtime_api.h>
+
+#include <atomic>
+#include <memory>
+#include <set>
+
+// Include existing reservation system
+#include "cuda_device.hpp"
+#include "memory/common.hpp"
+#include "memory/memory_reservation.hpp"
+#include "memory/oom_handling_policy.hpp"
+
+namespace sirius {
+namespace memory {
+
+struct sirius_out_of_memory : public rmm::out_of_memory {
+  using rmm::out_of_memory::out_of_memory;
+
+  explicit sirius_out_of_memory(std::string_view message,
+                                std::size_t requested_bytes,
+                                std::size_t global_usage)
+    : rmm::out_of_memory(message.data()),
+      requested_bytes(requested_bytes),
+      global_usage(global_usage)
+  {
+  }
+
+  const std::size_t requested_bytes;
+  const std::size_t global_usage;
+};
+
+/**
+ * @brief A memory resource adaptor that tracks allocations on a per-stream basis.
+ *
+ * This adaptor wraps another device memory resource and provides detailed tracking
+ * of allocations per CUDA stream. It maintains both current allocated bytes and
+ * the maximum allocated bytes observed for each stream.
+ *
+ * Features:
+ * - Per-stream allocation tracking
+ * - Maximum allocated bytes tracking per stream
+ * - Thread-safe operations using atomic operations and mutexes
+ * - Reset capability for maximum allocated bytes
+ * - Race condition handling for deallocations after reset
+ *
+ * Based on RMM's tracking_resource_adaptor but extended for per-stream tracking.
+ */
+class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resource {
+  struct reservation_stat_container;
+
+ public:
+  enum class AllocationTrackingScope {
+    PER_STREAM,  // Track allocations separately for each stream
+    PER_THREAD   // Track allocations separately for each host thread
+  };
+
+  /**
+   * @brief Reservation state
+   */
+  struct reservation_state {
+    std::unique_ptr<reservation> memory_reservation;    /// Stream memory reservation (may be null)
+    std::atomic<std::int64_t> peak_allocated_bytes{0};  /// Peak allocated bytes observed
+    std::unique_ptr<reservation_limit_policy>
+      reservation_policy;                             /// Reservation policy for this stream
+    std::unique_ptr<oom_handling_policy> oom_policy;  /// out-of-memory handling policy
+
+    friend class reservation_aware_resource_adaptor;
+
+    reservation_state() = default;
+
+    /**
+     * @brief Checks reservation and handles overflow for an allocation request.
+     *
+     * @param adaptor The reservation aware resource adaptor
+     * @param allocation_size The size of the allocation request
+     * @param stream The CUDA stream for the allocation
+     * @return The tracking size for the allocation
+     */
+    std::size_t check_reservation_and_handle_overflow(reservation_aware_resource_adaptor& adaptor,
+                                                      std::size_t allocation_size,
+                                                      rmm::cuda_stream_view stream);
+
+   private:
+    mutable std::mutex _arbitration_mutex;
+  };
+
+  /**
+   * @brief Container for reservation state management. [Per-stream or per-thread]
+   */
+  struct reservation_state_container {
+    virtual ~reservation_state_container() = default;
+
+    virtual void register_reservation(const reservation& reservation);
+
+    virtual void reset_stream_state(rmm::cuda_stream_view stream);
+
+    virtual void set_stream_state(rmm::cuda_stream_view stream,
+                                  std::unique_ptr<reservation> reservation,
+                                  std::unique_ptr<reservation_limit_policy> policy,
+                                  std::unique_ptr<oom_handling_policy> oom_policy) = 0;
+
+    virtual reservation_state* get_stream_state(rmm::cuda_stream_view stream) = 0;
+
+    virtual const reservation_state* get_stream_state(rmm::cuda_stream_view stream) const = 0;
+  };
+
+  /**
+   * @brief Constructs a per-stream tracking resource adaptor.
+   *
+   * @param upstream The upstream memory resource to wrap
+   * @param capacity The total capacity for allocations
+   * @param tracking_scope [default: PER_STREAM] The scope of allocation tracking (per-stream,
+   * per-thread)
+   */
+  explicit reservation_aware_resource_adaptor(
+    rmm::device_async_resource_ref upstream,
+    std::size_t capacity,
+    std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
+    std::unique_ptr<oom_handling_policy> default_oom_policy             = nullptr,
+    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_STREAM);
+
+  /**
+   * @brief Constructs a per-stream tracking resource adaptor.
+   *
+   * @param upstream The upstream memory resource to wrap
+   * @param capacity The total capacity for allocations
+   * @param memory_limit The memory limit for reservations
+   * @param tracking_scope [default: PER_STREAM] The scope of allocation tracking (per-stream,
+   * per-thread)
+   */
+  explicit reservation_aware_resource_adaptor(
+    rmm::device_async_resource_ref upstream,
+    std::size_t capacity,
+    std::size_t memory_limit,
+    std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
+    std::unique_ptr<oom_handling_policy> default_oom_policy             = nullptr,
+    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_STREAM);
+
+  /**
+   * @brief Destructor.
+   */
+  ~reservation_aware_resource_adaptor() override = default;
+
+  // Non-copyable and non-movable to ensure resource stability
+  reservation_aware_resource_adaptor(const reservation_aware_resource_adaptor&)            = delete;
+  reservation_aware_resource_adaptor& operator=(const reservation_aware_resource_adaptor&) = delete;
+  reservation_aware_resource_adaptor(reservation_aware_resource_adaptor&&)                 = delete;
+  reservation_aware_resource_adaptor& operator=(reservation_aware_resource_adaptor&&)      = delete;
+
+  /**
+   * @brief Gets the upstream memory resource.
+   * @return Reference to the upstream resource
+   */
+  rmm::device_async_resource_ref get_upstream_resource() const noexcept;
+
+  /**
+   * @brief Gets the currently allocated bytes for a specific stream.
+   * @param stream The CUDA stream to query
+   * @return The allocated bytes for the stream
+   */
+  std::size_t get_allocated_bytes(rmm::cuda_stream_view stream) const;
+
+  /**
+   * @brief Gets the peak allocated bytes observed for a specific stream.
+   * @param stream The CUDA stream to query
+   * @return The peak allocated bytes for the stream
+   */
+  std::size_t get_peak_allocated_bytes(rmm::cuda_stream_view stream) const;
+
+  /**
+   * @brief Gets the total currently allocated bytes across all streams.
+   * @return The total allocated bytes
+   */
+  std::size_t get_total_allocated_bytes() const;
+
+  /**
+   * @brief Gets the peak total allocated bytes across all streams.
+   * @return The peak total allocated bytes
+   */
+  std::size_t get_peak_total_allocated_bytes() const;
+
+  /**
+   * @brief Resets the peak allocated bytes for a specific stream to 0.
+   * @param stream The CUDA stream to reset
+   */
+  void reset_peak_allocated_bytes(rmm::cuda_stream_view stream);
+
+  /**
+   * @brief Gets the total reserved bytes across all streams.
+   * @return The total reserved bytes
+   */
+  std::size_t get_total_reserved_bytes() const;
+
+  /**
+   * @brief Checks if a stream is currently being tracked.
+   * @param stream The CUDA stream to check
+   * @return true if the stream is tracked, false otherwise
+   */
+  bool is_stream_tracked(rmm::cuda_stream_view stream) const;
+
+  //===----------------------------------------------------------------------===//
+  // Reservation Management
+  //===----------------------------------------------------------------------===//
+
+  std::unique_ptr<reservation> reserve(std::size_t size_bytes);
+
+  /**
+   * @brief Sets the memory reservation for a specific stream by requesting from the memory manager.
+   * @param stream The CUDA stream to set reservation for
+   * @param reserved_bytes The reservation object (0 = remove reservation)
+   * @param stream_oom_policy The OOM policy for the stream
+   * @return true if reservation was successfully set, false otherwise
+   */
+  bool set_stream_reservation(
+    rmm::cuda_stream_view stream,
+    std::unique_ptr<reservation> reserved_bytes,
+    std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
+    std::unique_ptr<oom_handling_policy> stream_oom_policy              = nullptr);
+
+  /**
+   * @brief Gets the reservation object for a specific stream.
+   * @param stream The CUDA stream to query
+   * @return Pointer to the reservation (may be null if no reservation set)
+   */
+  const reservation* get_stream_reservation(rmm::cuda_stream_view stream) const;
+
+  /**
+   * @brief Sets the default reservation policy for new streams.
+   * @param policy The default policy to use (takes ownership)
+   */
+  void set_default_policy(std::unique_ptr<reservation_limit_policy> policy);
+
+  /**
+   * @brief Gets the default reservation policy.
+   * @return Reference to the default policy
+   */
+  const reservation_limit_policy& get_default_reservation_policy() const;
+
+  /**
+   * @brief Gets the default reservation policy.
+   * @return Reference to the default policy
+   */
+  const oom_handling_policy& get_default_oom_handling_policy() const;
+
+ private:
+  /**
+   * @brief Allocates memory from the upstream resource and tracks it, the oom in this method is not
+   * handled by the oom handler.
+   *
+   * @param bytes The number of bytes to allocate
+   * @param stream The CUDA stream to use for the allocation
+   * @return Pointer to allocated memory
+   */
+  void* do_allocate_managed(std::size_t bytes, rmm::cuda_stream_view stream);
+
+  /**
+   * @brief Allocates memory from the upstream resource and tracks it, the oom in this method is not
+   * handled by the oom handler.
+   *
+   * @param bytes The number of bytes to allocate
+   * @param stream The CUDA stream to use for the allocation
+   * @return Pointer to allocated memory
+   */
+  void* do_allocate_managed(std::size_t bytes,
+                            reservation_state* state,
+                            rmm::cuda_stream_view stream);
+
+  /**
+   * @brief Allocates memory from the upstream resource and tracks it, the oom in this method is not
+   * handled by the oom handler.
+   *
+   * @param bytes The number of bytes to allocate
+   * @param tracking_bytes The number of bytes to track
+   * @param stream The CUDA stream to use for the allocation
+   * @return Pointer to allocated memory
+   */
+  void* do_allocate_unmanaged(std::size_t bytes,
+                              std::size_t tracking_bytes,
+                              rmm::cuda_stream_view stream);
+
+  /**
+   * @brief releases reservations and returns the unsed reservation back to allocator
+   * @param reservation pointer to the reservation being released
+   */
+  bool do_reserve(std::size_t size_bytes, std::size_t limit_bytes);
+
+  /**
+   * @brief releases reservations and returns the unsed reservation back to allocator
+   * @param reservation pointer to the reservation being released
+   */
+  void do_release_reservation(reservation* reservation);
+
+  /**
+   * @brief Allocates memory from the upstream resource and tracks it.
+   *
+   * @param bytes The number of bytes to allocate
+   * @param stream The CUDA stream to use for the allocation
+   * @return Pointer to allocated memory
+   */
+  void* do_allocate(std::size_t bytes, rmm::cuda_stream_view stream) override;
+
+  /**
+   * @brief Deallocates previously allocated memory and updates tracking.
+   *
+   * @param ptr Pointer to memory to deallocate
+   * @param bytes The number of bytes that were allocated
+   * @param stream The CUDA stream to use for the deallocation
+   */
+  void do_deallocate(void* ptr, std::size_t bytes, rmm::cuda_stream_view stream) noexcept override;
+
+  /**
+   * @brief Checks equality with another memory resource.
+   *
+   * @param other The other memory resource to compare with
+   * @return true if this resource is the same as other
+   */
+  bool do_is_equal(const rmm::mr::device_memory_resource& other) const noexcept override;
+
+  Tier tier;
+  rmm::cuda_device_id device_id;
+
+  /// The upstream memory resource
+  rmm::device_async_resource_ref _upstream;
+  const std::size_t _capacity;
+  const std::size_t _memory_limit;
+
+  /// Per-stream allocation tracking
+  std::unique_ptr<reservation_state_container> _reservation_states;
+
+  /// Global totals for efficiency
+  std::atomic<std::size_t> _total_allocated_bytes{0};
+  std::atomic<std::size_t> _peak_total_allocated_bytes{0};
+
+  /// Default policy for new streams
+  std::unique_ptr<reservation_limit_policy> _default_reservation_policy;
+  std::unique_ptr<oom_handling_policy> _default_oom_policy;
+
+  mutable std::mutex reservation_mutex;
+  std::set<const reservation*> reservation_views;
+};
+
+}  // namespace memory
+}  // namespace sirius

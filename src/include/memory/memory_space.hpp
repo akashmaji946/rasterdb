@@ -17,11 +17,10 @@
 #pragma once
 
 #include "memory/common.hpp"
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
+
 #include <memory>
-#include <vector>
+#include <mutex>
+#include <optional>
 #include <string>
 
 // RMM includes for memory resource management
@@ -33,11 +32,12 @@ namespace memory {
 
 // Forward declaration
 struct reservation;
+struct reservation_aware_resource_adaptor;
 
 /**
  * memory_space represents a specific memory location identified by a tier and device ID.
  * It manages memory reservations within that space and owns allocator resources.
- * 
+ *
  * Each memory_space:
  * - Has a fixed memory limit
  * - Tracks active reservations
@@ -45,72 +45,70 @@ struct reservation;
  * - Owns one or more RMM memory allocators
  */
 class memory_space {
-public:
-    /**
-     * Construct a memory_space with the given parameters.
-     * 
-     * @param tier The memory tier (GPU, HOST, DISK)
-     * @param device_id The device identifier within the tier
-     * @param memory_limit Maximum memory capacity in bytes
-     * @param allocators Vector of RMM memory allocators (must be non-empty)
-     */
-    memory_space(Tier tier, size_t device_id, size_t memory_limit, 
-                std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> allocators);
-    
-    // Disable copy/move to ensure stable addresses for reservations
-    memory_space(const memory_space&) = delete;
-    memory_space& operator=(const memory_space&) = delete;
-    memory_space(memory_space&&) = delete;
-    memory_space& operator=(memory_space&&) = delete;
-    
-    ~memory_space() = default;
+ public:
+  /**
+   * Construct a memory_space with the given parameters.
+   *
+   * @param tier The memory tier (GPU, HOST, DISK)
+   * @param device_id The device identifier within the tier
+   * @param memory_limit Maximum memory capacity in bytes
+   * @param allocator RMM memory allocator (must be non-empty)
+   * @param capacity Total memory capacity in bytes (optional [default: device capacity])
+   */
+  memory_space(Tier tier,
+               int device_id,
+               size_t memory_limit,
+               std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> allocators,
+               std::optional<std::size_t> capacity = std::nullopt);
 
-    // Comparison operators
-    bool operator==(const memory_space& other) const;
-    bool operator!=(const memory_space& other) const;
+  // Disable copy/move to ensure stable addresses for reservations
+  memory_space(const memory_space&)            = delete;
+  memory_space& operator=(const memory_space&) = delete;
+  memory_space(memory_space&&)                 = delete;
+  memory_space& operator=(memory_space&&)      = delete;
 
-    // Basic properties
-    Tier get_tier() const;
-    size_t get_device_id() const;
-    
-    // Reservation management - these are the core methods that do the actual work
-    std::unique_ptr<reservation> request_reservation(size_t size);
-    void release_reservation(std::unique_ptr<reservation> res);
-    
-    bool shrink_reservation(reservation* res, size_t new_size);
-    bool grow_reservation(reservation* res, size_t new_size);
-    
-    // State queries
-    size_t get_available_memory() const;
-    size_t get_total_reserved_memory() const;
-    size_t get_max_memory() const;
-    size_t get_active_reservation_count() const;
-    
-    // Allocator management
-    rmm::device_async_resource_ref get_default_allocator() const;
-    rmm::device_async_resource_ref get_allocator(size_t index) const;
-    size_t get_allocator_count() const;
-    
-    // Utility methods
-    bool can_reserve(size_t size) const;
-    std::string to_string() const;
+  ~memory_space();
 
-private:
-    const Tier _tier;
-    const size_t _device_id;
-    const size_t _memory_limit;
-    
-    // Memory resources owned by this memory_space
-    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> _allocators;
-    
-    mutable std::mutex _mutex;
-    std::condition_variable _cv;
-    
-    std::atomic<size_t> _total_reserved{0};
-    std::atomic<size_t> _active_count{0};
-    
-    void wait_for_memory(size_t size, std::unique_lock<std::mutex>& lock);
-    bool validate_reservation(const reservation* res) const;
+  // Comparison operators
+  bool operator==(const memory_space& other) const;
+  bool operator!=(const memory_space& other) const;
+
+  // Basic properties
+  Tier get_tier() const;
+  int get_device_id() const;
+
+  // Reservation management - these are the core methods that do the actual work
+  std::unique_ptr<reservation> request_reservation(size_t size);
+  void release_reservation(std::unique_ptr<reservation> res);
+
+  bool shrink_reservation(reservation* res, size_t new_size);
+  bool grow_reservation(reservation* res, size_t new_size);
+
+  // State queries
+  size_t get_available_memory() const;
+  size_t get_total_reserved_memory() const;
+  size_t get_max_memory() const;
+  size_t get_active_reservation_count() const;
+
+  // Allocator management
+  rmm::device_async_resource_ref get_default_allocator() const noexcept;
+
+  // Utility methods
+  bool can_reserve(size_t size) const;
+  std::string to_string() const;
+
+ private:
+  const Tier _tier;
+  const int _device_id;
+  const size_t _memory_limit;
+  const size_t _capacity;
+
+  // Memory resources owned by this memory_space
+  std::unique_ptr<rmm::mr::device_memory_resource> _allocator;
+  std::unique_ptr<reservation_aware_resource_adaptor> _reserving_adaptor;
+
+  void wait_for_memory(size_t size, std::unique_lock<std::mutex>& lock);
+  bool validate_reservation(const reservation* res) const;
 };
 
 /**
@@ -118,8 +116,8 @@ private:
  * Hash is based on tier and device_id combination.
  */
 struct memory_space_hash {
-    size_t operator()(const memory_space& ms) const;
+  size_t operator()(const memory_space& ms) const;
 };
 
-} // namespace memory
-} // namespace sirius
+}  // namespace memory
+}  // namespace sirius
