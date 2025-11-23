@@ -60,6 +60,7 @@ public:
 	vector<reference<GPUPhysicalOperator>> recursive_ctes;
 	//! Storage for pipeline breaker created during pipeline splitting
 	vector<unique_ptr<GPUPhysicalOperator>> new_pipeline_breakers;
+	vector<unique_ptr<GPUPhysicalOperator>> concat_ops;
 	//! The current root pipeline index
 	idx_t root_pipeline_idx;
 	//! The amount of completed pipelines of the query

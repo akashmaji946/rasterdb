@@ -28,11 +28,11 @@
 
 namespace duckdb {
 
-class GPUPhysicalPartition : public GPUPhysicalOperator {
+class GPUPhysicalConcat : public GPUPhysicalOperator {
 public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::INVALID;
 
-	explicit GPUPhysicalPartition(vector<LogicalType> types, idx_t estimated_cardinality, GPUPhysicalOperator* parent_op, bool is_build = false);
+	explicit GPUPhysicalConcat(vector<LogicalType> types, idx_t estimated_cardinality);
 
   	string GetName() const override;
 
@@ -40,13 +40,8 @@ public:
 
     bool IsSink() const override;
 
-	bool isBuildPartition();
-
 private:
-	void GetPartitionKeys(GPUPhysicalOperator* op, bool is_build = false);
-	GPUPhysicalOperator* _parent_op;
     vector<idx_t> _partition_keys;
 	idx_t _num_partitions;
-	bool _is_build;
 };
 } // namespace duckdb
