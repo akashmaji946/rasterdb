@@ -53,7 +53,6 @@ GPUExecutor::Reset() {
 	pipelines.clear();
 	new_pipeline_breakers.clear();
 	concat_ops.clear();
-	// gpuBufferManager->ResetBuffer();
 	// events.clear();
 	// to_be_rescheduled_tasks.clear();
 	// execution_result = PendingExecutionResult::RESULT_NOT_READY;
@@ -284,15 +283,15 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 
 		if (Config::MODIFIED_PIPELINE) {
 
-			printf("Initial Scheduled pipelines: %zu\n\n", scheduled.size());
+			SIRIUS_LOG_DEBUG("Initial Scheduled pipelines: {}", scheduled.size());
 			for (int i = 0; i < scheduled.size(); i++) {
 				auto pipeline = scheduled[i];
-				printf("Source %s\n", pipeline->source->GetName().c_str());
+				SIRIUS_LOG_DEBUG("Source {}", pipeline->source->GetName());
 				for (int j = 0; j < pipeline->operators.size(); j++) {
-					printf(" Op %s\n", pipeline->operators[j].get().GetName().c_str());
+					SIRIUS_LOG_DEBUG(" Op {}", pipeline->operators[j].get().GetName());
 				}
-				printf("Sink %s\n", pipeline->sink->GetName().c_str());
-				printf("\n\n");
+				SIRIUS_LOG_DEBUG("Sink {}", pipeline->sink->GetName());
+				SIRIUS_LOG_DEBUG(""); // Blank line for separation
 			}
 
 			auto data_repo_manager = ::sirius::make_unique<::sirius::data_repository_manager>();
@@ -599,43 +598,47 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				}
 			}
 
-			printf("Final Scheduled pipelines: %zu\n", new_scheduled.size());
+			SIRIUS_LOG_DEBUG("Final Scheduled pipelines: {}", new_scheduled.size());
 			for (int i = 0; i < new_scheduled.size(); i++) {
 				auto pipeline = new_scheduled[i];
-				printf("Source %s\n", pipeline->source->GetName().c_str());
+				SIRIUS_LOG_DEBUG("Source {}", pipeline->source->GetName());
 				for (int j = 0; j < pipeline->operators.size(); j++) {
-					printf(" Op %s\n", pipeline->operators[j].get().GetName().c_str());
+					SIRIUS_LOG_DEBUG(" Op {}", pipeline->operators[j].get().GetName());
 				}
 				if (pipeline->sink->type == PhysicalOperatorType::RIGHT_DELIM_JOIN ||
 						   pipeline->sink->type == PhysicalOperatorType::LEFT_DELIM_JOIN) {
 					auto delim_join = pipeline->GetSink();
 					auto partition_join = delim_join->Cast<GPUPhysicalDelimJoin>().partition_join;
 					auto partition_distinct = delim_join->Cast<GPUPhysicalDelimJoin>().partition_distinct;
-					printf("Sink %s partition join next op after sink: ", pipeline->sink->GetName().c_str());
-					for (auto next_port : partition_join->get_next_port_after_sink()) {
-						printf("%s ", next_port.first->GetName().c_str());
+					{
+						std::string msg = "Sink " + pipeline->sink->GetName() + " partition join next op after sink: ";
+						for (auto next_port : partition_join->get_next_port_after_sink()) {
+							msg += next_port.first->GetName() + " ";
+						}
+						SIRIUS_LOG_DEBUG("{}", msg);
 					}
-					printf("\n");
-					printf("Sink %s partition distinct next op after sink: ", pipeline->sink->GetName().c_str());
-					for (auto next_port : partition_distinct->get_next_port_after_sink()) {
-						printf("%s ", next_port.first->GetName().c_str());
+					{
+						std::string msg = "Sink " + pipeline->sink->GetName() + " partition distinct next op after sink: ";
+						for (auto next_port : partition_distinct->get_next_port_after_sink()) {
+							msg += next_port.first->GetName() + " ";
+						}
+						SIRIUS_LOG_DEBUG("{}", msg);
 					}
-					printf("\n");
 				} else if (pipeline->sink->type == PhysicalOperatorType::HASH_GROUP_BY ||
 						   pipeline->sink->type == PhysicalOperatorType::ORDER_BY ||
 						   pipeline->sink->type == PhysicalOperatorType::TOP_N ||
 						   pipeline->sink->type == PhysicalOperatorType::UNGROUPED_AGGREGATE ||
 						   pipeline->sink->type == PhysicalOperatorType::INVALID ||
 						   pipeline->sink->type == PhysicalOperatorType::CTE) {
-					printf("Sink %s next op after sink: ", pipeline->sink->GetName().c_str());
+					std::string msg = "Sink " + pipeline->sink->GetName() + " next op after sink: ";
 					for (auto next_port : pipeline->sink->get_next_port_after_sink()) {
-						printf("%s ", next_port.first->GetName().c_str());
+						msg += next_port.first->GetName() + " ";
 					}
-					printf("\n");
+					SIRIUS_LOG_DEBUG("{}", msg);
 				} else {
-					printf("Sink %s\n", pipeline->sink->GetName().c_str());
+					SIRIUS_LOG_DEBUG("Sink {}", pipeline->sink->GetName());
 				}
-				printf("\n\n");
+				SIRIUS_LOG_DEBUG("");
 			}
 		}
 
