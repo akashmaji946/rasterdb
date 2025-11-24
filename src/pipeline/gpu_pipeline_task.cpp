@@ -33,7 +33,7 @@ const duckdb::GPUPipeline* gpu_pipeline_task::get_pipeline() const {
 }
 
 void gpu_pipeline_task::execute() {
-   // Execute the task
+    // Execute the task
    // Transfer data batch to GPU memory if not in GPU memory
    // set reservation_aware_memory_resource_ref as the default cudf allocator
    // Call cudf operators
@@ -44,7 +44,7 @@ void gpu_pipeline_task::execute() {
 void gpu_pipeline_task::mark_task_completion() {
     // notify TaskCreator about task completion
     uint64_t task_id = _local_state->cast<gpu_pipeline_task_local_state>()._task_id;
-    uint64_t pipeline_id = _local_state->cast<gpu_pipeline_task_global_state>()._pipeline_id;
+    uint64_t pipeline_id = _global_state->cast<gpu_pipeline_task_global_state>()._pipeline_id;
     auto message = sirius::make_unique<sirius::task_completion_message>();
     message->task_id = task_id;
     message->pipeline_id = pipeline_id;

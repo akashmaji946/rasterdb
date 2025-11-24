@@ -21,7 +21,7 @@ namespace sirius {
 namespace parallel {
 
 void task_request_queue::open() {
-   _is_open.store(true, std::memory_order_release); 
+   _is_open.store(true, std::memory_order_release);
 }
 
 void task_request_queue::close() {
@@ -33,7 +33,7 @@ void task_request_queue::close() {
 }
 
 void task_request_queue::push(unique_ptr<task_request> request) {
-    _request_queue.enqueue(std::move(request)); 
+    _request_queue.enqueue(std::move(request));
 }
 
 unique_ptr<task_request> task_request_queue::pull() {

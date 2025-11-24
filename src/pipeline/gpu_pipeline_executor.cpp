@@ -36,7 +36,10 @@ sirius::unique_ptr<itask> local_task_buffer::consume() {
 }
 
 gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config, const memory::memory_space* mem_space, pipeline_executor* pipeline_exec)
-    : itask_executor(sirius::make_unique<gpu_pipeline_queue>(config.num_threads), config), _memory_space_view(mem_space), _pipeline_exec(pipeline_exec) {}
+    : itask_executor(sirius::make_unique<gpu_pipeline_queue>(config.num_threads), config),
+      _local_task_buffer(sirius::make_unique<local_task_buffer>()),
+      _memory_space_view(mem_space),
+      _pipeline_exec(pipeline_exec) {}
 
 void gpu_pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
     _task_queue->push(std::move(task));

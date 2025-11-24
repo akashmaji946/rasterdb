@@ -84,7 +84,7 @@ void pipeline_executor::worker_loop(int worker_id) {
         }
         auto request = _task_request_queue->pull();
         auto task = _task_queue->pull();
-            if (task == nullptr) {
+        if (task == nullptr) {
             // Task queue is closed.
             break;
         }
