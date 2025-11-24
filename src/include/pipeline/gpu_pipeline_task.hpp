@@ -96,7 +96,7 @@ private:
 /**
  * @brief A task representing a unit of work in a GPU pipeline.
  * 
- * This class encaplulates the necessary information to execute a task within a pipeline on the GPU. 
+ * This class encapsulates the necessary information to execute a task within a pipeline on the GPU. 
  * These task will be created by the TaskCreator and be scheduled for execution on the gpu_pipeline_executor.
  * 
  * Note that this class will be further derived to represent specific types of tasks such as build, aggregation, etc..
