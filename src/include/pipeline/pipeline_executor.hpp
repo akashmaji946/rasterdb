@@ -36,7 +36,7 @@ namespace parallel {
 class pipeline_executor : public itask_executor {
 public:
 /**
- * @brief Constructs a new gpu_pipeline_executor with task execution configuration
+ * @brief Constructs a new pipeline_executor with task execution configuration
  * 
  * @param config Configuration for the task executor (thread count, retry policy, etc.)
  */
