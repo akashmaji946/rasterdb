@@ -81,7 +81,7 @@ GPUPhysicalPartition::GetPartitionKeys(GPUPhysicalOperator* op, bool is_build) {
         }
     } else if (op->type == PhysicalOperatorType::ORDER_BY){
         auto& order_by_op = op->Cast<GPUPhysicalOrder>();
-        for (int order_idx = 0; order_idx < order_by_op.orders.size(); order_idx++) {
+        for (size_t order_idx = 0; order_idx < order_by_op.orders.size(); order_idx++) {
             auto& expr = order_by_op.orders[order_idx].expression;
             if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
                 _partition_keys.push_back(expr->Cast<BoundReferenceExpression>().index);
@@ -89,7 +89,7 @@ GPUPhysicalPartition::GetPartitionKeys(GPUPhysicalOperator* op, bool is_build) {
         }
     } else if (op->type == PhysicalOperatorType::TOP_N){
         auto& top_n_op = op->Cast<GPUPhysicalTopN>();
-        for (int order_idx = 0; order_idx < top_n_op.orders.size(); order_idx++) {
+        for (insize_tt order_idx = 0; order_idx < top_n_op.orders.size(); order_idx++) {
             auto& expr = top_n_op.orders[order_idx].expression;
             if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
                 _partition_keys.push_back(expr->Cast<BoundReferenceExpression>().index);

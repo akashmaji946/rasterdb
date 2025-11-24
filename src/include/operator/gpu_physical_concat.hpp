@@ -24,8 +24,6 @@
 #include "operator/gpu_physical_order.hpp"
 #include "operator/gpu_physical_top_n.hpp"
 
-#define PARTITION_SIZE 10000000
-
 namespace duckdb {
 
 class GPUPhysicalConcat : public GPUPhysicalOperator {

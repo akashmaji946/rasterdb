@@ -68,11 +68,6 @@ SourceResultType GPUPhysicalOperator::GetData(GPUIntermediateRelation& output_re
 	throw InternalException("Calling GetData on a node that is not a source!");
 }
 
-// sirius::vector<sirius::unique_ptr<sirius::data_batch>>
-// GPUPhysicalOperator::SourceExecute(sirius::vector<sirius::unique_ptr<sirius::data_batch_view>> input_batch) {
-// 	throw InternalException("Calling SourceExecute on a node that is not a source!");
-// }
-
 
 //===--------------------------------------------------------------------===//
 // Sink

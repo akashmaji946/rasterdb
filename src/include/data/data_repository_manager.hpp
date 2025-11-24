@@ -46,10 +46,6 @@ struct operator_port_key {
     }
 };
 
-} // namespace sirius
-
-namespace sirius {
-
 /**
  * @brief Central manager for coordinating data repositories across multiple pipelines.
  * 

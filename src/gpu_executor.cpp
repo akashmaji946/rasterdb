@@ -284,10 +284,10 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 		if (Config::MODIFIED_PIPELINE) {
 
 			SIRIUS_LOG_DEBUG("Initial Scheduled pipelines: {}", scheduled.size());
-			for (int i = 0; i < scheduled.size(); i++) {
+			for (size_t i = 0; i < scheduled.size(); i++) {
 				auto pipeline = scheduled[i];
 				SIRIUS_LOG_DEBUG("Source {}", pipeline->source->GetName());
-				for (int j = 0; j < pipeline->operators.size(); j++) {
+				for (size_t j = 0; j < pipeline->operators.size(); j++) {
 					SIRIUS_LOG_DEBUG(" Op {}", pipeline->operators[j].get().GetName());
 				}
 				SIRIUS_LOG_DEBUG("Sink {}", pipeline->sink->GetName());
@@ -298,7 +298,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 			unordered_map<const GPUPhysicalOperator*, vector<shared_ptr<GPUPipeline>>> source_to_pipelines;
 
 			vector<shared_ptr<GPUPipeline>> new_scheduled;
-			for (int i = 0; i < scheduled.size(); i++) {
+			for (size_t i = 0; i < scheduled.size(); i++) {
 				auto current_pipeline = scheduled[i];  // Copy shared_ptr to avoid invalidation
 				
 				// Store original dependencies to preserve them
@@ -357,7 +357,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				}
 
 				if (!join_positions.empty()) {
-					for (int hj_idx = 0; hj_idx < join_positions.size(); hj_idx++) {
+					for (size_t hj_idx = 0; hj_idx < join_positions.size(); hj_idx++) {
 						idx_t join_pos = join_positions[hj_idx];
 						
 						// Create a PARTITION operator
@@ -508,25 +508,16 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 			}
 
 			// build source to pipelines map
-			for (int i = 0; i < new_scheduled.size(); i++) {
+			for (size_t i = 0; i < new_scheduled.size(); i++) {
 				source_to_pipelines[new_scheduled[i]->source.get()].push_back(new_scheduled[i]);
 			}
 
 			// add data repositories and ports
-			for (int i = 0; i < new_scheduled.size(); i++) {
+			for (size_t i = 0; i < new_scheduled.size(); i++) {
 				if (new_scheduled[i]->sink->type == PhysicalOperatorType::HASH_GROUP_BY ||
 					new_scheduled[i]->sink->type == PhysicalOperatorType::ORDER_BY ||
 					new_scheduled[i]->sink->type == PhysicalOperatorType::TOP_N ||
 					new_scheduled[i]->sink->type == PhysicalOperatorType::UNGROUPED_AGGREGATE) {
-					// for (int j = i + 1; j < new_scheduled.size(); j++) {
-					// 	if (new_scheduled[j]->source.get() == new_scheduled[i]->sink.get()) {
-					// 		if (new_scheduled[j]->operators.size() == 0) {
-					// 			new_scheduled[i]->sink->add_next_port_after_sink({new_scheduled[j]->sink.get(), "default"});
-					// 		} else {
-					// 			new_scheduled[i]->sink->add_next_port_after_sink({&new_scheduled[j]->operators[0].get(), "default"});
-					// 		}
-					// 	}
-					// }
 					for (auto dependent_pipeline : source_to_pipelines[new_scheduled[i]->sink.get()]) {
 						if (dependent_pipeline->operators.size() == 0) {
 							new_scheduled[i]->sink->add_next_port_after_sink({dependent_pipeline->sink.get(), "default"});
@@ -537,16 +528,6 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 				} else if (new_scheduled[i]->sink->type == PhysicalOperatorType::CTE) {
 					auto& cte_op = new_scheduled[i]->sink->Cast<GPUPhysicalCTE>();
 					for (auto cte_scan : cte_op.cte_scans) {
-						// for (int j = i + 1; j < new_scheduled.size(); j++) {
-						// 	if (new_scheduled[j]->source.get() == &(cte_scan.get())) {
-						// 		if (new_scheduled[j]->operators.size() == 0) {
-						// 			new_scheduled[i]->sink->add_next_port_after_sink({new_scheduled[j]->sink.get(), "default"});
-						// 		} else {
-						// 			new_scheduled[i]->sink->add_next_port_after_sink({&new_scheduled[j]->operators[0].get(), "default"});
-						// 		}
-						// 		break;
-						// 	}
-						// }
 						for (auto dependent_pipeline : source_to_pipelines[&cte_scan.get()]) {
 							if (dependent_pipeline->operators.size() == 0) {
 								new_scheduled[i]->sink->add_next_port_after_sink({dependent_pipeline->sink.get(), "default"});
@@ -599,10 +580,10 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator &plan) {
 			}
 
 			SIRIUS_LOG_DEBUG("Final Scheduled pipelines: {}", new_scheduled.size());
-			for (int i = 0; i < new_scheduled.size(); i++) {
+			for (size_t i = 0; i < new_scheduled.size(); i++) {
 				auto pipeline = new_scheduled[i];
 				SIRIUS_LOG_DEBUG("Source {}", pipeline->source->GetName());
-				for (int j = 0; j < pipeline->operators.size(); j++) {
+				for (size_t j = 0; j < pipeline->operators.size(); j++) {
 					SIRIUS_LOG_DEBUG(" Op {}", pipeline->operators[j].get().GetName());
 				}
 				if (pipeline->sink->type == PhysicalOperatorType::RIGHT_DELIM_JOIN ||
