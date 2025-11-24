@@ -117,7 +117,7 @@ public:
 public:
 	//Source Interface
 	virtual SourceResultType GetData(GPUIntermediateRelation &output_relation) const;
-	// virtual ::sirius::vector<::sirius::unique_ptr<::sirius::data_batch>> SourceExecute(::sirius::vector<::sirius::unique_ptr<::sirius::data_batch_view>> input_batch);
+	// TODO: Implement SourceExecute if required in future.
 
 	virtual unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context,
 	                                                         GlobalSourceState &gstate) const;
@@ -139,7 +139,7 @@ public:
 public:
 	//Sink interface
 	virtual SinkResultType Sink(GPUIntermediateRelation &input_relation) const;
-	// virtual ::sirius::vector<::sirius::unique_ptr<::sirius::data_batch>> SinkExecute(::sirius::vector<::sirius::unique_ptr<::sirius::data_batch_view>> input_batch);
+	// TODO: Implement SinkExecute if batch-based sink execution is required in the future.
 
 	virtual SinkFinalizeType CombineFinalize(vector<shared_ptr<GPUIntermediateRelation>> &input,
 																	  			 GPUIntermediateRelation& output) const;

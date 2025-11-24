@@ -79,7 +79,6 @@ public:
 	void Execute();
 	void Reset();
 	shared_ptr<GPUPipeline> CreateChildPipeline(GPUPipeline &current, GPUPhysicalOperator &op);
-  	vector<size_t> GetPartitionKeys(GPUPhysicalOperator* op);
 
 	Executor* executor;
 

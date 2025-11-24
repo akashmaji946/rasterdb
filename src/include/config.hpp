@@ -47,7 +47,7 @@ struct Config {
   // Whether to use special JIT implementation for particular regex evaluation
   static bool ENABLE_REGEX_JIT_IMPL;
 
-  // Whether to use modified pipeline for the newexecution model
+  // Whether to use modified pipeline for the new execution model
   static bool MODIFIED_PIPELINE;
 };
 
