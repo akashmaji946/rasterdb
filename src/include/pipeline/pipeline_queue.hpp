@@ -31,7 +31,7 @@ namespace parallel {
  * @brief A task queue specifically for managing gpu_pipeline_task instances.
  * 
  * This class provides a thread-safe queue implementation for scheduling and retrieving GPU pipeline tasks.
- * Currently it just uses the sirius::queue (which is just the sirius::queue) but in the future we might want to
+ * Currently it just uses the sirius::queue, but in the future we might want to
  * implement a more sophisticated queue that supports priority scheduling, task stealing, etc..
  */
 class pipeline_queue : public itask_queue {
