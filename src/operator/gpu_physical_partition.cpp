@@ -89,7 +89,7 @@ GPUPhysicalPartition::GetPartitionKeys(GPUPhysicalOperator* op, bool is_build) {
         }
     } else if (op->type == PhysicalOperatorType::TOP_N){
         auto& top_n_op = op->Cast<GPUPhysicalTopN>();
-        for (insize_tt order_idx = 0; order_idx < top_n_op.orders.size(); order_idx++) {
+        for (size_t order_idx = 0; order_idx < top_n_op.orders.size(); order_idx++) {
             auto& expr = top_n_op.orders[order_idx].expression;
             if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
                 _partition_keys.push_back(expr->Cast<BoundReferenceExpression>().index);
