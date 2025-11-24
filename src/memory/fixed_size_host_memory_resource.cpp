@@ -15,169 +15,222 @@
  */
 
 #include "memory/fixed_size_host_memory_resource.hpp"
+
+#include "aligned.hpp"
+#include "cuda_device.hpp"
+#include "error.hpp"
+#include "memory/common.hpp"
+#include "memory/memory_reservation.hpp"
+
+#include <memory>
+#include <mutex>
 #include <string>
 
 namespace sirius {
 namespace memory {
 
-fixed_size_host_memory_resource::fixed_size_host_memory_resource(
-    std::size_t block_size,
-    std::size_t pool_size,
-    std::size_t initial_pools)
-    : block_size_(rmm::align_up(block_size, alignof(std::max_align_t))),
-      pool_size_(pool_size)
+fixed_size_host_memory_resource::fixed_size_host_memory_resource(int device_id,
+                                                                 std::size_t memory_limit,
+                                                                 std::size_t memory_capacity,
+                                                                 std::size_t block_size,
+                                                                 std::size_t pool_size,
+                                                                 std::size_t initial_pools)
+  : fixed_size_host_memory_resource(device_id,
+                                    std::make_unique<rmm::mr::pinned_host_memory_resource>(),
+                                    memory_limit,
+                                    memory_capacity,
+                                    block_size,
+                                    pool_size,
+                                    initial_pools)
 {
-    for (std::size_t i = 0; i < initial_pools; ++i) {
-        expand_pool();
-    }
 }
 
 fixed_size_host_memory_resource::fixed_size_host_memory_resource(
-    std::unique_ptr<rmm::mr::pinned_host_memory_resource> upstream_mr,
-    std::size_t block_size,
-    std::size_t pool_size,
-    std::size_t initial_pools)
-    : block_size_(rmm::align_up(block_size, alignof(std::max_align_t))),
-      pool_size_(pool_size),
-      upstream_mr_(std::move(upstream_mr))
+  int device_id,
+  std::unique_ptr<rmm::mr::pinned_host_memory_resource> upstream_mr,
+  std::size_t memory_limit,
+  std::size_t memory_capacity,
+  std::size_t block_size,
+  std::size_t pool_size,
+  std::size_t initial_pools)
+  : device_id_(device_id),
+    memory_limit_(memory_limit),
+    memory_capacity_(memory_capacity),
+    block_size_(rmm::align_up(block_size, alignof(std::max_align_t))),
+    pool_size_(pool_size),
+    upstream_mr_(std::move(upstream_mr))
 {
-    for (std::size_t i = 0; i < initial_pools; ++i) {
-        expand_pool();
+  assert(upstream_mr_);
+  for (std::size_t i = 0; i < initial_pools; ++i) {
+    expand_pool();
+  }
+}
+
+fixed_size_host_memory_resource::~fixed_size_host_memory_resource()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto& block : allocated_blocks_) {
+    const std::size_t dealloc_size = block_size_ * pool_size_;
+    upstream_mr_->deallocate(block, dealloc_size);
+  }
+  allocated_blocks_.clear();
+  free_blocks_.clear();
+}
+
+std::size_t fixed_size_host_memory_resource::get_block_size() const noexcept { return block_size_; }
+
+std::size_t fixed_size_host_memory_resource::get_free_blocks() const noexcept
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return free_blocks_.size();
+}
+
+std::size_t fixed_size_host_memory_resource::get_total_blocks() const noexcept
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return allocated_blocks_.size() * pool_size_;
+}
+
+rmm::mr::pinned_host_memory_resource* fixed_size_host_memory_resource::get_upstream_resource()
+  const noexcept
+{
+  return upstream_mr_.get();
+}
+
+std::unique_ptr<fixed_size_host_memory_resource::multiple_blocks_allocation>
+fixed_size_host_memory_resource::allocate_multiple_blocks(std::size_t total_bytes, reservation* res)
+{
+  RMM_FUNC_RANGE();
+
+  if (total_bytes == 0) { return multiple_blocks_allocation::empty(*this); }
+
+  total_bytes               = rmm::align_up(total_bytes, block_size_);
+  size_t num_blocks         = total_bytes / block_size_;
+  std::size_t tracked_bytes = total_bytes;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (res && active_reservations_.contains(res)) {
+    int64_t pre_allocation_size  = res->allocated_bytes.fetch_add(total_bytes);
+    int64_t post_allocation_size = pre_allocation_size + total_bytes;
+    if (post_allocation_size <= res->size) {
+      tracked_bytes = 0;
+    } else if (pre_allocation_size < res->size) {
+      tracked_bytes = post_allocation_size - res->size;
     }
-}
+  } else {
+    res = nullptr;
+  }
 
-fixed_size_host_memory_resource::~fixed_size_host_memory_resource() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& block : allocated_blocks_) {
-        const std::size_t dealloc_size = block_size_ * pool_size_;
-        
-        if (upstream_mr_) {
-            upstream_mr_->deallocate(block, dealloc_size);
-        } else {
-            rmm::mr::pinned_host_memory_resource::deallocate(block, dealloc_size);
-        }
-    }
-    allocated_blocks_.clear();
-    free_blocks_.clear();
-}
-
-std::size_t fixed_size_host_memory_resource::get_block_size() const noexcept {
-    return block_size_;
-}
-
-std::size_t fixed_size_host_memory_resource::get_free_blocks() const noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return free_blocks_.size();
-}
-
-std::size_t fixed_size_host_memory_resource::get_total_blocks() const noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return allocated_blocks_.size() * pool_size_;
-}
-
-rmm::mr::pinned_host_memory_resource* fixed_size_host_memory_resource::get_upstream_resource() const noexcept {
-    return upstream_mr_.get();
-}
-
-fixed_size_host_memory_resource::multiple_blocks_allocation fixed_size_host_memory_resource::allocate_multiple_blocks(std::size_t total_bytes) {
-    RMM_FUNC_RANGE();
-    
-    if (total_bytes == 0) {
-        return multiple_blocks_allocation({}, this, block_size_);
-    }
-
-    const std::size_t num_blocks = (total_bytes + block_size_ - 1) / block_size_;
-    
-    std::vector<void*> allocated_blocks;
+  if (allocated_bytes_.fetch_add(tracked_bytes) + tracked_bytes <= memory_capacity_) {
+    std::vector<std::byte*> allocated_blocks;
     allocated_blocks.reserve(num_blocks);
 
-    std::lock_guard<std::mutex> lock(mutex_);
-
     for (std::size_t i = 0; i < num_blocks; ++i) {
-        if (free_blocks_.empty()) {
-            expand_pool();
+      if (free_blocks_.empty()) { expand_pool(); }
+
+      if (free_blocks_.empty()) {
+        // Cleanup on failure
+        for (std::byte* ptr : allocated_blocks) {
+          free_blocks_.push_back(ptr);
         }
+        throw rmm::out_of_memory(
+          "Not enough free blocks available in fixed_size_host_memory_resource and pool expansion "
+          "failed.");
+      }
 
-        if (free_blocks_.empty()) {
-            // Cleanup on failure
-            for (void* ptr : allocated_blocks) {
-                free_blocks_.push_back(ptr);
-            }
-            throw rmm::out_of_memory("Not enough free blocks available in fixed_size_host_memory_resource and pool expansion failed.");
-        }
-
-        void* ptr = free_blocks_.back();
-        free_blocks_.pop_back();
-        allocated_blocks.push_back(ptr);
+      std::byte* ptr = static_cast<std::byte*>(free_blocks_.back());
+      free_blocks_.pop_back();
+      allocated_blocks.push_back(ptr);
     }
-
-    return multiple_blocks_allocation(std::move(allocated_blocks), this, block_size_);
+    return multiple_blocks_allocation::create(std::move(allocated_blocks), *this, res);
+  } else {
+    allocated_bytes_.fetch_sub(tracked_bytes);
+    if (res) res->allocated_bytes.fetch_sub(total_bytes);
+  }
+  return std::unique_ptr<fixed_size_host_memory_resource::multiple_blocks_allocation>(nullptr);
 }
 
-void* fixed_size_host_memory_resource::do_allocate(std::size_t bytes, rmm::cuda_stream_view stream) {
-    RMM_FUNC_RANGE();
-    
-    if (bytes == 0) {
-        return nullptr;
-    }
-    RMM_EXPECTS(
-        bytes <= block_size_,
-        (std::string("Allocation size exceeds block size: requested=") + std::to_string(bytes) +
-         " bytes, block_size=" + std::to_string(block_size_) + " bytes")
-            .c_str());
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    if (free_blocks_.empty()) {
-        expand_pool();
-    }
-
-    if (free_blocks_.empty()) {
-        throw rmm::out_of_memory("No free blocks available in fixed_size_host_memory_resource.");
-    }
-
-    void* ptr = free_blocks_.back();
-    free_blocks_.pop_back();
-    
-    return ptr;
+void* fixed_size_host_memory_resource::do_allocate(std::size_t bytes, rmm::cuda_stream_view stream)
+{
+  throw rmm::logic_error(
+    "fixed_size_host_memory_resource doesn't support allocate, use allocate_multiple_blocks");
 }
 
-void fixed_size_host_memory_resource::do_deallocate(void* ptr, std::size_t bytes, rmm::cuda_stream_view stream) noexcept {
-    RMM_FUNC_RANGE();
-    
-    if (ptr == nullptr) {
-        return;
-    }
-
-    if (bytes > block_size_) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    free_blocks_.push_back(ptr);
+void fixed_size_host_memory_resource::do_deallocate(void* ptr,
+                                                    std::size_t bytes,
+                                                    rmm::cuda_stream_view stream) noexcept
+{
+  throw rmm::logic_error("fixed_size_host_memory_resource doesn't support deallocate apis");
 }
 
-bool fixed_size_host_memory_resource::do_is_equal(const rmm::mr::device_memory_resource& other) const noexcept {
-    return this == &other;
+bool fixed_size_host_memory_resource::do_is_equal(
+  const rmm::mr::device_memory_resource& other) const noexcept
+{
+  return this == &other;
 }
 
-void fixed_size_host_memory_resource::expand_pool() {
-    const std::size_t total_size = block_size_ * pool_size_;
-    
-    void* large_allocation;
-    if (upstream_mr_) {
-        large_allocation = upstream_mr_->allocate(total_size);
-    } else {
-        large_allocation = rmm::mr::pinned_host_memory_resource::allocate(total_size);
-    }
-    
-    allocated_blocks_.push_back(large_allocation);
-    
-    for (std::size_t i = 0; i < pool_size_; ++i) {
-        void* block = static_cast<char*>(large_allocation) + (i * block_size_);
-        free_blocks_.push_back(block);
-    }
+std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(std::size_t bytes)
+{
+  bytes                            = rmm::align_up(bytes, block_size_);
+  std::size_t next_allocated_bytes = allocated_bytes_.fetch_add(bytes) + bytes;
+  if (next_allocated_bytes > memory_limit_) {
+    auto res = reservation::create(Tier::HOST, device_id_.value(), bytes, [this](reservation* r) {
+      this->release_reservation(r);
+    });
+    this->register_reservation(res.get());
+    return res;
+  } else {
+    allocated_bytes_.fetch_sub(bytes);
+    return std::unique_ptr<reservation>(nullptr);
+  }
 }
 
-} // namespace memory
-} // namespace sirius
+void fixed_size_host_memory_resource::expand_pool()
+{
+  const std::size_t total_size = block_size_ * pool_size_;
+
+  void* large_allocation = upstream_mr_->allocate(total_size);
+
+  allocated_blocks_.push_back(large_allocation);
+
+  for (std::size_t i = 0; i < pool_size_; ++i) {
+    void* block = static_cast<char*>(large_allocation) + (i * block_size_);
+    free_blocks_.push_back(block);
+  }
+}
+
+void fixed_size_host_memory_resource::register_reservation(reservation* res)
+{
+  std::lock_guard lock(mutex_);
+  active_reservations_.insert(res);
+}
+
+void fixed_size_host_memory_resource::release_reservation(reservation* res)
+{
+  std::lock_guard guard(mutex_);
+  std::size_t reclaimed_bytes =
+    res->size > res->allocated_bytes ? res->size - res->allocated_bytes : 0;
+  allocated_bytes_.fetch_sub(reclaimed_bytes);
+  active_reservations_.erase(res);
+}
+
+void fixed_size_host_memory_resource::return_allocated_chunks(std::vector<std::byte*> chunks,
+                                                              reservation* res)
+{
+  size_t reclaimed_bytes = chunks.size() * block_size_;
+  std::lock_guard lock(mutex_);
+  if (res != nullptr && active_reservations_.contains(res)) {
+    int64_t pre_reclaimation_size  = res->allocated_bytes.fetch_sub(reclaimed_bytes);
+    int64_t post_reclaimation_size = pre_reclaimation_size - reclaimed_bytes;
+    if (pre_reclaimation_size <= res->size) {
+      // allocation fit in reservation
+      reclaimed_bytes = 0;
+    } else if (post_reclaimation_size < res->size) {
+      // part of allocation fit in the reservation
+      reclaimed_bytes = pre_reclaimation_size - res->size;
+    }
+  }
+  allocated_bytes_.fetch_sub(reclaimed_bytes);
+}
+
+}  // namespace memory
+}  // namespace sirius

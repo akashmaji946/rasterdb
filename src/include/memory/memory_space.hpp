@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <variant>
 
 // RMM includes for memory resource management
 #include <rmm/mr/device/device_memory_resource.hpp>
@@ -33,6 +34,7 @@ namespace memory {
 // Forward declaration
 struct reservation;
 struct reservation_aware_resource_adaptor;
+struct fixed_size_host_memory_resource;
 
 /**
  * memory_space represents a specific memory location identified by a tier and device ID.
@@ -105,7 +107,9 @@ class memory_space {
 
   // Memory resources owned by this memory_space
   std::unique_ptr<rmm::mr::device_memory_resource> _allocator;
-  std::unique_ptr<reservation_aware_resource_adaptor> _reserving_adaptor;
+  std::variant<std::unique_ptr<reservation_aware_resource_adaptor>,
+               std::unique_ptr<fixed_size_host_memory_resource>>
+    _reserving_adaptor;
 
   void wait_for_memory(size_t size, std::unique_lock<std::mutex>& lock);
   bool validate_reservation(const reservation* res) const;

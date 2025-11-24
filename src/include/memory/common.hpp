@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <rmm/error.hpp>
+
 #include <functional>
+#include <system_error>
 #include <utility>
 
 namespace sirius {
@@ -27,19 +30,44 @@ namespace memory {
  * Ordered roughly by performance (fastest to slowest access).
  */
 enum class Tier {
-    GPU,    // GPU device memory (fastest but limited)
-    HOST,   // Host system memory (fast, larger capacity)
-    DISK,   // Disk/storage memory (slowest but largest capacity)
-    SIZE    // Value = size of the enum, allows code to be more dynamic
+  GPU,   // GPU device memory (fastest but limited)
+  HOST,  // Host system memory (fast, larger capacity)
+  DISK,  // Disk/storage memory (slowest but largest capacity)
+  SIZE   // Value = size of the enum, allows code to be more dynamic
 };
 
-} // namespace memory
-} // namespace sirius
+enum class MemoryError { SUCCESS, ALLOCATION_FAILED, LIMIT_EXCEEDED, POOL_EXHAUSTED, SIZE };
+
+struct MemoryErrorCategory : std::error_category {
+  const char* name() const noexcept final;
+
+  std::string message(int ev) const final;
+};
+
+const MemoryErrorCategory& memory_category();
+
+inline std::error_code make_error_code(MemoryError e);
+
+struct sirius_out_of_memory : public rmm::out_of_memory {
+  explicit sirius_out_of_memory(std::string_view message,
+                                std::size_t requested_bytes,
+                                std::size_t global_usage);
+
+  const std::size_t requested_bytes;
+  const std::size_t global_usage;
+};
+
+}  // namespace memory
+}  // namespace sirius
 
 // Specialization for std::hash to enable use of std::pair<Tier, size_t> as key
 namespace std {
-    template<>
-    struct hash<std::pair<sirius::memory::Tier, size_t>> {
-        size_t operator()(const std::pair<sirius::memory::Tier, size_t>& p) const;
-    };
-}
+template <>
+struct hash<std::pair<sirius::memory::Tier, size_t>> {
+  size_t operator()(const std::pair<sirius::memory::Tier, size_t>& p) const;
+};
+
+template <>
+struct is_error_code_enum<sirius::memory::MemoryError> : true_type {};
+
+}  // namespace std

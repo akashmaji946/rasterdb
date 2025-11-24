@@ -833,13 +833,13 @@ TEST_CASE("Fixed Size Host Memory Resource", "[memory]")
   // Allocate enough bytes to require multiple blocks (600B -> 3 blocks)
   {
     auto blocks = resource.allocate_multiple_blocks(600);
-    REQUIRE(blocks.size() == 3);
+    REQUIRE(blocks->size() == 3);
     REQUIRE(resource.get_free_blocks() == pool_size * initial_pools - 3);
-    REQUIRE(blocks[0] != nullptr);
-    REQUIRE(blocks[1] != nullptr);
-    REQUIRE(blocks[2] != nullptr);
-    REQUIRE(blocks[0] != blocks[1]);
-    REQUIRE(blocks[1] != blocks[2]);
+    REQUIRE(blocks->at(0) != nullptr);
+    REQUIRE(blocks->at(1) != nullptr);
+    REQUIRE(blocks->at(2) != nullptr);
+    REQUIRE(blocks->at(0).data() != blocks->at(1).data());
+    REQUIRE(blocks->at(1).data() != blocks->at(2).data());
   }  // RAII release on scope exit restores free list
 
   REQUIRE(resource.get_free_blocks() == pool_size * initial_pools);
@@ -847,7 +847,7 @@ TEST_CASE("Fixed Size Host Memory Resource", "[memory]")
   // Zero-size multi-block allocation is a no-op
   {
     auto zero = resource.allocate_multiple_blocks(0);
-    REQUIRE(zero.size() == 0);
+    REQUIRE(zero->size() == 0);
     REQUIRE(resource.get_free_blocks() == pool_size * initial_pools);
   }
 
@@ -855,7 +855,7 @@ TEST_CASE("Fixed Size Host Memory Resource", "[memory]")
   {
     auto many =
       resource.allocate_multiple_blocks(block_size * pool_size + 1);  // pool_size + 1 blocks
-    REQUIRE(many.size() == pool_size + 1);
+    REQUIRE(many->size() == pool_size + 1);
   }
 
   // After RAII release, total/free blocks should reflect any expansion (>= initial)

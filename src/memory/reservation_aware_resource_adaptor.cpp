@@ -21,10 +21,10 @@
 
 #include <rmm/detail/error.hpp>
 
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <set>
 
 namespace sirius {
 namespace memory {
@@ -133,21 +133,40 @@ reservation_aware_resource_adaptor::reservation_state::check_reservation_and_han
   std::size_t allocation_size,
   rmm::cuda_stream_view stream)
 {
-  auto tracking_size           = rmm::align_up(allocation_size, rmm::CUDA_ALLOCATION_ALIGNMENT);
-  auto& allocated_bytes        = this->memory_reservation->allocated_bytes;
-  auto updated_allocated_bytes = allocated_bytes.fetch_add(tracking_size) + tracking_size;
-  // check if we are within reservation
-  if (updated_allocated_bytes > memory_reservation->size) {
-    std::lock_guard lock(_arbitration_mutex);
-    updated_allocated_bytes = allocated_bytes.fetch_sub(tracking_size) - tracking_size;
-    reservation_policy->handle_over_reservation(
-      adaptor, stream, allocation_size, allocated_bytes, memory_reservation.get());
-    updated_allocated_bytes = allocated_bytes.fetch_add(tracking_size) + tracking_size;
-    if (updated_allocated_bytes > memory_reservation->size) {
-      return updated_allocated_bytes - memory_reservation->size;
+  auto tracking_size          = rmm::align_up(allocation_size, rmm::CUDA_ALLOCATION_ALIGNMENT);
+  auto upstream_tracking_size = tracking_size;
+  auto& allocated_bytes       = memory_reservation->allocated_bytes;
+
+  int64_t pre_allocation_inc = allocated_bytes.load();
+  if (reservation_policy) {
+    while (true) {
+      if (pre_allocation_inc + tracking_size < memory_reservation->size) {
+        if (allocated_bytes.compare_exchange_weak(
+              pre_allocation_inc, pre_allocation_inc + tracking_size, std::memory_order_seq_cst)) {
+          break;
+        }
+      } else {
+        std::lock_guard lock(_arbitration_mutex);
+        reservation_policy->handle_over_reservation(adaptor,
+                                                    stream,
+                                                    allocation_size,
+                                                    static_cast<size_t>(allocated_bytes.load()),
+                                                    memory_reservation.get());
+        pre_allocation_inc = allocated_bytes.fetch_add(tracking_size);
+        break;
+      }
     }
+  } else {
+    pre_allocation_inc = allocated_bytes.fetch_add(tracking_size);
   }
-  return 0UL;
+
+  int64_t post_allocation_inc = pre_allocation_inc + tracking_size;
+  if (post_allocation_inc < memory_reservation->size) {
+    upstream_tracking_size = 0UL;
+  } else if (pre_allocation_inc < memory_reservation->size) {
+    upstream_tracking_size = post_allocation_inc - memory_reservation->size;
+  }
+  return upstream_tracking_size;
 }
 
 reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
@@ -277,15 +296,14 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(std::si
 {
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(size_bytes, _memory_limit)) {
-    auto res =
-      reservation::create(tier, device_id.value(), size_bytes, [this, size_bytes](reservation* r) {
+    auto res = reservation::create(
+      _tier, _device_id.value(), size_bytes, [this, size_bytes](reservation* r) {
         this->do_release_reservation(r);
       });
     reservation_views.insert(res.get());
     return res;
-  } else {
-    return nullptr;
   }
+  return nullptr;
 }
 
 void* reservation_aware_resource_adaptor::do_allocate(std::size_t bytes,
@@ -371,12 +389,23 @@ void reservation_aware_resource_adaptor::do_deallocate(void* ptr,
                                                        std::size_t bytes,
                                                        rmm::cuda_stream_view stream) noexcept
 {
-  auto* reservation_state = _reservation_states->get_stream_state(stream);
+  auto tracking_bytes           = rmm::align_up(bytes, rmm::CUDA_ALLOCATION_ALIGNMENT);
+  auto upstream_reclaimed_bytes = tracking_bytes;
+  auto* reservation_state       = _reservation_states->get_stream_state(stream);
   if (reservation_state != nullptr) {
-    _upstream.deallocate_async(ptr, bytes, stream);
-    return;
+    auto* reservation              = reservation_state->memory_reservation.get();
+    int64_t pre_deallocation_size  = reservation->allocated_bytes.fetch_sub(tracking_bytes);
+    int64_t post_deallocation_size = pre_deallocation_size - tracking_bytes;
+    if (pre_deallocation_size <= reservation->size) {
+      // if it was made using the reserved space
+      upstream_reclaimed_bytes = 0;
+    } else if (post_deallocation_size < reservation->size) {
+      // if it was partially made using the reserved space
+      upstream_reclaimed_bytes = reservation->size - post_deallocation_size;
+    }
   }
   _upstream.deallocate_async(ptr, bytes, stream);
+  _total_allocated_bytes.fetch_sub(upstream_reclaimed_bytes);
 }
 
 bool reservation_aware_resource_adaptor::do_is_equal(

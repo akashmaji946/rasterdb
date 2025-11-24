@@ -34,22 +34,6 @@
 namespace sirius {
 namespace memory {
 
-struct sirius_out_of_memory : public rmm::out_of_memory {
-  using rmm::out_of_memory::out_of_memory;
-
-  explicit sirius_out_of_memory(std::string_view message,
-                                std::size_t requested_bytes,
-                                std::size_t global_usage)
-    : rmm::out_of_memory(message.data()),
-      requested_bytes(requested_bytes),
-      global_usage(global_usage)
-  {
-  }
-
-  const std::size_t requested_bytes;
-  const std::size_t global_usage;
-};
-
 /**
  * @brief A memory resource adaptor that tracks allocations on a per-stream basis.
  *
@@ -337,8 +321,8 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    */
   bool do_is_equal(const rmm::mr::device_memory_resource& other) const noexcept override;
 
-  Tier tier;
-  rmm::cuda_device_id device_id;
+  Tier _tier;
+  rmm::cuda_device_id _device_id;
 
   /// The upstream memory resource
   rmm::device_async_resource_ref _upstream;

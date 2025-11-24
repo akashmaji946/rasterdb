@@ -16,16 +16,20 @@
 
 #pragma once
 
+#include "cuda_device.hpp"
+#include "memory/memory_reservation.hpp"
+
 #include <rmm/aligned.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
 #include <rmm/mr/pinned_host_memory_resource.hpp>
 
-#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <span>
+#include <unordered_set>
 #include <vector>
 
 namespace sirius {
@@ -57,6 +61,70 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
     4;  ///< Default number of pools to pre-allocate
 
   /**
+   * @brief Simple RAII wrapper for multiple block allocations.
+   */
+  struct multiple_blocks_allocation {
+    const std::size_t block_size;
+
+    static std::unique_ptr<multiple_blocks_allocation> empty(fixed_size_host_memory_resource& m)
+    {
+      return std::unique_ptr<multiple_blocks_allocation>(
+        new multiple_blocks_allocation({}, &m, nullptr));
+    }
+
+    static std::unique_ptr<multiple_blocks_allocation> create(std::vector<std::byte*> b,
+                                                              fixed_size_host_memory_resource& m,
+                                                              reservation* res = nullptr)
+    {
+      return std::unique_ptr<multiple_blocks_allocation>(
+        new multiple_blocks_allocation(std::move(b), std::addressof(m), res));
+    }
+
+    ~multiple_blocks_allocation()
+    {
+      if (mr_ && !blocks_.empty()) {
+        mr_->return_allocated_chunks(std::move(blocks_), reseved_memory_);
+      }
+    }
+
+    // Disable copy to prevent double deallocation
+    multiple_blocks_allocation(const multiple_blocks_allocation&)            = delete;
+    multiple_blocks_allocation& operator=(const multiple_blocks_allocation&) = delete;
+    multiple_blocks_allocation(multiple_blocks_allocation&&)                 = delete;
+    multiple_blocks_allocation& operator=(multiple_blocks_allocation&&)      = delete;
+
+    std::size_t size_bytes() const noexcept { return blocks_.size() * block_size; }
+
+    std::size_t size() const noexcept { return blocks_.size(); }
+
+    std::span<std::byte*> get_blocks() noexcept { return blocks_; }
+
+    std::span<std::byte> operator[](std::size_t i) const
+    {
+      return std::span<std::byte>{blocks_.at(i), block_size};
+    }
+
+    std::span<std::byte> at(std::size_t i) const
+    {
+      return std::span<std::byte>{blocks_.at(i), block_size};
+    }
+
+   private:
+    explicit multiple_blocks_allocation(std::vector<std::byte*> buffers,
+                                        fixed_size_host_memory_resource* m,
+                                        reservation* res)
+      : blocks_(std::move(buffers)), mr_(m), block_size(m->get_block_size()), reseved_memory_(res)
+    {
+    }
+
+    std::vector<std::byte*> blocks_;
+    fixed_size_host_memory_resource* mr_;
+    reservation* reseved_memory_;
+  };
+
+  using fixed_multiple_blocks_allocation = std::unique_ptr<multiple_blocks_allocation>;
+
+  /**
    * @brief Construct a new fixed-size host memory resource.
    *
    * @param block_size Size of each block in bytes
@@ -64,6 +132,9 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @param initial_pools Number of pools to pre-allocate
    */
   explicit fixed_size_host_memory_resource(
+    int device_id,
+    std::size_t mem_limit,
+    std::size_t capacity,
     std::size_t block_size    = default_block_size,
     std::size_t pool_size     = default_pool_size,
     std::size_t initial_pools = default_initial_number_pools);
@@ -77,7 +148,10 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @param initial_pools Number of pools to pre-allocate
    */
   explicit fixed_size_host_memory_resource(
+    int device_id,
     std::unique_ptr<rmm::mr::pinned_host_memory_resource> upstream_mr,
+    std::size_t mem_limit,
+    std::size_t capacity,
     std::size_t block_size    = default_block_size,
     std::size_t pool_size     = default_pool_size,
     std::size_t initial_pools = default_initial_number_pools);
@@ -123,55 +197,10 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   [[nodiscard]] rmm::mr::pinned_host_memory_resource* get_upstream_resource() const noexcept;
 
   /**
-   * @brief Simple RAII wrapper for multiple block allocations.
+   * @brief makes reservations
+   * @param bytes the size of reservation
    */
-  struct multiple_blocks_allocation {
-    std::vector<void*> blocks;
-    fixed_size_host_memory_resource* mr;
-    std::size_t block_size;
-
-    multiple_blocks_allocation(std::vector<void*> b,
-                               fixed_size_host_memory_resource* m,
-                               std::size_t bs)
-      : blocks(std::move(b)), mr(m), block_size(bs)
-    {
-    }
-
-    ~multiple_blocks_allocation()
-    {
-      for (void* ptr : blocks) {
-        mr->deallocate(ptr, block_size);
-      }
-    }
-
-    // Disable copy to prevent double deallocation
-    multiple_blocks_allocation(const multiple_blocks_allocation&)            = delete;
-    multiple_blocks_allocation& operator=(const multiple_blocks_allocation&) = delete;
-
-    // Enable move
-    multiple_blocks_allocation(multiple_blocks_allocation&& other) noexcept
-      : blocks(std::move(other.blocks)), mr(other.mr), block_size(other.block_size)
-    {
-      other.blocks.clear();
-    }
-
-    multiple_blocks_allocation& operator=(multiple_blocks_allocation&& other) noexcept
-    {
-      if (this != &other) {
-        for (void* ptr : blocks) {
-          mr->deallocate(ptr, block_size);
-        }
-        blocks     = std::move(other.blocks);
-        mr         = other.mr;
-        block_size = other.block_size;
-        other.blocks.clear();
-      }
-      return *this;
-    }
-
-    std::size_t size() const noexcept { return blocks.size(); }
-    void* operator[](std::size_t i) const { return blocks[i]; }
-  };
+  std::unique_ptr<reservation> reserve(std::size_t bytes);
 
   /**
    * @brief Allocate multiple blocks to satisfy a large allocation request.
@@ -184,7 +213,8 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @return multiple_blocks_allocation RAII wrapper for the allocated blocks
    * @throws rmm::out_of_memory if insufficient blocks are available or upstream allocation fails
    */
-  [[nodiscard]] multiple_blocks_allocation allocate_multiple_blocks(std::size_t total_bytes);
+  [[nodiscard]] fixed_multiple_blocks_allocation allocate_multiple_blocks(
+    std::size_t total_bytes, reservation* res = nullptr);
 
  protected:
   /**
@@ -224,14 +254,42 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    */
   void expand_pool();
 
+  /**
+   * @brief registers reservation with the memory resource
+   * @param reservation reserved bytes that is registered with the memory resource
+   */
+  void register_reservation(reservation* res);
+
+  /**
+   * @brief release reservation and returns the unsed bytes to back to the memory resource
+   * @param reservation reserved bytes that is registered with the memory resource
+   */
+  void release_reservation(reservation* res);
+
+  /**
+   * @brief release reservation and returns the unsed bytes to back to the memory resource
+   * @param chunks reserved bytes that is registered with the memory resource
+   * @param res is the reserved memory bytes use to allocate the chunks from
+   */
+  void return_allocated_chunks(std::vector<std::byte*> chunks, reservation* res);
+
+  rmm::cuda_device_id device_id_;
+  std::size_t memory_limit_;
+  std::size_t memory_capacity_;
   std::size_t block_size_;  ///< Size of each block
   std::size_t pool_size_;   ///< Number of blocks in pool
   std::unique_ptr<rmm::mr::pinned_host_memory_resource>
     upstream_mr_;                        ///< Upstream memory resource (optional)
   std::vector<void*> allocated_blocks_;  ///< All allocated blocks
   std::vector<void*> free_blocks_;       ///< Currently free blocks
-  mutable std::mutex mutex_;             ///< Mutex for thread safety
+  mutable std::mutex mutex_;
+  std::atomic<size_t> allocated_bytes_{0};
+
+  std::unordered_set<reservation*> active_reservations_;
 };
+
+using fixed_multiple_blocks_allocation =
+  fixed_size_host_memory_resource::fixed_multiple_blocks_allocation;
 
 }  // namespace memory
 }  // namespace sirius
