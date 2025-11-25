@@ -22,17 +22,30 @@ namespace sirius {
 namespace parallel {
 
 void local_task_buffer::produce(sirius::unique_ptr<itask> task) {
-    _empty.acquire();    // wait until slot empty
-    _task = std::move(task);
-    _full.release();     // signal full
+    {
+        std::lock_guard<std::mutex> lock(_mtx);
+        _queue.push(std::move(task));
+    }
+    _cv.notify_one();  // wake consumer
 }
 
 sirius::unique_ptr<itask> local_task_buffer::consume() {
-    _full.acquire();     // wait until slot full
-    sirius::unique_ptr<itask> task = std::move(_task);
-    _task.reset();
-    _empty.release();    // signal empty
-    return task;
+    std::unique_lock<std::mutex> lock(_mtx);
+    _cv.wait(lock, [&] {
+        return (!_queue.empty()) || !_is_open.load(std::memory_order_acquire);
+    });
+    auto task = std::move(_queue.front());
+    _queue.pop();
+    return std::move(task);
+}
+
+void local_task_buffer::open() {
+    _is_open.store(true, std::memory_order_release);
+}
+
+void local_task_buffer::close() {
+    _is_open.store(false, std::memory_order_release);
+    _cv.notify_all();
 }
 
 gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config, const memory::memory_space* mem_space, pipeline_executor* pipeline_exec)
@@ -43,6 +56,16 @@ gpu_pipeline_executor::gpu_pipeline_executor(task_executor_config config, const 
 
 void gpu_pipeline_executor::schedule(sirius::unique_ptr<itask> task) {
     _task_queue->push(std::move(task));
+}
+
+void gpu_pipeline_executor::on_start() {
+    _task_queue->open();
+    _local_task_buffer->open();
+}
+
+void gpu_pipeline_executor::on_stop() {
+    _task_queue->close();
+    _local_task_buffer->close();
 }
  
 void gpu_pipeline_executor::start() {

@@ -33,11 +33,14 @@ public:
     local_task_buffer() = default;
     void produce(sirius::unique_ptr<itask> task);
     sirius::unique_ptr<itask> consume();
+    void open();
+    void close();
 
 private:
-    std::binary_semaphore _empty{1};
-    std::binary_semaphore _full{0};
-    sirius::unique_ptr<itask> _task;
+    mutable std::mutex _mtx;
+    std::condition_variable _cv;
+    std::queue<sirius::unique_ptr<itask>> _queue;
+    std::atomic<bool> _is_open{false}; ///< Whether the queue is open for pushing/pulling tasks
 };
 
 /**
@@ -103,6 +106,9 @@ public:
      * their current tasks before shutting down.
      */
     void stop() override;
+
+    void on_start() override;
+    void on_stop() override;
 
     /**
      * @brief Get the memory space view associated with this executor

@@ -60,12 +60,20 @@ void pipeline_executor::start() {
         _threads.push_back(
         sirius::make_unique<task_executor_thread>(sirius::make_unique<sirius::thread>(&pipeline_executor::worker_loop, this, i)));
     }
+    // Start all GPU executors
+    for (auto& gpu_exec : _gpu_executors) {
+        gpu_exec->start();
+    }
 }
 
 void pipeline_executor::stop() {
     bool expected = true;
     if (!_running.compare_exchange_strong(expected, false)) {
         return;
+    }
+    // Stop all GPU executors
+    for (auto& gpu_exec : _gpu_executors) {
+        gpu_exec->stop();
     }
     on_stop();
     for (auto& thread : _threads) {
@@ -83,6 +91,10 @@ void pipeline_executor::worker_loop(int worker_id) {
             break;
         }
         auto request = _task_request_queue->pull();
+        if (request == nullptr) {
+            // Task request queue is closed.
+            break;
+        }
         auto task = _task_queue->pull();
         if (task == nullptr) {
             // Task queue is closed.
