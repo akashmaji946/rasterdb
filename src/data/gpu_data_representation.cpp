@@ -17,6 +17,8 @@
 #include "data/gpu_data_representation.hpp"
 #include <cudf/utilities/traits.hpp>
 
+#include "data/data_representation_converter.hpp"
+
 namespace sirius {
 
 gpu_table_representation::gpu_table_representation(cudf::table table, sirius::memory::memory_space& memory_space)
@@ -42,6 +44,10 @@ sirius::unique_ptr<idata_representation> gpu_table_representation::convert_to_me
     // TODO: Implement conversion to GPU representation
     // This should use data_representation_converter::convert_to_gpu_representation
     throw std::runtime_error("gpu_table_representation::convert_to_memory_space not yet implemented");
+}
+
+sirius::unique_ptr<duckdb_table_representation> gpu_table_representation::convert_to_result_format(sirius::memory::memory_space& host_memory_space, rmm::cuda_stream_view stream) { 
+    return data_representation_converter::convert_gpu_table_to_result_format(_table.view(), host_memory_space, stream);
 }
 
 } // namespace sirius

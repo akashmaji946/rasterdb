@@ -95,6 +95,19 @@ public:
     bool can_reserve(size_t size) const;
     std::string to_string() const;
 
+    /**
+     * @brief Attempt to retrieve the default allocator as a concrete type.
+     *
+     * Returns nullptr if the default allocator is not of the requested type.
+     */
+    template <typename T>
+    T* get_default_allocator_as() const {
+        if (_allocators.empty()) {
+            return nullptr;
+        }
+        return dynamic_cast<T*>(_allocators[0].get());
+    }
+
 private:
     const Tier _tier;
     const size_t _device_id;

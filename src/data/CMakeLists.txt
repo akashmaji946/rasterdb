@@ -15,7 +15,9 @@
 set(EXTENSION_SOURCES
         ${EXTENSION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/cpu_data_representation.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/duckdb_data_representation.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/gpu_data_representation.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/data_representation_converter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/data_batch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/data_batch_view.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/data_repository.cpp

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "data/common.hpp"
+#include "data/duckdb_data_representation.hpp"
 #include "memory/memory_space.hpp"
 #include "cudf/cudf_utils.hpp"
 #include "helper/helper.hpp"
@@ -66,6 +67,13 @@ public:
      */
     sirius::unique_ptr<idata_representation> convert_to_memory_space(sirius::memory::memory_space& target_memory_space, rmm::cuda_stream_view stream = rmm::cuda_stream_default) override;
 
+    /**
+     * @brief Convert this GPU table representation to a duckdb representation
+     * 
+     * @param host_memory_space Memory space we want to store the results
+     * @param stream CUDA stream to use for the memory operations
+     */
+    sirius::unique_ptr<duckdb_table_representation> convert_to_result_format(sirius::memory::memory_space& host_memory_space, rmm::cuda_stream_view stream = rmm::cuda_stream_default);  
 private:
     cudf::table _table; ///< The actual cuDF table with the data
 };

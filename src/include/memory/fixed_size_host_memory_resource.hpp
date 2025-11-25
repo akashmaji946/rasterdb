@@ -131,7 +131,7 @@ public:
 
         ~multiple_blocks_allocation() {
             for (void* ptr : blocks) {
-                mr->deallocate(ptr, block_size);
+                if(ptr != nullptr) mr->deallocate(ptr, block_size);
             }
         }
 
@@ -156,6 +156,26 @@ public:
                 other.blocks.clear();
             }
             return *this;
+        }
+
+        /**
+         * @brief Ensures that the allocation has at least the specified number of blocks
+         * 
+         * Checks if the allocation has at least the specified number of blocks and if not requests more blocks
+         */
+        void ensure_capacity(size_t num_blocks) { 
+            if(num_blocks <= blocks.size()) { // We already have the requested number of blocks
+                return;
+            }
+
+            int num_additional_blocks = num_blocks - blocks.size();
+            multiple_blocks_allocation additional_allocation = mr->allocate_multiple_blocks(num_additional_blocks * block_size);
+            
+            // Copy over the block pointers from that allocation to this allocation
+            for(int i = 0; i < additional_allocation.blocks.size(); i++) { 
+                blocks.push_back(additional_allocation.blocks[i]);
+                additional_allocation.blocks[i] = nullptr; // This ensures that they don't get deallocated when additional_allocation goes out of scope 
+            }
         }
 
         std::size_t size() const noexcept { return blocks.size(); }
