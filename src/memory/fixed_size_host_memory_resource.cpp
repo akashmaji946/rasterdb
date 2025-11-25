@@ -21,33 +21,19 @@
 #include "error.hpp"
 #include "memory/common.hpp"
 #include "memory/memory_reservation.hpp"
+#include "mr/device/device_memory_resource.hpp"
 
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <string>
 
 namespace sirius {
 namespace memory {
 
-fixed_size_host_memory_resource::fixed_size_host_memory_resource(int device_id,
-                                                                 std::size_t memory_limit,
-                                                                 std::size_t memory_capacity,
-                                                                 std::size_t block_size,
-                                                                 std::size_t pool_size,
-                                                                 std::size_t initial_pools)
-  : fixed_size_host_memory_resource(device_id,
-                                    std::make_unique<rmm::mr::pinned_host_memory_resource>(),
-                                    memory_limit,
-                                    memory_capacity,
-                                    block_size,
-                                    pool_size,
-                                    initial_pools)
-{
-}
-
 fixed_size_host_memory_resource::fixed_size_host_memory_resource(
   int device_id,
-  std::unique_ptr<rmm::mr::pinned_host_memory_resource> upstream_mr,
+  rmm::mr::device_memory_resource& upstream_mr,
   std::size_t memory_limit,
   std::size_t memory_capacity,
   std::size_t block_size,
@@ -58,7 +44,7 @@ fixed_size_host_memory_resource::fixed_size_host_memory_resource(
     memory_capacity_(memory_capacity),
     block_size_(rmm::align_up(block_size, alignof(std::max_align_t))),
     pool_size_(pool_size),
-    upstream_mr_(std::move(upstream_mr))
+    upstream_mr_(&upstream_mr)
 {
   assert(upstream_mr_);
   for (std::size_t i = 0; i < initial_pools; ++i) {
@@ -77,6 +63,22 @@ fixed_size_host_memory_resource::~fixed_size_host_memory_resource()
   free_blocks_.clear();
 }
 
+std::size_t fixed_size_host_memory_resource::get_available_memory() const noexcept
+{
+  auto current_bytes = allocated_bytes_.load();
+  return memory_capacity_ > current_bytes ? memory_capacity_ - current_bytes : 0;
+}
+
+std::size_t fixed_size_host_memory_resource::get_total_reserved_bytes() const noexcept
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::size_t total = 0;
+  for (const auto& res : active_reservations_) {
+    total += res->size;
+  }
+  return total;
+}
+
 std::size_t fixed_size_host_memory_resource::get_block_size() const noexcept { return block_size_; }
 
 std::size_t fixed_size_host_memory_resource::get_free_blocks() const noexcept
@@ -91,13 +93,13 @@ std::size_t fixed_size_host_memory_resource::get_total_blocks() const noexcept
   return allocated_blocks_.size() * pool_size_;
 }
 
-rmm::mr::pinned_host_memory_resource* fixed_size_host_memory_resource::get_upstream_resource()
+rmm::mr::device_memory_resource* fixed_size_host_memory_resource::get_upstream_resource()
   const noexcept
 {
-  return upstream_mr_.get();
+  return upstream_mr_;
 }
 
-std::unique_ptr<fixed_size_host_memory_resource::multiple_blocks_allocation>
+fixed_size_host_memory_resource::fixed_multiple_blocks_allocation
 fixed_size_host_memory_resource::allocate_multiple_blocks(std::size_t total_bytes, reservation* res)
 {
   RMM_FUNC_RANGE();
@@ -168,14 +170,19 @@ bool fixed_size_host_memory_resource::do_is_equal(
   return this == &other;
 }
 
-std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(std::size_t bytes)
+std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
+  std::size_t bytes, std::function<void()> on_release)
 {
   bytes                            = rmm::align_up(bytes, block_size_);
   std::size_t next_allocated_bytes = allocated_bytes_.fetch_add(bytes) + bytes;
   if (next_allocated_bytes > memory_limit_) {
-    auto res = reservation::create(Tier::HOST, device_id_.value(), bytes, [this](reservation* r) {
-      this->release_reservation(r);
-    });
+    auto res = reservation::create(Tier::HOST,
+                                   device_id_.value(),
+                                   bytes,
+                                   [this, on_exit(std::move(on_release))](reservation* r) {
+                                     this->release_reservation(r);
+                                     if (on_exit) on_exit();
+                                   });
     this->register_reservation(res.get());
     return res;
   } else {

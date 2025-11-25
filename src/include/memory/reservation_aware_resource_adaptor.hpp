@@ -118,11 +118,13 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * per-thread)
    */
   explicit reservation_aware_resource_adaptor(
+    Tier tier,
+    int device_id,
     rmm::device_async_resource_ref upstream,
     std::size_t capacity,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
     std::unique_ptr<oom_handling_policy> default_oom_policy             = nullptr,
-    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_STREAM);
+    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_THREAD);
 
   /**
    * @brief Constructs a per-stream tracking resource adaptor.
@@ -134,9 +136,11 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * per-thread)
    */
   explicit reservation_aware_resource_adaptor(
+    Tier tier,
+    int device_id,
     rmm::device_async_resource_ref upstream,
-    std::size_t capacity,
     std::size_t memory_limit,
+    std::size_t capacity,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
     std::unique_ptr<oom_handling_policy> default_oom_policy             = nullptr,
     AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_STREAM);
@@ -157,6 +161,16 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @return Reference to the upstream resource
    */
   rmm::device_async_resource_ref get_upstream_resource() const noexcept;
+
+  /**
+   * @brief Returns the available memory left in the resource
+   */
+  std::size_t get_available_memory() const noexcept;
+
+  /**
+   * @brief Returns the available memory left in the resource
+   */
+  std::size_t get_available_memory(rmm::cuda_stream_view stream) const noexcept;
 
   /**
    * @brief Gets the currently allocated bytes for a specific stream.
@@ -207,7 +221,13 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   // Reservation Management
   //===----------------------------------------------------------------------===//
 
-  std::unique_ptr<reservation> reserve(std::size_t size_bytes);
+  /**
+   * @brief makes reservations
+   * @param bytes the size of reservation
+   * @param on_release used to hook callbacks for when the reservation is released
+   */
+  std::unique_ptr<reservation> reserve(std::size_t bytes,
+                                       std::function<void()> on_release = nullptr);
 
   /**
    * @brief Sets the memory reservation for a specific stream by requesting from the memory manager.
@@ -326,8 +346,8 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
 
   /// The upstream memory resource
   rmm::device_async_resource_ref _upstream;
-  const std::size_t _capacity;
   const std::size_t _memory_limit;
+  const std::size_t _capacity;
 
   /// Per-stream allocation tracking
   std::unique_ptr<reservation_state_container> _reservation_states;

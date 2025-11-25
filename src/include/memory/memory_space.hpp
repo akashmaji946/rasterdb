@@ -18,6 +18,7 @@
 
 #include "memory/common.hpp"
 
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -60,7 +61,7 @@ class memory_space {
   memory_space(Tier tier,
                int device_id,
                size_t memory_limit,
-               std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> allocators,
+               std::unique_ptr<rmm::mr::device_memory_resource> allocator,
                std::optional<std::size_t> capacity = std::nullopt);
 
   // Disable copy/move to ensure stable addresses for reservations
@@ -81,38 +82,37 @@ class memory_space {
 
   // Reservation management - these are the core methods that do the actual work
   std::unique_ptr<reservation> request_reservation(size_t size);
-  void release_reservation(std::unique_ptr<reservation> res);
-
-  bool shrink_reservation(reservation* res, size_t new_size);
-  bool grow_reservation(reservation* res, size_t new_size);
 
   // State queries
+  size_t get_available_memory(rmm::cuda_stream_view stream) const;
   size_t get_available_memory() const;
   size_t get_total_reserved_memory() const;
-  size_t get_max_memory() const;
-  size_t get_active_reservation_count() const;
+  size_t get_max_memory() const noexcept;
 
   // Allocator management
-  rmm::device_async_resource_ref get_default_allocator() const noexcept;
+  rmm::mr::device_memory_resource* get_default_allocator() const noexcept;
 
   // Utility methods
-  bool can_reserve(size_t size) const;
   std::string to_string() const;
 
- private:
+ protected:
   const Tier _tier;
   const int _device_id;
   const size_t _memory_limit;
   const size_t _capacity;
+  using reserving_adaptor_type = std::variant<std::monostate,
+                                              std::unique_ptr<reservation_aware_resource_adaptor>,
+                                              std::unique_ptr<fixed_size_host_memory_resource>>;
+
+  mutable std::mutex _reservation_mutex;
+  std::condition_variable _reservation_cv;
+  bool _reservation_release{false};
+
+  void notify_release_of_reservation();
 
   // Memory resources owned by this memory_space
   std::unique_ptr<rmm::mr::device_memory_resource> _allocator;
-  std::variant<std::unique_ptr<reservation_aware_resource_adaptor>,
-               std::unique_ptr<fixed_size_host_memory_resource>>
-    _reserving_adaptor;
-
-  void wait_for_memory(size_t size, std::unique_lock<std::mutex>& lock);
-  bool validate_reservation(const reservation* res) const;
+  reserving_adaptor_type _reservation_allocator;
 };
 
 /**

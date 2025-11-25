@@ -16,15 +16,18 @@
 
 #include "memory/memory_space.hpp"
 
+#include "memory/common.hpp"
+#include "memory/fixed_size_host_memory_resource.hpp"
 #include "memory/memory_reservation.hpp"
-#include "memory/oom_handling_policy.hpp"
 #include "memory/reservation_aware_resource_adaptor.hpp"
 
 #include <rmm/cuda_device.hpp>
 
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <variant>
 
 namespace sirius {
 namespace memory {
@@ -36,7 +39,7 @@ namespace memory {
 memory_space::memory_space(Tier tier,
                            int device_id,
                            size_t memory_limit,
-                           std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> allocators,
+                           std::unique_ptr<rmm::mr::device_memory_resource> allocator,
                            std::optional<std::size_t> capacity)
   : _tier(tier),
     _device_id(device_id),
@@ -52,17 +55,19 @@ memory_space::memory_space(Tier tier,
         return std::numeric_limits<std::size_t>::max();
       }
     }()),
-    _allocator(std::move(allocators[0])),
-    _reserving_adaptor(std::make_unique<reservation_aware_resource_adaptor>(
-      *_allocator,
-      _capacity,
-      _memory_limit,
-      make_default_reservation_limit_policy(),
-      make_default_oom_policy(),
-      reservation_aware_resource_adaptor::AllocationTrackingScope::PER_THREAD))
+    _allocator(std::move(allocator))
 {
   if (memory_limit == 0) { throw std::invalid_argument("Memory limit must be greater than 0"); }
   if (!_allocator) { throw std::invalid_argument("At least one allocator must be provided"); }
+  if (tier == Tier::GPU) {
+    _reservation_allocator = std::make_unique<reservation_aware_resource_adaptor>(
+      _tier, _device_id, *_allocator, _memory_limit, _capacity);
+  } else if (tier == Tier::HOST) {
+    _reservation_allocator = std::make_unique<fixed_size_host_memory_resource>(
+      _device_id, *_allocator, _memory_limit, _capacity);
+  } else {
+    _reservation_allocator = std::monostate{};
+  }
 }
 
 memory_space::~memory_space() = default;
@@ -80,29 +85,69 @@ int memory_space::get_device_id() const { return _device_id; }
 
 std::unique_ptr<reservation> memory_space::request_reservation(size_t size)
 {
-  return std::unique_ptr<reservation>(nullptr);
+  return std::visit(sirius::overloaded{
+                      [&](auto others) { return std::unique_ptr<reservation>(nullptr); },
+                      [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+                        return mr->reserve(size, [this] { this->notify_release_of_reservation(); });
+                      },
+                      [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+                        return mr->reserve(size, [this] { this->notify_release_of_reservation(); });
+                      }},
+                    _reservation_allocator);
 }
 
-void memory_space::release_reservation(std::unique_ptr<reservation> res) {}
-
-bool memory_space::shrink_reservation(reservation* res, size_t new_size) { return true; }
-
-bool memory_space::grow_reservation(reservation* res, size_t new_size) { return true; }
-
-size_t memory_space::get_available_memory() const { return 0; }
-
-size_t memory_space::get_total_reserved_memory() const { return 0; }
-
-size_t memory_space::get_max_memory() const { return _memory_limit; }
-
-size_t memory_space::get_active_reservation_count() const { return 0; }
-
-rmm::device_async_resource_ref memory_space::get_default_allocator() const noexcept
+void memory_space::notify_release_of_reservation()
 {
-  return *_allocator;
+  std::lock_guard lock(_reservation_mutex);
+  _reservation_release = true;
+  _reservation_cv.notify_one();
 }
 
-bool memory_space::can_reserve(size_t size) const { return 0; }
+size_t memory_space::get_available_memory(rmm::cuda_stream_view stream) const
+{
+  return std::visit(
+    sirius::overloaded{[&](auto others) { return _memory_limit; },
+                       [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+                         return mr->get_available_memory(stream);
+                       },
+                       [&](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+                         return mr->get_available_memory();
+                       }},
+    _reservation_allocator);
+}
+
+size_t memory_space::get_available_memory() const
+{
+  return std::visit(
+    sirius::overloaded{[&](auto others) { return _memory_limit; },
+                       [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+                         return mr->get_available_memory();
+                       },
+                       [](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+                         return mr->get_available_memory();
+                       }},
+    _reservation_allocator);
+}
+
+size_t memory_space::get_total_reserved_memory() const
+{
+  return std::visit(
+    sirius::overloaded{[&](auto others) { return 0UL; },
+                       [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+                         return mr->get_total_reserved_bytes();
+                       },
+                       [](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+                         return mr->get_total_reserved_bytes();
+                       }},
+    _reservation_allocator);
+}
+
+size_t memory_space::get_max_memory() const noexcept { return _memory_limit; }
+
+rmm::mr::device_memory_resource* memory_space::get_default_allocator() const noexcept
+{
+  return _allocator.get();
+}
 
 std::string memory_space::to_string() const
 {
@@ -116,13 +161,6 @@ std::string memory_space::to_string() const
   }
   oss << ", device_id=" << _device_id << ", limit=" << _memory_limit << ")";
   return oss.str();
-}
-
-void memory_space::wait_for_memory(size_t size, std::unique_lock<std::mutex>& lock) {}
-
-bool memory_space::validate_reservation(const reservation* res) const
-{
-  return res && res->tier == _tier && res->device_id == _device_id;
 }
 
 //===----------------------------------------------------------------------===//

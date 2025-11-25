@@ -234,6 +234,12 @@ struct reservation {
   // Reservation Size Management
   //===----------------------------------------------------------------------===//
 
+  std::size_t get_available_memory() const noexcept
+  {
+    auto current_bytes = allocated_bytes.load();
+    return size > current_bytes ? size - current_bytes : 0UL;
+  }
+
   /**
    * @brief Attempts to grow this reservation to a new larger size.
    * @param new_size The new size for the reservation (must be larger than current size)
@@ -270,7 +276,10 @@ struct reservation {
 
   ~reservation()
   {
-    if (_release_callback) { _release_callback(this); }
+    try {
+      if (_release_callback) { _release_callback(this); }
+    } catch (...) {
+    }
   }
 
  private:

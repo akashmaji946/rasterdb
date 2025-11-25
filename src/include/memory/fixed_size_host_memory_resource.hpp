@@ -125,21 +125,6 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   using fixed_multiple_blocks_allocation = std::unique_ptr<multiple_blocks_allocation>;
 
   /**
-   * @brief Construct a new fixed-size host memory resource.
-   *
-   * @param block_size Size of each block in bytes
-   * @param pool_size Number of blocks to pre-allocate
-   * @param initial_pools Number of pools to pre-allocate
-   */
-  explicit fixed_size_host_memory_resource(
-    int device_id,
-    std::size_t mem_limit,
-    std::size_t capacity,
-    std::size_t block_size    = default_block_size,
-    std::size_t pool_size     = default_pool_size,
-    std::size_t initial_pools = default_initial_number_pools);
-
-  /**
    * @brief Construct with custom upstream resource.
    *
    * @param upstream_mr Upstream memory resource to use
@@ -149,7 +134,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    */
   explicit fixed_size_host_memory_resource(
     int device_id,
-    std::unique_ptr<rmm::mr::pinned_host_memory_resource> upstream_mr,
+    rmm::mr::device_memory_resource& upstream_mr,
     std::size_t mem_limit,
     std::size_t capacity,
     std::size_t block_size    = default_block_size,
@@ -166,6 +151,11 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @brief Destructor - frees all allocated blocks.
    */
   ~fixed_size_host_memory_resource() override;
+
+  /**
+   * @brief return the total available memory in the memory resource
+   */
+  [[nodiscard]] std::size_t get_available_memory() const noexcept;
 
   /**
    * @brief Get the block size.
@@ -194,13 +184,21 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @return rmm::mr::host_memory_resource* Pointer to upstream resource (nullptr if using pinned
    * host)
    */
-  [[nodiscard]] rmm::mr::pinned_host_memory_resource* get_upstream_resource() const noexcept;
+  [[nodiscard]] rmm::mr::device_memory_resource* get_upstream_resource() const noexcept;
+
+  /**
+   * @brief Get total reserved bytes.
+   * @return return total reserved bytes in the fixed memory resource
+   */
+  [[nodiscard]] std::size_t get_total_reserved_bytes() const noexcept;
 
   /**
    * @brief makes reservations
    * @param bytes the size of reservation
+   * @param on_release used to hook callbacks for when the reservation is released
    */
-  std::unique_ptr<reservation> reserve(std::size_t bytes);
+  std::unique_ptr<reservation> reserve(std::size_t bytes,
+                                       std::function<void()> on_release = nullptr);
 
   /**
    * @brief Allocate multiple blocks to satisfy a large allocation request.
@@ -276,12 +274,11 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   rmm::cuda_device_id device_id_;
   std::size_t memory_limit_;
   std::size_t memory_capacity_;
-  std::size_t block_size_;  ///< Size of each block
-  std::size_t pool_size_;   ///< Number of blocks in pool
-  std::unique_ptr<rmm::mr::pinned_host_memory_resource>
-    upstream_mr_;                        ///< Upstream memory resource (optional)
-  std::vector<void*> allocated_blocks_;  ///< All allocated blocks
-  std::vector<void*> free_blocks_;       ///< Currently free blocks
+  std::size_t block_size_;                        ///< Size of each block
+  std::size_t pool_size_;                         ///< Number of blocks in pool
+  rmm::mr::device_memory_resource* upstream_mr_;  ///< Upstream memory resource (optional)
+  std::vector<void*> allocated_blocks_;           ///< All allocated blocks
+  std::vector<void*> free_blocks_;                ///< Currently free blocks
   mutable std::mutex mutex_;
   std::atomic<size_t> allocated_bytes_{0};
 

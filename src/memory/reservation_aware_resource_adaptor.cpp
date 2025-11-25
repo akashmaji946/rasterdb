@@ -17,6 +17,7 @@
 #include "memory/reservation_aware_resource_adaptor.hpp"
 
 #include "aligned.hpp"
+#include "cuda_device.hpp"
 #include "memory/memory_reservation.hpp"
 
 #include <rmm/detail/error.hpp>
@@ -170,14 +171,18 @@ reservation_aware_resource_adaptor::reservation_state::check_reservation_and_han
 }
 
 reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
+  Tier tier,
+  int device_id,
   rmm::device_async_resource_ref upstream,
   std::size_t capacity,
   std::unique_ptr<reservation_limit_policy> default_reservation_policy,
   std::unique_ptr<oom_handling_policy> default_oom_policy,
   AllocationTrackingScope tracking_scope)
-  : _upstream(std::move(upstream)),
-    _capacity(capacity),
+  : _tier(tier),
+    _device_id(device_id),
+    _upstream(std::move(upstream)),
     _memory_limit(capacity),
+    _capacity(capacity),
     _reservation_states([&]() -> std::unique_ptr<reservation_state_container> {
       if (tracking_scope == AllocationTrackingScope::PER_STREAM) {
         return std::make_unique<per_stream_reservation_state_container>();
@@ -194,15 +199,19 @@ reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
 }
 
 reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
+  Tier tier,
+  int device_id,
   rmm::device_async_resource_ref upstream,
-  std::size_t capacity,
   std::size_t memory_limit,
+  std::size_t capacity,
   std::unique_ptr<reservation_limit_policy> default_reservation_policy,
   std::unique_ptr<oom_handling_policy> default_oom_policy,
   AllocationTrackingScope tracking_scope)
-  : _upstream(std::move(upstream)),
-    _capacity(capacity),
+  : _tier(tier),
+    _device_id(device_id),
+    _upstream(std::move(upstream)),
     _memory_limit(memory_limit),
+    _capacity(capacity),
     _reservation_states([&]() -> std::unique_ptr<reservation_state_container> {
       if (tracking_scope == AllocationTrackingScope::PER_STREAM) {
         return std::make_unique<per_stream_reservation_state_container>();
@@ -222,6 +231,22 @@ rmm::device_async_resource_ref reservation_aware_resource_adaptor::get_upstream_
   const noexcept
 {
   return _upstream;
+}
+
+std::size_t reservation_aware_resource_adaptor::get_available_memory() const noexcept
+{
+  auto current_bytes = _total_allocated_bytes.load();
+  return _capacity > current_bytes ? _capacity - current_bytes : 0;
+}
+
+std::size_t reservation_aware_resource_adaptor::get_available_memory(
+  rmm::cuda_stream_view stream) const noexcept
+{
+  auto upstream_available_memory = get_available_memory();
+  if (auto* state = _reservation_states->get_stream_state(stream)) {
+    upstream_available_memory += state->memory_reservation->get_available_memory();
+  }
+  return upstream_available_memory;
 }
 
 std::size_t reservation_aware_resource_adaptor::get_allocated_bytes(
@@ -292,14 +317,19 @@ bool reservation_aware_resource_adaptor::set_stream_reservation(
   return true;
 }
 
-std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(std::size_t size_bytes)
+std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
+  std::size_t size_bytes, std::function<void()> on_release)
 {
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(size_bytes, _memory_limit)) {
-    auto res = reservation::create(
-      _tier, _device_id.value(), size_bytes, [this, size_bytes](reservation* r) {
-        this->do_release_reservation(r);
-      });
+    auto res =
+      reservation::create(_tier,
+                          _device_id.value(),
+                          size_bytes,
+                          [this, on_exit(std::move(on_release)), size_bytes](reservation* r) {
+                            this->do_release_reservation(r);
+                            if (on_exit) on_exit();
+                          });
     reservation_views.insert(res.get());
     return res;
   }

@@ -17,6 +17,7 @@
 #include "memory/common.hpp"
 
 namespace sirius {
+
 namespace memory {
 
 const char* MemoryErrorCategory::name() const noexcept { return "SiriusMemorySystem"; }
