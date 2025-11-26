@@ -292,6 +292,12 @@ std::vector<const memory_space*> memory_reservation_manager::get_memory_spaces_f
   return (it != _tier_to_memory_spaces.end()) ? it->second : std::vector<const memory_space*>{};
 }
 
+std::vector<memory_space*> memory_reservation_manager::get_memory_spaces_for_tier(Tier tier)
+{
+  auto it = _tier_to_memory_spaces.find(tier);
+  return (it != _tier_to_memory_spaces.end()) ? it->second : std::vector<memory_space*>{};
+}
+
 std::vector<const memory_space*> memory_reservation_manager::get_all_memory_spaces() const
 {
   std::vector<const memory_space*> result;
@@ -369,14 +375,14 @@ size_t memory_reservation_manager::get_active_reservation_count() const
 
 std::optional<std::unique_ptr<reservation>>
 memory_reservation_manager::select_memory_space_and_make_reservation(
-  const reservation_request& request, size_t size) const
+  const reservation_request& request, size_t size)
 {
-  auto try_candidates = [this, size](const std::vector<const memory_space*>& candidates)
-    -> std::optional<std::unique_ptr<reservation>> {
-    for (const memory_space* space : candidates) {
-      if (space && space->can_reserve(size)) {
-        // Delegate to memory_space to create the reservation
-        return const_cast<memory_space*>(space)->request_reservation(size);
+  auto try_candidates =
+    [this,
+     size](std::vector<memory_space*>& candidates) -> std::optional<std::unique_ptr<reservation>> {
+    for (memory_space* space : candidates) {
+      if (space) {
+        if (auto res = space->request_reservation(size)) { return res; }
       }
     }
     return std::nullopt;

@@ -392,6 +392,7 @@ class memory_reservation_manager {
    * Returns empty vector if no spaces exist for that tier.
    */
   std::vector<const memory_space*> get_memory_spaces_for_tier(Tier tier) const;
+  std::vector<memory_space*> get_memory_spaces_for_tier(Tier tier);
 
   /**
    * Get all memory_spaces managed by this instance.
@@ -435,7 +436,7 @@ class memory_reservation_manager {
   // Helper method: attempts to select a space and immediately make a reservation
   // Returns a reservation when successful, or std::nullopt if none can satisfy the request
   std::optional<std::unique_ptr<reservation>> select_memory_space_and_make_reservation(
-    const reservation_request& request, size_t size) const;
+    const reservation_request& request, size_t size);
 
   void build_lookup_tables();
 

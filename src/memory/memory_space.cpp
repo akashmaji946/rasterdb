@@ -96,19 +96,6 @@ std::unique_ptr<reservation> memory_space::request_reservation(size_t size)
                     _reservation_allocator);
 }
 
-bool memory_space::can_reserve(std::size_t bytes) const
-{
-  return std::visit(
-    sirius::overloaded{[&](auto others) { return true; },
-                       [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->get_available_memory() > bytes;
-                       },
-                       [&](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->get_available_memory() > bytes;
-                       }},
-    _reservation_allocator);
-}
-
 std::size_t memory_space::get_active_reservation_count() const
 {
   return std::visit(
