@@ -41,8 +41,7 @@ memory_space::memory_space(Tier tier,
                            size_t memory_limit,
                            std::unique_ptr<rmm::mr::device_memory_resource> allocator,
                            std::optional<std::size_t> capacity)
-  : _tier(tier),
-    _device_id(device_id),
+  : _id(tier, device_id),
     _memory_limit(memory_limit),
     _capacity([&]() {
       if (capacity.has_value()) {
@@ -61,10 +60,10 @@ memory_space::memory_space(Tier tier,
   if (!_allocator) { throw std::invalid_argument("At least one allocator must be provided"); }
   if (tier == Tier::GPU) {
     _reservation_allocator = std::make_unique<reservation_aware_resource_adaptor>(
-      _tier, _device_id, *_allocator, _memory_limit, _capacity);
+      _id, *_allocator, _memory_limit, _capacity);
   } else if (tier == Tier::HOST) {
-    _reservation_allocator = std::make_unique<fixed_size_host_memory_resource>(
-      _device_id, *_allocator, _memory_limit, _capacity);
+    _reservation_allocator =
+      std::make_unique<fixed_size_host_memory_resource>(_id, *_allocator, _memory_limit, _capacity);
   } else {
     _reservation_allocator = std::monostate{};
   }
@@ -72,16 +71,15 @@ memory_space::memory_space(Tier tier,
 
 memory_space::~memory_space() = default;
 
-bool memory_space::operator==(const memory_space& other) const
-{
-  return _tier == other._tier && _device_id == other._device_id;
-}
+bool memory_space::operator==(const memory_space& other) const { return _id == other.get_id(); }
 
 bool memory_space::operator!=(const memory_space& other) const { return !(*this == other); }
 
-Tier memory_space::get_tier() const { return _tier; }
+memory_space_id memory_space::get_id() const noexcept { return _id; }
 
-int memory_space::get_device_id() const { return _device_id; }
+Tier memory_space::get_tier() const noexcept { return _id.tier; }
+
+int memory_space::get_device_id() const noexcept { return _id.device_id; }
 
 std::unique_ptr<reservation> memory_space::request_reservation(size_t size)
 {
@@ -166,13 +164,13 @@ std::string memory_space::to_string() const
 {
   std::ostringstream oss;
   oss << "memory_space(tier=";
-  switch (_tier) {
+  switch (_id.tier) {
     case Tier::GPU: oss << "GPU"; break;
     case Tier::HOST: oss << "HOST"; break;
     case Tier::DISK: oss << "DISK"; break;
     default: oss << "UNKNOWN"; break;
   }
-  oss << ", device_id=" << _device_id << ", limit=" << _memory_limit << ")";
+  oss << ", device_id=" << _id.device_id << ", limit=" << _memory_limit << ")";
   return oss.str();
 }
 

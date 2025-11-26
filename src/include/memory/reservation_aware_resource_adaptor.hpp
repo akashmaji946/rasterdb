@@ -116,8 +116,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * per-thread)
    */
   explicit reservation_aware_resource_adaptor(
-    Tier tier,
-    int device_id,
+    memory_space_id space_id,
     rmm::device_async_resource_ref upstream,
     std::size_t capacity,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
@@ -134,8 +133,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * per-thread)
    */
   explicit reservation_aware_resource_adaptor(
-    Tier tier,
-    int device_id,
+    memory_space_id space_id,
     rmm::device_async_resource_ref upstream,
     std::size_t memory_limit,
     std::size_t capacity,
@@ -350,8 +348,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    */
   bool do_is_equal(const rmm::mr::device_memory_resource& other) const noexcept override;
 
-  Tier _tier;
-  rmm::cuda_device_id _device_id;
+  memory_space_id _space_id;
 
   /// The upstream memory resource
   rmm::device_async_resource_ref _upstream;

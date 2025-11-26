@@ -276,7 +276,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    */
   void return_allocated_chunks(std::vector<std::byte*> chunks, reservation* res);
 
-  rmm::cuda_device_id device_id_;
+  memory_space_id space_id_;
   std::size_t memory_limit_;
   std::size_t memory_capacity_;
   std::size_t block_size_;                        ///< Size of each block

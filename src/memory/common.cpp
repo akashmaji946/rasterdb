@@ -20,9 +20,9 @@ namespace sirius {
 
 namespace memory {
 
-const char* MemoryErrorCategory::name() const noexcept { return "SiriusMemorySystem"; }
+const char* memory_error_category::name() const noexcept { return "SiriusMemorySystem"; }
 
-std::string MemoryErrorCategory::message(int ev) const
+std::string memory_error_category::message(int ev) const
 {
   switch (static_cast<MemoryError>(ev)) {
     case MemoryError::SUCCESS: return "Success";
@@ -33,9 +33,9 @@ std::string MemoryErrorCategory::message(int ev) const
   }
 }
 
-const MemoryErrorCategory& memory_category()
+const memory_error_category& memory_category()
 {
-  static const MemoryErrorCategory instance;
+  static const memory_error_category instance;
   return instance;
 }
 
@@ -55,9 +55,9 @@ sirius_out_of_memory::sirius_out_of_memory(std::string_view message,
 }  // namespace sirius
 
 namespace std {
-size_t hash<std::pair<sirius::memory::Tier, size_t>>::operator()(
-  const std::pair<sirius::memory::Tier, size_t>& p) const
+size_t hash<sirius::memory::memory_space_id>::operator()(
+  const sirius::memory::memory_space_id& p) const
 {
-  return std::hash<int>{}(static_cast<int>(p.first)) ^ (std::hash<size_t>{}(p.second) << 1);
+  return p.uuid();
 }
 }  // namespace std

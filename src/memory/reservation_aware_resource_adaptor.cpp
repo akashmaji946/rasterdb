@@ -17,8 +17,8 @@
 #include "memory/reservation_aware_resource_adaptor.hpp"
 
 #include "aligned.hpp"
-#include "cuda_device.hpp"
 #include "cuda_stream_view.hpp"
+#include "memory/common.hpp"
 #include "memory/memory_reservation.hpp"
 
 #include <rmm/detail/error.hpp>
@@ -174,15 +174,13 @@ reservation_aware_resource_adaptor::reservation_state::check_reservation_and_han
 }
 
 reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
-  Tier tier,
-  int device_id,
+  memory_space_id space_id,
   rmm::device_async_resource_ref upstream,
   std::size_t capacity,
   std::unique_ptr<reservation_limit_policy> default_reservation_policy,
   std::unique_ptr<oom_handling_policy> default_oom_policy,
   AllocationTrackingScope tracking_scope)
-  : _tier(tier),
-    _device_id(device_id),
+  : _space_id(space_id),
     _upstream(std::move(upstream)),
     _memory_limit(capacity),
     _capacity(capacity),
@@ -202,16 +200,14 @@ reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
 }
 
 reservation_aware_resource_adaptor::reservation_aware_resource_adaptor(
-  Tier tier,
-  int device_id,
+  memory_space_id space_id,
   rmm::device_async_resource_ref upstream,
   std::size_t memory_limit,
   std::size_t capacity,
   std::unique_ptr<reservation_limit_policy> default_reservation_policy,
   std::unique_ptr<oom_handling_policy> default_oom_policy,
   AllocationTrackingScope tracking_scope)
-  : _tier(tier),
-    _device_id(device_id),
+  : _space_id(space_id),
     _upstream(std::move(upstream)),
     _memory_limit(memory_limit),
     _capacity(capacity),
@@ -330,14 +326,11 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
 {
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(size_bytes, _memory_limit)) {
-    auto res =
-      reservation::create(_tier,
-                          _device_id.value(),
-                          size_bytes,
-                          [this, on_exit(std::move(on_release)), size_bytes](reservation* r) {
-                            this->do_release_reservation(r);
-                            if (on_exit) on_exit();
-                          });
+    auto res = reservation::create(
+      _space_id, size_bytes, [this, on_exit(std::move(on_release)), size_bytes](reservation* r) {
+        this->do_release_reservation(r);
+        if (on_exit) on_exit();
+      });
     reservation_views.insert(res.get());
     return res;
   }

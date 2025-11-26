@@ -17,7 +17,6 @@
 #include "memory/fixed_size_host_memory_resource.hpp"
 
 #include "aligned.hpp"
-#include "cuda_device.hpp"
 #include "error.hpp"
 #include "memory/common.hpp"
 #include "memory/memory_reservation.hpp"
@@ -25,8 +24,6 @@
 
 #include <memory>
 #include <mutex>
-#include <numeric>
-#include <string>
 
 namespace sirius {
 namespace memory {
@@ -39,7 +36,7 @@ fixed_size_host_memory_resource::fixed_size_host_memory_resource(
   std::size_t block_size,
   std::size_t pool_size,
   std::size_t initial_pools)
-  : device_id_(device_id),
+  : space_id_(Tier::HOST, device_id),
     memory_limit_(memory_limit),
     memory_capacity_(memory_capacity),
     block_size_(rmm::align_up(block_size, alignof(std::max_align_t))),
@@ -176,13 +173,11 @@ std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
   bytes                            = rmm::align_up(bytes, block_size_);
   std::size_t next_allocated_bytes = allocated_bytes_.fetch_add(bytes) + bytes;
   if (next_allocated_bytes > memory_limit_) {
-    auto res = reservation::create(Tier::HOST,
-                                   device_id_.value(),
-                                   bytes,
-                                   [this, on_exit(std::move(on_release))](reservation* r) {
-                                     this->release_reservation(r);
-                                     if (on_exit) on_exit();
-                                   });
+    auto res =
+      reservation::create(space_id_, bytes, [this, on_exit(std::move(on_release))](reservation* r) {
+        this->release_reservation(r);
+        if (on_exit) on_exit();
+      });
     this->register_reservation(res.get());
     return res;
   } else {

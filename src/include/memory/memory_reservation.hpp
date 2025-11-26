@@ -214,20 +214,17 @@ using reservation_request = std::variant<any_memory_space_in_tier_with_preferenc
  * The actual memory_space can be obtained through the memory_reservation_manager.
  */
 struct reservation {
-  Tier tier;
-  int device_id;
+  memory_space_id space_id;
   std::size_t size;
   std::atomic<int64_t> allocated_bytes{0};
 
   friend class reservation_aware_resource_adaptor;
 
-  static std::unique_ptr<reservation> create(Tier t,
-                                             int dev_id,
+  static std::unique_ptr<reservation> create(memory_space_id id,
                                              std::size_t size,
                                              std::function<void(reservation*)> release_callback)
   {
-    return std::unique_ptr<reservation>(
-      new reservation(t, dev_id, size, std::move(release_callback)));
+    return std::unique_ptr<reservation>(new reservation(id, size, std::move(release_callback)));
   }
 
   //===----------------------------------------------------------------------===//
@@ -283,8 +280,7 @@ struct reservation {
   }
 
  private:
-  reservation(Tier t,
-              int dev_id,
+  reservation(memory_space_id id,
               std::size_t size,
               std::function<void(reservation*)> release_callback);
 
@@ -397,7 +393,8 @@ class memory_reservation_manager {
   /**
    * Get all memory_spaces managed by this instance.
    */
-  std::vector<const memory_space*> get_all_memory_spaces() const;
+  std::vector<const memory_space*> get_all_memory_spaces() const noexcept;
+  std::vector<memory_space*> get_all_memory_spaces() noexcept;
 
   //===----------------------------------------------------------------------===//
   // Aggregated Queries
@@ -428,10 +425,8 @@ class memory_reservation_manager {
   std::vector<std::unique_ptr<memory_space>> _memory_spaces;
 
   // Fast lookups
-  std::
-    unordered_map<std::pair<Tier, size_t>, const memory_space*, std::hash<std::pair<Tier, size_t>>>
-      _memory_space_lookup;
-  std::unordered_map<Tier, std::vector<const memory_space*>> _tier_to_memory_spaces;
+  std::unordered_map<memory_space_id, std::size_t> _memory_space_lookup;
+  std::unordered_map<Tier, std::vector<std::size_t>> _tier_to_memory_spaces;
 
   // Helper method: attempts to select a space and immediately make a reservation
   // Returns a reservation when successful, or std::nullopt if none can satisfy the request

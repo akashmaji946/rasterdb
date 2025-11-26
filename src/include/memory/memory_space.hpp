@@ -19,6 +19,8 @@
 #include "memory/common.hpp"
 
 #include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -77,8 +79,9 @@ class memory_space {
   bool operator!=(const memory_space& other) const;
 
   // Basic properties
-  Tier get_tier() const;
-  int get_device_id() const;
+  memory_space_id get_id() const noexcept;
+  Tier get_tier() const noexcept;
+  int get_device_id() const noexcept;
 
   // Reservation management - these are the core methods that do the actual work
   std::unique_ptr<reservation> request_reservation(size_t size);
@@ -97,8 +100,7 @@ class memory_space {
   std::string to_string() const;
 
  protected:
-  const Tier _tier;
-  const int _device_id;
+  const memory_space_id _id;
   const size_t _memory_limit;
   const size_t _capacity;
   using reserving_adaptor_type = std::variant<std::monostate,

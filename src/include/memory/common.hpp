@@ -18,6 +18,8 @@
 
 #include <rmm/error.hpp>
 
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <system_error>
 #include <utility>
@@ -38,22 +40,43 @@ namespace memory {
  * Memory tier enumeration representing different types of memory storage.
  * Ordered roughly by performance (fastest to slowest access).
  */
-enum class Tier {
+enum class Tier : int32_t {
   GPU,   // GPU device memory (fastest but limited)
   HOST,  // Host system memory (fast, larger capacity)
   DISK,  // Disk/storage memory (slowest but largest capacity)
   SIZE   // Value = size of the enum, allows code to be more dynamic
 };
 
+/**
+ * Memory space id, comprised of device id, and tier
+ *
+ */
+class memory_space_id {
+ public:
+  Tier tier;
+  int32_t device_id;
+
+  explicit memory_space_id(Tier t, int32_t d_id) : tier(t), device_id(d_id) {}
+
+  auto operator<=>(const memory_space_id&) const noexcept = default;
+
+  std::size_t uuid() const noexcept
+  {
+    std::size_t key = 0;
+    std::memcpy(&key, this, sizeof(key));
+    return key;
+  }
+};
+
 enum class MemoryError { SUCCESS, ALLOCATION_FAILED, LIMIT_EXCEEDED, POOL_EXHAUSTED, SIZE };
 
-struct MemoryErrorCategory : std::error_category {
+struct memory_error_category : std::error_category {
   const char* name() const noexcept final;
 
   std::string message(int ev) const final;
 };
 
-const MemoryErrorCategory& memory_category();
+const memory_error_category& memory_category();
 
 inline std::error_code make_error_code(MemoryError e);
 
@@ -72,8 +95,8 @@ struct sirius_out_of_memory : public rmm::out_of_memory {
 // Specialization for std::hash to enable use of std::pair<Tier, size_t> as key
 namespace std {
 template <>
-struct hash<std::pair<sirius::memory::Tier, size_t>> {
-  size_t operator()(const std::pair<sirius::memory::Tier, size_t>& p) const;
+struct hash<sirius::memory::memory_space_id> {
+  size_t operator()(const sirius::memory::memory_space_id& p) const;
 };
 
 template <>
