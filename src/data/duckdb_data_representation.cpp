@@ -36,7 +36,7 @@ duckdb_table_representation::duckdb_table_representation(sirius::unique_ptr<siri
 }
 
 std::size_t duckdb_table_representation::get_size_in_bytes() const {
-    return 0;
+    return _result_table->allocation.size() * _result_table->allocation.block_size;
 }
 
 sirius::unique_ptr<idata_representation> duckdb_table_representation::convert_to_memory_space(sirius::memory::memory_space& target_memory_space, rmm::cuda_stream_view stream) {

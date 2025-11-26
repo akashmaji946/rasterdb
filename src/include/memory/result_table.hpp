@@ -39,7 +39,8 @@ struct result_table_location {
  * metadata in order to reconstruct all of the details and this column stores those details. Note
  * that all columns first store the validity bitmask and the actual data (not necessarily contigously). 
  *   - For fixed data it is just storing the underlying columnar data
- *   - For variable size strings we first store the offset and then the actual characters
+ *   - For variable size strings we first store the offset and then the actual characters. Additionally, we also
+ *   - store the duckdb style string alongside the raw characters that we copied over from the GPU
  */
 struct result_table_column { 
     cudf::type_id column_type; // The type of the column
@@ -48,6 +49,7 @@ struct result_table_column {
     size_t valid_mask_bytes; // The number of bytes occupied by the validity mask
     size_t num_rows; // The number of rows in the column
     size_t column_data_bytes; // The number of bytes needed to store the column's data
+    result_table_location duckdb_strings_loc; 
 };
 
 /**

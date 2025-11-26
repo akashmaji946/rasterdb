@@ -15,11 +15,8 @@
  */
 
 #include "catch.hpp"
-#include <memory>
-#include <vector>
 
 #include "duckdb/common/typedefs.hpp"
-
 #include "data/cpu_data_representation.hpp"
 #include "data/gpu_data_representation.hpp"
 #include "data/duckdb_data_representation.hpp"
@@ -27,6 +24,13 @@
 #include "memory/null_device_memory_resource.hpp"
 #include "memory/result_table.hpp"
 #include "memory/fixed_size_host_memory_resource.hpp"
+
+#include <memory>
+#include <vector>
+#include <algorithm>
+#include <random>
+#include <cudf/utilities/bit.hpp>
+#include <rmm/device_buffer.hpp>
 
 using namespace sirius;
 
@@ -62,12 +66,27 @@ std::unique_ptr<cudf::column> create_fixed_size_column(cudf::type_id col_type_id
     ); // Note that cudf::mask_state::UNINITIALIZED populates with random data so switch to cudf::mask_state::ALL_VALID/cudf::mask_state::ALL_NULL for determinstic behaviour
 }
 
+static const std::string TEST_STRING_VALUE = "super_simple_string"; 
 std::unique_ptr<cudf::column> create_string_column(int num_rows, bool has_null_mask) { 
-    cudf::string_scalar row_value("hello_world", true);
+    cudf::string_scalar row_value(TEST_STRING_VALUE.c_str(), true);
     auto col = cudf::make_column_from_scalar(row_value, num_rows);
     if (!has_null_mask) {
         col->set_null_mask(rmm::device_buffer{}, 0);
+    } else { 
+        // Create a randomly generate bitmask
+        std::size_t mask_size = cudf::bitmask_allocation_size_bytes(num_rows);
+        std::vector<uint8_t> host_random_mask(mask_size);
+        std::generate(host_random_mask.begin(), host_random_mask.end(), std::rand);
+        cudf::size_type null_count = 0;
+        for(int i = 0; i < num_rows; i++) {
+            null_count += (host_random_mask[i/8] >> (i % 8)) & 1;
+        }
+
+        // Copy to GPU and pass to cudf
+        rmm::device_buffer gpu_mask(host_random_mask.data(), mask_size, rmm::cuda_stream_default);
+        col->set_null_mask(std::move(gpu_mask), null_count);
     }
+
     return col;
 }
 
@@ -128,9 +147,6 @@ void verify_validity_mask(cudf::column_view cudf_col_view, size_t col, size_t nu
 
             // Compare this againse the duckdb value
             bool duckdb_is_valid = !column_vector.GetValue(chunk_offset).IsNull();
-            if(cudf_is_valid != duckdb_is_valid) { 
-                std::cout << "Null Mismatch Detail - Chunk: " << chunk_idx << ", Chunk Offset: " << chunk_offset << ", Global Offset: " << curr_record_offset << ", Cudf Value - " << cudf_is_valid << ", Duckdb Value - " << duckdb_is_valid << std::endl;
-            }
             REQUIRE(cudf_is_valid == duckdb_is_valid);
         }
 
@@ -169,12 +185,35 @@ void verify_fixed_size_representation(cudf::column_view cudf_col_view, size_t co
 
             // Compare the duckdb data with the cudf data based on the record width
             if(record_width == 4) { 
-                REQUIRE(reinterpret_cast<uint32_t*>(cudf_record_ptr)[0] == reinterpret_cast<uint32_t*>(duckdb_record_ptr)[0]);
+                int32_t cudf_record_value = reinterpret_cast<int32_t*>(cudf_record_ptr)[0];
+                int32_t duckdb_record_value = reinterpret_cast<int32_t*>(duckdb_record_ptr)[0];
+                REQUIRE(cudf_record_value == duckdb_record_value);
             } else { // Fallback to character at a time comparsion
                 size_t num_vals_to_check = record_width/sizeof(duckdb::data_t);
                 for(size_t i = 0; i < num_vals_to_check; i++) { 
                     REQUIRE(cudf_record_ptr[i] == duckdb_record_ptr[i]);
                 }
+            }
+        }
+
+        global_record_offset += chunk_size;
+    }
+}
+
+// Note that since we create the string column in create_string_column with a fixed scalar this method just needs to verify
+// that the duckdb string representation has that scalar value
+void verify_string_representation(std::vector<duckdb::unique_ptr<duckdb::DataChunk>>& output_chunks, size_t col, size_t num_records) { 
+    for (int chunk_idx = 0; chunk_idx < output_chunks.size(); chunk_idx++) {
+        // Get the specific vector for this column and convert it into a string column
+        duckdb::unique_ptr<duckdb::DataChunk>& result_chunk = output_chunks[chunk_idx];
+        size_t chunk_size = static_cast<size_t>(result_chunk->size());
+        auto& column_vector = result_chunk->data[col];
+        REQUIRE(column_vector.GetVectorType() == duckdb::VectorType::FLAT_VECTOR);
+
+        for (size_t chunk_offset = 0; chunk_offset < chunk_size; chunk_offset++) {
+            if(!duckdb::FlatVector::IsNull(column_vector, chunk_offset)) { // Only check the non null records
+                duckdb::string_t curr_string = duckdb::FlatVector::GetValue<duckdb::string_t>(column_vector, chunk_offset);
+                REQUIRE(curr_string.GetString() == TEST_STRING_VALUE);
             }
         }
     }
@@ -202,7 +241,7 @@ void verify_representation_conversion(sirius::unique_ptr<duckdb_table_representa
 
         // Then verify the actual data
         if(cudf_col_view.type().id() == cudf::type_id::STRING) { 
-
+            verify_string_representation(output_chunks, i, expected_rows);
         } else { 
             verify_fixed_size_representation(cudf_col_view, i, expected_rows, output_chunks);
         }
@@ -227,7 +266,6 @@ TEST_CASE("result_convertor_single_non_nullable_int_conversion", "[duckdb_data_r
     verify_representation_conversion(std::move(duckdb_representation), std::move(gpu_table_representation));
 }
 
-
 TEST_CASE("result_convertor_single_nullable_int_conversion", "[duckdb_data_representation][nullable_int_conversion]") {
     // Create the gpu and host memory spaces
     mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
@@ -247,10 +285,10 @@ TEST_CASE("result_convertor_single_nullable_int_conversion", "[duckdb_data_repre
 }
 
 TEST_CASE("result_convertor_single_nullable_int_multiple_block_conversion", "[duckdb_data_representation][nullable_int_conversion]") {
-    // Create the gpu and host memory spaces
-    int num_test_rows = 2500;
-    int total_bytes_needed = num_test_rows * sizeof(int) + std::ceil((1.0 * num_test_rows)/8);
-    int blocks_needed = std::ceil((1.0 * total_bytes_needed)/DEFAULT_BLOCK_SIZE);
+    // Determine the blocks needed
+    size_t num_test_rows = 2500;
+    size_t total_bytes_needed = num_test_rows * sizeof(int) + std::ceil((1.0 * num_test_rows)/8);
+    size_t blocks_needed = std::ceil((1.0 * total_bytes_needed)/DEFAULT_BLOCK_SIZE);
 
     mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
     std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> host_allocators;
@@ -260,6 +298,89 @@ TEST_CASE("result_convertor_single_nullable_int_multiple_block_conversion", "[du
     // Create the test gpu representation
     std::vector<cudf::type_id> col_types = {cudf::type_id::INT32};
     std::vector<bool> is_null_column = {true};
+    sirius::unique_ptr<gpu_table_representation> gpu_table_representation = create_gpu_representation(gpu_memory_space, col_types, is_null_column, num_test_rows);
+
+    // Perform the conversion and verify
+    sirius::unique_ptr<duckdb_table_representation> duckdb_representation = gpu_table_representation->convert_to_result_format(host_memory_space);
+    verify_representation_conversion(std::move(duckdb_representation), std::move(gpu_table_representation));
+}
+
+TEST_CASE("result_convertor_single_non_nullable_string_conversion", "[duckdb_data_representation][non_null_string_conversion]") {
+    // Create the gpu and host memory spaces
+    mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
+    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> host_allocators;
+    host_allocators.push_back(create_host_memory_resource());
+    mock_memory_space host_memory_space(memory::Tier::GPU, std::move(host_allocators));
+
+    // Create the test gpu representation
+    int num_test_rows = 45;
+    std::vector<cudf::type_id> col_types = {cudf::type_id::STRING};
+    std::vector<bool> is_null_column = {false};
+    sirius::unique_ptr<gpu_table_representation> gpu_table_representation = create_gpu_representation(gpu_memory_space, col_types, is_null_column, num_test_rows);
+
+    // Perform the conversion and verify
+    sirius::unique_ptr<duckdb_table_representation> duckdb_representation = gpu_table_representation->convert_to_result_format(host_memory_space);
+    verify_representation_conversion(std::move(duckdb_representation), std::move(gpu_table_representation));
+}
+
+TEST_CASE("result_convertor_single_nullable_string_conversion", "[duckdb_data_representation][null_string_conversion]") {
+    // Create the gpu and host memory spaces
+    mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
+    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> host_allocators;
+    host_allocators.push_back(create_host_memory_resource());
+    mock_memory_space host_memory_space(memory::Tier::GPU, std::move(host_allocators));
+
+    // Create the test gpu representation
+    int num_test_rows = 45;
+    std::vector<cudf::type_id> col_types = {cudf::type_id::STRING};
+    std::vector<bool> is_null_column = {true};
+    sirius::unique_ptr<gpu_table_representation> gpu_table_representation = create_gpu_representation(gpu_memory_space, col_types, is_null_column, num_test_rows);
+
+    // Perform the conversion and verify
+    sirius::unique_ptr<duckdb_table_representation> duckdb_representation = gpu_table_representation->convert_to_result_format(host_memory_space);
+    verify_representation_conversion(std::move(duckdb_representation), std::move(gpu_table_representation));
+}
+
+TEST_CASE("result_convertor_single_nullable_string_multi_block_conversion", "[duckdb_data_representation][null_string_conversion]") {
+    // Determine the blocks needed
+    size_t num_test_rows = 250;
+    size_t total_bytes_needed = num_test_rows * sizeof(int) + std::ceil((1.0 * num_test_rows)/8) + num_test_rows * (TEST_STRING_VALUE.size() + sizeof(duckdb::string_t));
+    size_t blocks_needed = std::ceil((1.0 * total_bytes_needed)/DEFAULT_BLOCK_SIZE);
+    
+    // Create the gpu and host memory spaces
+    mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
+    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> host_allocators;
+    host_allocators.push_back(create_host_memory_resource());
+    mock_memory_space host_memory_space(memory::Tier::GPU, std::move(host_allocators));
+
+    // Create the test gpu representation
+    std::vector<cudf::type_id> col_types = {cudf::type_id::STRING};
+    std::vector<bool> is_null_column = {true};
+    sirius::unique_ptr<gpu_table_representation> gpu_table_representation = create_gpu_representation(gpu_memory_space, col_types, is_null_column, num_test_rows);
+
+    // Perform the conversion and verify
+    sirius::unique_ptr<duckdb_table_representation> duckdb_representation = gpu_table_representation->convert_to_result_format(host_memory_space);
+    verify_representation_conversion(std::move(duckdb_representation), std::move(gpu_table_representation));
+}
+
+
+TEST_CASE("result_convertor_multi_type_conversion", "[duckdb_data_representation][multi_type_conversion]") {
+    // Determine the blocks needed
+    size_t num_test_rows = 100;
+    size_t string_col_bytes_needed = num_test_rows * sizeof(int) + std::ceil((1.0 * num_test_rows)/8) + num_test_rows * (TEST_STRING_VALUE.size() + sizeof(duckdb::string_t));
+    size_t int_col_bytes_needed = num_test_rows * sizeof(int) + std::ceil((1.0 * num_test_rows)/8);
+    size_t total_bytes_needed = 2 * string_col_bytes_needed + 2 * int_col_bytes_needed;
+    size_t blocks_needed = std::ceil((1.0 * total_bytes_needed)/DEFAULT_BLOCK_SIZE);
+
+    // Create the gpu and host memory spaces
+    mock_memory_space gpu_memory_space(memory::Tier::GPU, {});
+    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> host_allocators;
+    host_allocators.push_back(create_host_memory_resource());
+    mock_memory_space host_memory_space(memory::Tier::GPU, std::move(host_allocators));
+
+    // Create the test gpu representation
+    std::vector<cudf::type_id> col_types = {cudf::type_id::INT32,cudf::type_id::STRING,cudf::type_id::INT32,cudf::type_id::STRING};
+    std::vector<bool> is_null_column = {false, true, true, false};
     sirius::unique_ptr<gpu_table_representation> gpu_table_representation = create_gpu_representation(gpu_memory_space, col_types, is_null_column, num_test_rows);
 
     // Perform the conversion and verify
