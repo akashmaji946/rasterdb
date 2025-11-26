@@ -46,9 +46,9 @@ bool reservation::grow_to(size_t new_size)
   if (new_size <= size) {
     return false;  // Invalid operation - must grow to larger size
   }
-
-  auto& manager = memory_reservation_manager::get_instance();
-  return manager.grow_reservation(this, new_size);
+  return false;
+  // auto& manager = memory_reservation_manager::get_instance();
+  // return manager.grow_reservation(this, new_size);
 }
 
 bool reservation::grow_by(size_t additional_bytes)
@@ -69,8 +69,9 @@ bool reservation::shrink_to(size_t new_size)
     return false;  // Invalid operation - must shrink to smaller size
   }
 
-  auto& manager = memory_reservation_manager::get_instance();
-  return manager.shrink_reservation(this, new_size);
+  return false;
+  // auto& manager = memory_reservation_manager::get_instance();
+  // return manager.shrink_reservation(this, new_size);
 }
 
 bool reservation::shrink_by(size_t bytes_to_remove)
@@ -185,7 +186,7 @@ memory_reservation_manager::memory_reservation_manager(std::vector<memory_space_
     auto mem_space = std::make_unique<memory_space>(config.tier,
                                                     config.device_id,
                                                     config.memory_limit,
-                                                    std::move(config.allocators),
+                                                    std::move(config.allocators[0]),
                                                     config.memory_capacity);
     _memory_spaces.push_back(std::move(mem_space));
   }
@@ -275,45 +276,6 @@ std::unique_ptr<reservation> memory_reservation_manager::request_reservation(
     // Wait until notified that memory may be available again
     _wait_cv.wait(lock);
   }
-}
-
-void memory_reservation_manager::release_reservation(std::unique_ptr<reservation> reservation)
-{
-  if (!reservation) { return; }
-
-  // Look up the appropriate memory_space
-  const memory_space* mem_space = get_memory_space(reservation->tier, reservation->device_id);
-  if (!mem_space) { throw std::invalid_argument("Invalid tier/device_id in reservation"); }
-
-  // Delegate to the appropriate memory_space
-  const_cast<memory_space*>(mem_space)->release_reservation(std::move(reservation));
-
-  // Notify all waiters that memory availability may have changed
-  _wait_cv.notify_all();
-}
-
-bool memory_reservation_manager::shrink_reservation(reservation* reservation, size_t new_size)
-{
-  if (!reservation) { return false; }
-
-  // Look up the appropriate memory_space
-  const memory_space* mem_space = get_memory_space(reservation->tier, reservation->device_id);
-  if (!mem_space) { return false; }
-
-  // Delegate to the appropriate memory_space
-  return const_cast<memory_space*>(mem_space)->shrink_reservation(reservation, new_size);
-}
-
-bool memory_reservation_manager::grow_reservation(reservation* reservation, size_t new_size)
-{
-  if (!reservation) { return false; }
-
-  // Look up the appropriate memory_space
-  const memory_space* mem_space = get_memory_space(reservation->tier, reservation->device_id);
-  if (!mem_space) { return false; }
-
-  // Delegate to the appropriate memory_space
-  return const_cast<memory_space*>(mem_space)->grow_reservation(reservation, new_size);
 }
 
 const memory_space* memory_reservation_manager::get_memory_space(Tier tier, size_t device_id) const

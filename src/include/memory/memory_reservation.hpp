@@ -378,28 +378,6 @@ class memory_reservation_manager {
   std::unique_ptr<reservation> request_reservation(const reservation_request& request, size_t size);
 
   //===----------------------------------------------------------------------===//
-  // Reservation Management
-  //===----------------------------------------------------------------------===//
-
-  /**
-   * Release a reservation, making its memory available for other requests.
-   * Looks up the appropriate memory_space using the reservation's tier and device_id.
-   */
-  void release_reservation(std::unique_ptr<reservation> reservation);
-
-  /**
-   * Attempt to shrink an existing reservation to a smaller size.
-   * Returns true if successful, false otherwise.
-   */
-  bool shrink_reservation(reservation* reservation, size_t new_size);
-
-  /**
-   * Attempt to grow an existing reservation to a larger size.
-   * Returns true if successful, false if insufficient memory available.
-   */
-  bool grow_reservation(reservation* reservation, size_t new_size);
-
-  //===----------------------------------------------------------------------===//
   // memory_space Access and Queries
   //===----------------------------------------------------------------------===//
 

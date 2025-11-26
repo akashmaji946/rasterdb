@@ -191,6 +191,12 @@ std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
   }
 }
 
+std::size_t fixed_size_host_memory_resource::get_active_reservation_count() const noexcept
+{
+  std::lock_guard lock(mutex_);
+  return active_reservations_.size();
+}
+
 void fixed_size_host_memory_resource::expand_pool()
 {
   const std::size_t total_size = block_size_ * pool_size_;

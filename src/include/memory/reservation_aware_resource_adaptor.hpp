@@ -95,9 +95,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   struct reservation_state_container {
     virtual ~reservation_state_container() = default;
 
-    virtual void register_reservation(const reservation& reservation);
-
-    virtual void reset_stream_state(rmm::cuda_stream_view stream);
+    virtual void reset_stream_state(rmm::cuda_stream_view stream) = 0;
 
     virtual void set_stream_state(rmm::cuda_stream_view stream,
                                   std::unique_ptr<reservation> reservation,
@@ -230,6 +228,11 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
                                        std::function<void()> on_release = nullptr);
 
   /**
+   * @brief Return number of activate reservation count
+   */
+  std::size_t get_active_reservation_count() const noexcept;
+
+  /**
    * @brief Sets the memory reservation for a specific stream by requesting from the memory manager.
    * @param stream The CUDA stream to set reservation for
    * @param reserved_bytes The reservation object (0 = remove reservation)
@@ -241,6 +244,12 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
     std::unique_ptr<reservation> reserved_bytes,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
     std::unique_ptr<oom_handling_policy> stream_oom_policy              = nullptr);
+
+  /**
+   * @brief Rests the reservation object for a specific stream.
+   * @param stream The CUDA stream to query
+   */
+  void reset_stream_reservation(rmm::cuda_stream_view stream);
 
   /**
    * @brief Gets the reservation object for a specific stream.

@@ -201,6 +201,11 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
                                        std::function<void()> on_release = nullptr);
 
   /**
+   * @brief the number of active reservation
+   */
+  std::size_t get_active_reservation_count() const noexcept;
+
+  /**
    * @brief Allocate multiple blocks to satisfy a large allocation request.
    *
    * This method allocates the minimum number of blocks needed to satisfy the requested size.

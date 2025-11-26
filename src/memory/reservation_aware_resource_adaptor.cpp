@@ -18,6 +18,7 @@
 
 #include "aligned.hpp"
 #include "cuda_device.hpp"
+#include "cuda_stream_view.hpp"
 #include "memory/memory_reservation.hpp"
 
 #include <rmm/detail/error.hpp>
@@ -90,6 +91,8 @@ struct per_stream_reservation_state_container
 struct per_thread_reservation_state_container
   : public reservation_aware_resource_adaptor::reservation_state_container {
   static inline thread_local std::unique_ptr<reservation_state> thread_reservation_state;
+
+  per_thread_reservation_state_container() = default;
 
   void reset_stream_state(rmm::cuda_stream_view stream) override
   {
@@ -317,6 +320,11 @@ bool reservation_aware_resource_adaptor::set_stream_reservation(
   return true;
 }
 
+void reservation_aware_resource_adaptor::reset_stream_reservation(rmm::cuda_stream_view stream)
+{
+  _reservation_states->reset_stream_state(stream);
+}
+
 std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
   std::size_t size_bytes, std::function<void()> on_release)
 {
@@ -334,6 +342,12 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
     return res;
   }
   return nullptr;
+}
+
+std::size_t reservation_aware_resource_adaptor::get_active_reservation_count() const noexcept
+{
+  std::lock_guard lock(reservation_mutex);
+  return reservation_views.size();
 }
 
 void* reservation_aware_resource_adaptor::do_allocate(std::size_t bytes,

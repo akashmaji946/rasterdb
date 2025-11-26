@@ -82,6 +82,8 @@ class memory_space {
 
   // Reservation management - these are the core methods that do the actual work
   std::unique_ptr<reservation> request_reservation(size_t size);
+  bool can_reserve(std::size_t bytes) const;
+  std::size_t get_active_reservation_count() const;
 
   // State queries
   size_t get_available_memory(rmm::cuda_stream_view stream) const;
