@@ -381,7 +381,7 @@ class memory_reservation_manager {
    * Get a specific memory_space by tier and device ID.
    * Returns nullptr if no such space exists.
    */
-  const memory_space* get_memory_space(Tier tier, size_t device_id) const;
+  const memory_space* get_memory_space(Tier tier, int32_t device_id) const;
 
   /**
    * Get all memory_spaces for a specific tier.
@@ -425,8 +425,8 @@ class memory_reservation_manager {
   std::vector<std::unique_ptr<memory_space>> _memory_spaces;
 
   // Fast lookups
-  std::unordered_map<memory_space_id, std::size_t> _memory_space_lookup;
-  std::unordered_map<Tier, std::vector<std::size_t>> _tier_to_memory_spaces;
+  std::unordered_map<memory_space_id, const memory_space*> _memory_space_lookup;
+  std::unordered_map<Tier, std::vector<const memory_space*>> _tier_to_memory_spaces;
 
   // Helper method: attempts to select a space and immediately make a reservation
   // Returns a reservation when successful, or std::nullopt if none can satisfy the request

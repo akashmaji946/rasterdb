@@ -16,6 +16,7 @@
 
 #include "memory/memory_reservation.hpp"
 
+#include "memory/common.hpp"
 #include "memory/reservation_aware_resource_adaptor.hpp"
 
 #include <rmm/cuda_device.hpp>
@@ -32,11 +33,10 @@ namespace memory {
 // reservation Implementation
 //===----------------------------------------------------------------------===//
 
-reservation::reservation(Tier t,
-                         int dev_id,
+reservation::reservation(memory_space_id s_id,
                          size_t s,
                          std::function<void(reservation*)> release_callback)
-  : tier(t), device_id(dev_id), size(s), _release_callback(std::move(release_callback))
+  : space_id(s_id), size(s), _release_callback(std::move(release_callback))
 {
   assert(_release_callback != nullptr && "Release callback must be provided");
 }
@@ -278,10 +278,10 @@ std::unique_ptr<reservation> memory_reservation_manager::request_reservation(
   }
 }
 
-const memory_space* memory_reservation_manager::get_memory_space(Tier tier, size_t device_id) const
+const memory_space* memory_reservation_manager::get_memory_space(Tier tier, int32_t device_id) const
 {
-  auto key = std::make_pair(tier, device_id);
-  auto it  = _memory_space_lookup.find(key);
+  memory_space_id id(tier, device_id);
+  auto it = _memory_space_lookup.find(id);
   return (it != _memory_space_lookup.end()) ? it->second : nullptr;
 }
 
@@ -432,11 +432,10 @@ void memory_reservation_manager::build_lookup_tables()
   _tier_to_memory_spaces.clear();
 
   for (const auto& space : _memory_spaces) {
-    const memory_space* space_ptr = space.get();
+    memory_space* space_ptr = space.get();
 
     // Build direct lookup table
-    auto key                  = std::make_pair(space_ptr->get_tier(), space_ptr->get_device_id());
-    _memory_space_lookup[key] = space_ptr;
+    _memory_space_lookup[space_ptr->get_id()] = space_ptr;
 
     // Build tier-to-spaces mapping
     _tier_to_memory_spaces[space_ptr->get_tier()].push_back(space_ptr);
