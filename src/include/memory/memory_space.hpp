@@ -17,6 +17,7 @@
 #pragma once
 
 #include "memory/common.hpp"
+#include "memory/notification_channel.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -84,7 +85,9 @@ class memory_space {
   int get_device_id() const noexcept;
 
   // Reservation management - these are the core methods that do the actual work
+  std::unique_ptr<reservation> request_reservation_or_null(size_t size);
   std::unique_ptr<reservation> request_reservation(size_t size);
+  bool can_reserve(std::size_t size) const;
   std::size_t get_active_reservation_count() const;
 
   // State queries
@@ -100,6 +103,8 @@ class memory_space {
   std::string to_string() const;
 
  protected:
+  friend struct reservation;
+
   const memory_space_id _id;
   const size_t _memory_limit;
   const size_t _capacity;
@@ -110,8 +115,10 @@ class memory_space {
   mutable std::mutex _reservation_mutex;
   std::condition_variable _reservation_cv;
   bool _reservation_release{false};
+  std::shared_ptr<notification_channel> notification_channel_;
 
-  void notify_release_of_reservation();
+  bool grow_reservation_by(reservation& res, std::size_t bytes);
+  void shrink_to_fit(reservation& res);
 
   // Memory resources owned by this memory_space
   std::unique_ptr<rmm::mr::device_memory_resource> _allocator;

@@ -24,11 +24,12 @@
 #include <atomic>
 #include <memory>
 #include <set>
+#include <unordered_map>
 
 // Include existing reservation system
-#include "cuda_device.hpp"
 #include "memory/common.hpp"
 #include "memory/memory_reservation.hpp"
+#include "memory/notification_channel.hpp"
 #include "memory/oom_handling_policy.hpp"
 
 namespace sirius {
@@ -51,27 +52,27 @@ namespace memory {
  * Based on RMM's tracking_resource_adaptor but extended for per-stream tracking.
  */
 class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resource {
-  struct reservation_stat_container;
-
  public:
-  enum class AllocationTrackingScope {
-    PER_STREAM,  // Track allocations separately for each stream
-    PER_THREAD   // Track allocations separately for each host thread
-  };
-
   /**
    * @brief Reservation state
    */
-  struct reservation_state {
-    std::unique_ptr<reservation> memory_reservation;    /// Stream memory reservation (may be null)
+  struct stream_ordered_tracker_state {
+    std::atomic<std::int64_t> allocated_bytes{0};
     std::atomic<std::int64_t> peak_allocated_bytes{0};  /// Peak allocated bytes observed
+    std::unique_ptr<reservation> memory_reservation;    /// Stream memory reservation (may be null)
     std::unique_ptr<reservation_limit_policy>
       reservation_policy;                             /// Reservation policy for this stream
     std::unique_ptr<oom_handling_policy> oom_policy;  /// out-of-memory handling policy
 
     friend class reservation_aware_resource_adaptor;
 
-    reservation_state() = default;
+    stream_ordered_tracker_state() = default;
+
+    [[nodiscard]] std::size_t get_available_memory() const noexcept
+    {
+      auto current = allocated_bytes.load();
+      return current < memory_reservation->size() ? memory_reservation->size() - current : 0UL;
+    }
 
     /**
      * @brief Checks reservation and handles overflow for an allocation request.
@@ -92,19 +93,46 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   /**
    * @brief Container for reservation state management. [Per-stream or per-thread]
    */
-  struct reservation_state_container {
-    virtual ~reservation_state_container() = default;
+  struct allocation_tracker_iface {
+    virtual ~allocation_tracker_iface() = default;
 
-    virtual void reset_stream_state(rmm::cuda_stream_view stream) = 0;
+    virtual void reset_tracker_state(rmm::cuda_stream_view stream) = 0;
 
-    virtual void set_stream_state(rmm::cuda_stream_view stream,
-                                  std::unique_ptr<reservation> reservation,
-                                  std::unique_ptr<reservation_limit_policy> policy,
-                                  std::unique_ptr<oom_handling_policy> oom_policy) = 0;
+    virtual void assign_reservation_to_tracker(rmm::cuda_stream_view stream,
+                                               std::unique_ptr<reservation> reservation,
+                                               std::unique_ptr<reservation_limit_policy> policy,
+                                               std::unique_ptr<oom_handling_policy> oom_policy) = 0;
 
-    virtual reservation_state* get_stream_state(rmm::cuda_stream_view stream) = 0;
+    virtual stream_ordered_tracker_state* get_tracker_state(rmm::cuda_stream_view stream) = 0;
 
-    virtual const reservation_state* get_stream_state(rmm::cuda_stream_view stream) const = 0;
+    virtual const stream_ordered_tracker_state* get_tracker_state(
+      rmm::cuda_stream_view stream) const = 0;
+  };
+
+  struct device_reservation_slot : public reservation::reservation_slot {
+    friend class reservation_aware_resource_adaptor;
+
+    explicit device_reservation_slot(reservation_aware_resource_adaptor& mr,
+                                     std::size_t bytes,
+                                     std::unique_ptr<event_notifier> notifer)
+      : reservation::reservation_slot(bytes, std::move(notifer)), mr_(&mr)
+    {
+    }
+
+    ~device_reservation_slot() noexcept { mr_->do_release_reservation(this); }
+
+    const stream_ordered_tracker_state* get_tracker_or_null() const noexcept { return tracker_; }
+
+   private:
+    void assign_tracker(const stream_ordered_tracker_state& tracker) { tracker_ = &tracker; }
+
+    reservation_aware_resource_adaptor* mr_;
+    const stream_ordered_tracker_state* tracker_{nullptr};
+  };
+
+  enum class AllocationTrackingScope {
+    PER_STREAM,  // Track allocations separately for each stream
+    PER_THREAD   // Track allocations separately for each host thread
   };
 
   /**
@@ -220,10 +248,23 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   /**
    * @brief makes reservations
    * @param bytes the size of reservation
-   * @param on_release used to hook callbacks for when the reservation is released
+   * @param on_release_notifer used to hook callbacks for when the reservation is released
    */
   std::unique_ptr<reservation> reserve(std::size_t bytes,
-                                       std::function<void()> on_release = nullptr);
+                                       std::unique_ptr<event_notifier> release_notifer = nullptr);
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   * @param bytes the size of reservation
+   */
+  bool grow_reservation_by(reservation& res, std::size_t bytes);
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   */
+  void shrink_reservation_to_fit(reservation& res);
 
   /**
    * @brief Return number of activate reservation count
@@ -237,7 +278,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @param stream_oom_policy The OOM policy for the stream
    * @return true if reservation was successfully set, false otherwise
    */
-  bool set_stream_reservation(
+  bool attach_reservation_to_tracker(
     rmm::cuda_stream_view stream,
     std::unique_ptr<reservation> reserved_bytes,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
@@ -294,7 +335,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @return Pointer to allocated memory
    */
   void* do_allocate_managed(std::size_t bytes,
-                            reservation_state* state,
+                            stream_ordered_tracker_state* state,
                             rmm::cuda_stream_view stream);
 
   /**
@@ -320,7 +361,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @brief releases reservations and returns the unsed reservation back to allocator
    * @param reservation pointer to the reservation being released
    */
-  void do_release_reservation(reservation* reservation);
+  void do_release_reservation(device_reservation_slot* reservation) noexcept;
 
   /**
    * @brief Allocates memory from the upstream resource and tracks it.
@@ -356,7 +397,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   const std::size_t _capacity;
 
   /// Per-stream allocation tracking
-  std::unique_ptr<reservation_state_container> _reservation_states;
+  std::unique_ptr<allocation_tracker_iface> _allocation_tracker;
 
   /// Global totals for efficiency
   std::atomic<std::size_t> _total_allocated_bytes{0};
@@ -367,7 +408,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   std::unique_ptr<oom_handling_policy> _default_oom_policy;
 
   mutable std::mutex reservation_mutex;
-  std::set<const reservation*> reservation_views;
+  std::set<const device_reservation_slot*> reservation_views;
 };
 
 }  // namespace memory

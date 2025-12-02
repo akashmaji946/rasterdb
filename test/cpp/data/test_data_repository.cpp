@@ -40,11 +40,9 @@ class mock_memory_space : public memory::memory_space {
   }
 
  private:
-  static std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> create_null_allocators()
+  static std::unique_ptr<rmm::mr::device_memory_resource> create_null_allocators()
   {
-    std::vector<std::unique_ptr<rmm::mr::device_memory_resource>> allocators;
-    allocators.push_back(std::make_unique<memory::null_device_memory_resource>());
-    return allocators;
+    return std::make_unique<memory::null_device_memory_resource>();
   }
 };
 

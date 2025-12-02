@@ -16,10 +16,11 @@
 
 #pragma once
 
-#include "cuda_device.hpp"
 #include "memory/memory_reservation.hpp"
+#include "memory/notification_channel.hpp"
 
 #include <rmm/aligned.hpp>
+#include <rmm/cuda_device.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
@@ -29,6 +30,8 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -60,16 +63,39 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   static constexpr std::size_t default_initial_number_pools =
     4;  ///< Default number of pools to pre-allocate
 
+  struct chunked_reservation_slot : public reservation::reservation_slot {
+    explicit chunked_reservation_slot(fixed_size_host_memory_resource& mr,
+                                      std::size_t bytes,
+                                      std::unique_ptr<event_notifier> notify_on_exit)
+      : reservation_slot(bytes, std::move(notify_on_exit)), mr_(&mr), uuid_(create_uid())
+    {
+    }
+
+    ~chunked_reservation_slot() noexcept { mr_->release_reservation(this); }
+
+    std::size_t uuid() const noexcept { return uuid_; }
+
+   private:
+    static std::size_t create_uid()
+    {
+      static std::atomic<std::size_t> uid_counter{0};
+      return uid_counter.fetch_add(1) + 1;
+    }
+
+    fixed_size_host_memory_resource* mr_;
+    const std::size_t uuid_;
+  };
+
   /**
    * @brief Simple RAII wrapper for multiple block allocations.
    */
   struct multiple_blocks_allocation {
     const std::size_t block_size;
 
-    static std::unique_ptr<multiple_blocks_allocation> empty(fixed_size_host_memory_resource& m)
+    static std::unique_ptr<multiple_blocks_allocation> empty()
     {
       return std::unique_ptr<multiple_blocks_allocation>(
-        new multiple_blocks_allocation({}, &m, nullptr));
+        new multiple_blocks_allocation({}, nullptr, nullptr));
     }
 
     static std::unique_ptr<multiple_blocks_allocation> create(std::vector<std::byte*> b,
@@ -113,13 +139,19 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
     explicit multiple_blocks_allocation(std::vector<std::byte*> buffers,
                                         fixed_size_host_memory_resource* m,
                                         reservation* res)
-      : blocks_(std::move(buffers)), mr_(m), block_size(m->get_block_size()), reseved_memory_(res)
+      : blocks_(std::move(buffers)), mr_(m), block_size(m->get_block_size())
     {
+      if (res) {
+        auto* h_res = dynamic_cast<chunked_reservation_slot*>(res->slot_.get());
+        if (!h_res)
+          throw std::invalid_argument("need host reservation for allocation multiple blocks");
+        reseved_memory_ = h_res;
+      }
     }
 
     std::vector<std::byte*> blocks_;
     fixed_size_host_memory_resource* mr_;
-    reservation* reseved_memory_;
+    chunked_reservation_slot* reseved_memory_{nullptr};
   };
 
   using fixed_multiple_blocks_allocation = std::unique_ptr<multiple_blocks_allocation>;
@@ -198,7 +230,20 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @param on_release used to hook callbacks for when the reservation is released
    */
   std::unique_ptr<reservation> reserve(std::size_t bytes,
-                                       std::function<void()> on_release = nullptr);
+                                       std::unique_ptr<event_notifier> notifer = nullptr);
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   * @param bytes the size of reservation
+   */
+  bool grow_reservation_by(reservation& res, std::size_t bytes);
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   */
+  void shrink_reservation_to_fit(reservation& res);
 
   /**
    * @brief the number of active reservation
@@ -220,6 +265,8 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
     std::size_t total_bytes, reservation* res = nullptr);
 
  protected:
+  bool do_reserve(std::size_t bytes, std::size_t mem_limit);
+
   /**
    * @brief Allocate memory of the specified size.
    *
@@ -261,20 +308,20 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @brief registers reservation with the memory resource
    * @param reservation reserved bytes that is registered with the memory resource
    */
-  void register_reservation(reservation* res);
+  void register_reservation(chunked_reservation_slot* res);
 
   /**
    * @brief release reservation and returns the unsed bytes to back to the memory resource
    * @param reservation reserved bytes that is registered with the memory resource
    */
-  void release_reservation(reservation* res);
+  void release_reservation(chunked_reservation_slot* res) noexcept;
 
   /**
    * @brief release reservation and returns the unsed bytes to back to the memory resource
    * @param chunks reserved bytes that is registered with the memory resource
    * @param res is the reserved memory bytes use to allocate the chunks from
    */
-  void return_allocated_chunks(std::vector<std::byte*> chunks, reservation* res);
+  void return_allocated_chunks(std::vector<std::byte*> chunks, chunked_reservation_slot* res);
 
   memory_space_id space_id_;
   std::size_t memory_limit_;
@@ -287,7 +334,13 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   mutable std::mutex mutex_;
   std::atomic<size_t> allocated_bytes_{0};
 
-  std::unordered_set<reservation*> active_reservations_;
+  struct allocation_tracker {
+    explicit allocation_tracker(std::size_t uid) : uuid(uid) {}
+
+    const std::size_t uuid;
+    std::atomic<int64_t> allocated_bytes{0};
+  };
+  std::unordered_map<chunked_reservation_slot*, allocation_tracker> active_reservations_;
 };
 
 using fixed_multiple_blocks_allocation =
