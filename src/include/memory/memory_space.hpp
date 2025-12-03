@@ -18,6 +18,7 @@
 
 #include "memory/common.hpp"
 #include "memory/notification_channel.hpp"
+#include "memory/null_device_memory_resource.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -30,6 +31,7 @@
 
 // RMM includes for memory resource management
 #include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device/limiting_resource_adaptor.hpp>
 #include <rmm/resource_ref.hpp>
 
 namespace sirius {
@@ -108,9 +110,10 @@ class memory_space {
   const memory_space_id _id;
   const size_t _memory_limit;
   const size_t _capacity;
-  using reserving_adaptor_type = std::variant<std::monostate,
-                                              std::unique_ptr<reservation_aware_resource_adaptor>,
-                                              std::unique_ptr<fixed_size_host_memory_resource>>;
+  using reserving_adaptor_type =
+    std::variant<rmm::mr::limiting_resource_adaptor<null_device_memory_resource>,
+                 std::unique_ptr<reservation_aware_resource_adaptor>,
+                 std::unique_ptr<fixed_size_host_memory_resource>>;
 
   mutable std::mutex _reservation_mutex;
   std::condition_variable _reservation_cv;
