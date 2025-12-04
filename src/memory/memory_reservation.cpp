@@ -43,14 +43,14 @@ reservation::reservation(memory_space_id s_id, std::unique_ptr<reservation_slot>
 bool reservation::grow_by(size_t additional_bytes)
 {
   auto& manager      = memory_reservation_manager::get_instance();
-  auto* memory_space = manager.get_memory_space(space_id_.tier, space_id_.device_id);
+  auto* memory_space = manager.get_mutable_memory_space(space_id_.tier, space_id_.device_id);
   return memory_space->grow_reservation_by(*this, additional_bytes);
 }
 
 void reservation::shrink_to_fit()
 {
   auto& manager      = memory_reservation_manager::get_instance();
-  auto* memory_space = manager.get_memory_space(space_id_.tier, space_id_.device_id);
+  auto* memory_space = manager.get_mutable_memory_space(space_id_.tier, space_id_.device_id);
   return memory_space->shrink_to_fit(*this);
 }
 
@@ -61,13 +61,13 @@ void reservation::shrink_to_fit()
 std::span<memory_space*> reservation_request_strategy::get_all_memory_resource(
   memory_reservation_manager& manager)
 {
-  return manager.get_all_memory_spaces();
+  return manager.get_mutable_all_memory_spaces();
 }
 
 std::span<memory_space*> reservation_request_strategy::get_all_memory_resource(
   memory_reservation_manager& manager, Tier tier)
 {
-  return manager.get_memory_spaces_for_tier(tier);
+  return manager.get_mutable_memory_spaces_for_tier(tier);
 }
 
 std::vector<memory_space*> any_memory_space_in_tier_with_preference::get_candidates(
@@ -298,33 +298,34 @@ const memory_space* memory_reservation_manager::get_memory_space(Tier tier, int3
 std::span<const memory_space*> memory_reservation_manager::get_memory_spaces_for_tier(
   Tier tier) const
 {
-  auto it = _tier_to_memory_spaces.find(tier);
-  if (it != _tier_to_memory_spaces.end()) {
-    return std::span<const memory_space*>{it->second.data(), it->second.size()};
-  }
+  // auto it = _tier_to_memory_spaces.find(tier);
+  // if (it != _tier_to_memory_spaces.end()) {
+  //   return std::span<const memory_space*>{it->second.data(), it->second.size()};
+  // }
   return {};
 }
 
 std::span<const memory_space*> memory_reservation_manager::get_all_memory_spaces() const noexcept
 {
-  return std::span<const memory_space*>{_memory_space_views.data(), _memory_space_views.size()};
+  // return std::span<const memory_space*>{_memory_space_views.data(), _memory_space_views.size()};
+  return {};
 }
 
-memory_space* memory_reservation_manager::get_memory_space(Tier tier, int32_t device_id)
+memory_space* memory_reservation_manager::get_mutable_memory_space(Tier tier, int32_t device_id)
 {
   memory_space_id id(tier, device_id);
   auto it = _memory_space_lookup.find(id);
   return (it != _memory_space_lookup.end()) ? it->second : nullptr;
 }
 
-std::span<memory_space*> memory_reservation_manager::get_memory_spaces_for_tier(Tier tier)
+std::span<memory_space*> memory_reservation_manager::get_mutable_memory_spaces_for_tier(Tier tier)
 {
   auto it = _tier_to_memory_spaces.find(tier);
   if (it != _tier_to_memory_spaces.end()) { return it->second; }
   return {};
 }
 
-std::span<memory_space*> memory_reservation_manager::get_all_memory_spaces() noexcept
+std::span<memory_space*> memory_reservation_manager::get_mutable_all_memory_spaces() noexcept
 {
   return _memory_space_views;
 }

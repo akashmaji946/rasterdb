@@ -419,9 +419,9 @@ class memory_reservation_manager {
    */
   explicit memory_reservation_manager(std::vector<memory_space_config> configs);
 
-  memory_space* get_memory_space(Tier tier, int32_t device_id);
-  std::span<memory_space*> get_memory_spaces_for_tier(Tier tier);
-  std::span<memory_space*> get_all_memory_spaces() noexcept;
+  memory_space* get_mutable_memory_space(Tier tier, int32_t device_id);
+  std::span<memory_space*> get_mutable_memory_spaces_for_tier(Tier tier);
+  std::span<memory_space*> get_mutable_all_memory_spaces() noexcept;
 
   // Singleton state
   static std::unique_ptr<memory_reservation_manager> _instance;

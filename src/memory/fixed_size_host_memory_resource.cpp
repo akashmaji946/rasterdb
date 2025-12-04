@@ -245,7 +245,7 @@ void fixed_size_host_memory_resource::register_reservation(chunked_reservation_s
   assert(r.second && "insertion failed");
 }
 
-void fixed_size_host_memory_resource::release_reservation(chunked_reservation_slot* res) noexcept
+void fixed_size_host_memory_resource::release_reservation(chunked_reservation_slot* res)
 {
   assert(!res);
   std::lock_guard guard(mutex_);

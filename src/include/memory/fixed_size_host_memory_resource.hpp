@@ -314,7 +314,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @brief release reservation and returns the unsed bytes to back to the memory resource
    * @param reservation reserved bytes that is registered with the memory resource
    */
-  void release_reservation(chunked_reservation_slot* res) noexcept;
+  void release_reservation(chunked_reservation_slot* res);
 
   /**
    * @brief release reservation and returns the unsed bytes to back to the memory resource

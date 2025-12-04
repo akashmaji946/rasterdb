@@ -16,9 +16,6 @@
 
 #pragma once
 
-#include "cuda_runtime.h"
-#include "error.hpp"
-
 #include <rmm/aligned.hpp>
 #include <rmm/detail/aligned.hpp>
 #include <rmm/detail/cccl_adaptors.hpp>
@@ -26,7 +23,7 @@
 #include <rmm/detail/error.hpp>
 #include <rmm/detail/export.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <cuda/stream_ref>
 #include <cuda_runtime_api.h>
@@ -39,11 +36,10 @@
 namespace sirius {
 namespace memory {
 
-class numa_region_pinned_host_memory_resource final
-  : public rmm::mr::device::device_memory_resource {
+class numa_region_pinned_host_memory_resource final : public rmm::mr::device_memory_resource {
  public:
   explicit numa_region_pinned_host_memory_resource(int numa_node) : numa_node_(numa_node) {}
-  ~numa_region_pinned_host_memory_resource() override                                     = default;
+  ~numa_region_pinned_host_memory_resource()                                              = default;
   numa_region_pinned_host_memory_resource(numa_region_pinned_host_memory_resource const&) = default;
   numa_region_pinned_host_memory_resource(numa_region_pinned_host_memory_resource&&)      = default;
   numa_region_pinned_host_memory_resource& operator=(
@@ -71,18 +67,10 @@ class numa_region_pinned_host_memory_resource final
   {
     // don't allocate anything if the user requested zero bytes
     if (0 == bytes) { return nullptr; }
-    void* ptr = nullptr;
-    if (numa_node_ == -1) {
-      RMM_CUDA_TRY_ALLOC(cudaHostAlloc(&ptr, bytes, cudaHostAllocDefault), bytes);
-      return ptr;
-    } else {
-      void* ptr = numa_alloc_onnode(bytes, numa_node_);
-      if (ptr == nullptr) {
-        throw rmm::bad_alloc(
-          fmt::format("failed to allocate {} memory on numa node {},", bytes, std::strerror(errno)))
-      }
-      RMM_CUDA_TRY_ALLOC(cudaHostRegister(ptr, bytes, cudaHostRegisterMapped), bytes);
-    }
+    void* ptr = numa_alloc_onnode(bytes, numa_node_);
+    if (ptr == nullptr) { throw rmm::bad_alloc(std::strerror(errno)); }
+    RMM_CUDA_TRY_ALLOC(cudaHostRegister(ptr, bytes, cudaHostRegisterMapped), bytes);
+
     return ptr;
   }
 
@@ -100,12 +88,8 @@ class numa_region_pinned_host_memory_resource final
                      std::size_t bytes,
                      [[maybe_unused]] rmm::cuda_stream_view stream) noexcept override
   {
-    if (numa_node_ == -1) {
-      cudaFreeHost(ptr);
-    } else {
-      cudaHostUnregister(ptr);
-      numa_free(ptr, bytes);
-    }
+    cudaHostUnregister(ptr);
+    numa_free(ptr, bytes);
   }
 
   /**
@@ -118,9 +102,11 @@ class numa_region_pinned_host_memory_resource final
    * @return true If the two resources are equivalent
    * @return false If the two resources are not equal
    */
-  [[nodiscard]] bool rmm::do_is_equal(device_memory_resource const& other) const noexcept override
+  [[nodiscard]] bool do_is_equal(
+    const rmm::mr::device_memory_resource& other) const noexcept override
   {
-    return dynamic_cast<numa_region_pinned_host_memory_resource const*>(&other) != nullptr;
+    auto* mr_ptr = dynamic_cast<numa_region_pinned_host_memory_resource const*>(&other);
+    return mr_ptr == this && mr_ptr->numa_node_ == this->numa_node_;
   }
 
   /**
@@ -143,7 +129,7 @@ class numa_region_pinned_host_memory_resource final
   {
   }
 
-  int numa_node_;
+  int numa_node_{-1};
 };
 
 }  // namespace memory

@@ -13,10 +13,8 @@
 #include <rmm/mr/pinned_host_memory_resource.hpp>
 
 // Sirius memory components
-#include "memory/fixed_size_host_memory_resource.hpp"
-#include "memory/memory_reservation.hpp"
 #include "memory/null_device_memory_resource.hpp"
-#include "mr/pinned_host_memory_resource.hpp"
+#include "memory/numa_region_pinned_host_allocator.hpp"
 
 namespace sirius {
 namespace memory {
@@ -31,7 +29,7 @@ inline std::unique_ptr<rmm::mr::device_memory_resource> create_test_allocators(T
     }
     case Tier::HOST: {
       // Use a predictable fixed-size host memory resource for tests (e.g., 10MB)
-      return std::make_unique<rmm::mr::pinned_host_memory_resource>();
+      return std::make_unique<sirius::memory::numa_region_pinned_host_memory_resource>(-1);
     }
     case Tier::DISK: {
       // DISK tier uses a null allocator to satisfy API without real allocations
