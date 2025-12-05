@@ -18,6 +18,7 @@
 
 #include "config.hpp"
 #include "memory/memory_reservation.hpp"
+#include "memory/memory_reservation_manager.hpp"
 #include "pipeline/pipeline_queue.hpp"
 
 namespace sirius {

@@ -24,7 +24,6 @@
 #include <atomic>
 #include <memory>
 #include <set>
-#include <unordered_map>
 
 // Include existing reservation system
 #include "memory/common.hpp"
@@ -109,17 +108,17 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
       rmm::cuda_stream_view stream) const = 0;
   };
 
-  struct device_reservation_slot : public reservation::reservation_slot {
+  struct device_reserved_arena : public reserved_arena {
     friend class reservation_aware_resource_adaptor;
 
-    explicit device_reservation_slot(reservation_aware_resource_adaptor& mr,
-                                     std::size_t bytes,
-                                     std::unique_ptr<event_notifier> notifer)
-      : reservation::reservation_slot(bytes, std::move(notifer)), mr_(&mr)
+    explicit device_reserved_arena(reservation_aware_resource_adaptor& mr,
+                                   std::size_t bytes,
+                                   std::unique_ptr<event_notifier> notifer)
+      : reserved_arena(bytes, std::move(notifer)), mr_(&mr)
     {
     }
 
-    ~device_reservation_slot() noexcept { mr_->do_release_reservation(this); }
+    ~device_reserved_arena() noexcept { mr_->do_release_reservation(this); }
 
     const stream_ordered_tracker_state* get_tracker_or_null() const noexcept { return tracker_; }
 
@@ -361,7 +360,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @brief releases reservations and returns the unsed reservation back to allocator
    * @param reservation pointer to the reservation being released
    */
-  void do_release_reservation(device_reservation_slot* reservation) noexcept;
+  void do_release_reservation(device_reserved_arena* reservation) noexcept;
 
   /**
    * @brief Allocates memory from the upstream resource and tracks it.
@@ -408,7 +407,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
   std::unique_ptr<oom_handling_policy> _default_oom_policy;
 
   mutable std::mutex reservation_mutex;
-  std::set<const device_reservation_slot*> reservation_views;
+  std::set<const device_reserved_arena*> reservation_views;
 };
 
 }  // namespace memory

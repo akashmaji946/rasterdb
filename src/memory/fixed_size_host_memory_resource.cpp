@@ -113,7 +113,7 @@ fixed_size_host_memory_resource::allocate_multiple_blocks(std::size_t total_byte
   allocation_tracker* tracker        = nullptr;
   std::lock_guard<std::mutex> lock(mutex_);
   if (res) {
-    auto* h_reservation_slot = dynamic_cast<chunked_reservation_slot*>(res->slot_.get());
+    auto* h_reservation_slot = dynamic_cast<chunked_reserved_area*>(res->arena_.get());
     if (h_reservation_slot == nullptr) {
       throw std::runtime_error("cannot make allocation with other reservation type");
     }
@@ -184,8 +184,7 @@ std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
 {
   bytes = rmm::align_up(bytes, block_size_);
   if (do_reserve(bytes, memory_limit_)) {
-    auto host_slot =
-      std::make_unique<chunked_reservation_slot>(*this, bytes, std::move(on_release));
+    auto host_slot = std::make_unique<chunked_reserved_area>(*this, bytes, std::move(on_release));
     this->register_reservation(host_slot.get());
     return reservation::create(space_id_, std::move(host_slot));
   }
@@ -197,7 +196,7 @@ bool fixed_size_host_memory_resource::grow_reservation_by(reservation& res, std:
   std::lock_guard lock(mutex_);
   bytes = rmm::align_up(bytes, block_size_);
   if (do_reserve(bytes, memory_limit_)) {
-    res.slot_->size += bytes;
+    res.arena_->size += bytes;
     return true;
   }
   return false;
@@ -205,7 +204,7 @@ bool fixed_size_host_memory_resource::grow_reservation_by(reservation& res, std:
 
 void fixed_size_host_memory_resource::shrink_reservation_to_fit(reservation& res)
 {
-  auto* h_reservation_slot = dynamic_cast<chunked_reservation_slot*>(res.slot_.get());
+  auto* h_reservation_slot = dynamic_cast<chunked_reserved_area*>(res.arena_.get());
   assert(h_reservation_slot);
   std::lock_guard lock(mutex_);
   auto iter = active_reservations_.find(h_reservation_slot);
@@ -238,14 +237,14 @@ void fixed_size_host_memory_resource::expand_pool()
   }
 }
 
-void fixed_size_host_memory_resource::register_reservation(chunked_reservation_slot* res)
+void fixed_size_host_memory_resource::register_reservation(chunked_reserved_area* res)
 {
   std::lock_guard lock(mutex_);
   auto r = active_reservations_.insert(std::make_pair(res, res->uuid()));
   assert(r.second && "insertion failed");
 }
 
-void fixed_size_host_memory_resource::release_reservation(chunked_reservation_slot* res)
+void fixed_size_host_memory_resource::release_reservation(chunked_reserved_area* res)
 {
   assert(!res);
   std::lock_guard guard(mutex_);
@@ -261,7 +260,7 @@ void fixed_size_host_memory_resource::release_reservation(chunked_reservation_sl
 }
 
 void fixed_size_host_memory_resource::return_allocated_chunks(std::vector<std::byte*> chunks,
-                                                              chunked_reservation_slot* res)
+                                                              chunked_reserved_area* res)
 {
   size_t reclaimed_bytes = chunks.size() * block_size_;
   std::lock_guard lock(mutex_);

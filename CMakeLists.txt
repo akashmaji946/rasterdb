@@ -79,6 +79,7 @@ set(EXTENSION_SOURCES
   src/memory/memory_space.cpp
   src/fallback.cpp
   src/memory/memory_reservation.cpp
+  src/memory/memory_reservation_manager.cpp
   src/memory/fixed_size_host_memory_resource.cpp
   src/memory/null_device_memory_resource.cpp
   src/memory/topology_discovery.cpp

@@ -63,15 +63,15 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
   static constexpr std::size_t default_initial_number_pools =
     4;  ///< Default number of pools to pre-allocate
 
-  struct chunked_reservation_slot : public reservation::reservation_slot {
-    explicit chunked_reservation_slot(fixed_size_host_memory_resource& mr,
-                                      std::size_t bytes,
-                                      std::unique_ptr<event_notifier> notify_on_exit)
-      : reservation_slot(bytes, std::move(notify_on_exit)), mr_(&mr), uuid_(create_uid())
+  struct chunked_reserved_area : public reserved_arena {
+    explicit chunked_reserved_area(fixed_size_host_memory_resource& mr,
+                                   std::size_t bytes,
+                                   std::unique_ptr<event_notifier> notify_on_exit)
+      : reserved_arena(bytes, std::move(notify_on_exit)), mr_(&mr), uuid_(create_uid())
     {
     }
 
-    ~chunked_reservation_slot() noexcept { mr_->release_reservation(this); }
+    ~chunked_reserved_area() noexcept { mr_->release_reservation(this); }
 
     std::size_t uuid() const noexcept { return uuid_; }
 
@@ -142,7 +142,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
       : blocks_(std::move(buffers)), mr_(m), block_size(m->get_block_size())
     {
       if (res) {
-        auto* h_res = dynamic_cast<chunked_reservation_slot*>(res->slot_.get());
+        auto* h_res = dynamic_cast<chunked_reserved_area*>(res->arena_.get());
         if (!h_res)
           throw std::invalid_argument("need host reservation for allocation multiple blocks");
         reseved_memory_ = h_res;
@@ -151,7 +151,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
 
     std::vector<std::byte*> blocks_;
     fixed_size_host_memory_resource* mr_;
-    chunked_reservation_slot* reseved_memory_{nullptr};
+    chunked_reserved_area* reseved_memory_{nullptr};
   };
 
   using fixed_multiple_blocks_allocation = std::unique_ptr<multiple_blocks_allocation>;
@@ -308,20 +308,20 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    * @brief registers reservation with the memory resource
    * @param reservation reserved bytes that is registered with the memory resource
    */
-  void register_reservation(chunked_reservation_slot* res);
+  void register_reservation(chunked_reserved_area* res);
 
   /**
    * @brief release reservation and returns the unsed bytes to back to the memory resource
    * @param reservation reserved bytes that is registered with the memory resource
    */
-  void release_reservation(chunked_reservation_slot* res);
+  void release_reservation(chunked_reserved_area* res);
 
   /**
    * @brief release reservation and returns the unsed bytes to back to the memory resource
    * @param chunks reserved bytes that is registered with the memory resource
    * @param res is the reserved memory bytes use to allocate the chunks from
    */
-  void return_allocated_chunks(std::vector<std::byte*> chunks, chunked_reservation_slot* res);
+  void return_allocated_chunks(std::vector<std::byte*> chunks, chunked_reserved_area* res);
 
   memory_space_id space_id_;
   std::size_t memory_limit_;
@@ -340,7 +340,7 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
     const std::size_t uuid;
     std::atomic<int64_t> allocated_bytes{0};
   };
-  std::unordered_map<chunked_reservation_slot*, allocation_tracker> active_reservations_;
+  std::unordered_map<chunked_reserved_area*, allocation_tracker> active_reservations_;
 };
 
 using fixed_multiple_blocks_allocation =

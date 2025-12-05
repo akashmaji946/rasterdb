@@ -323,7 +323,7 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(size_bytes, _memory_limit)) {
     auto slot =
-      std::make_unique<device_reservation_slot>(*this, size_bytes, std::move(release_notifer));
+      std::make_unique<device_reserved_arena>(*this, size_bytes, std::move(release_notifer));
     reservation_views.insert(slot.get());
     return reservation::create(_space_id, std::move(slot));
   }
@@ -334,7 +334,7 @@ bool reservation_aware_resource_adaptor::grow_reservation_by(reservation& res, s
 {
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(bytes, _memory_limit)) {
-    res.slot_->size += bytes;
+    res.arena_->size += bytes;
     return true;
   }
   return false;
@@ -343,7 +343,7 @@ bool reservation_aware_resource_adaptor::grow_reservation_by(reservation& res, s
 void reservation_aware_resource_adaptor::shrink_reservation_to_fit(reservation& res)
 {
   std::lock_guard lock(reservation_mutex);
-  auto* d_reservation_slot = dynamic_cast<device_reservation_slot*>(res.slot_.get());
+  auto* d_reservation_slot = dynamic_cast<device_reserved_arena*>(res.arena_.get());
   if (d_reservation_slot) {
     const auto* tracker = d_reservation_slot->get_tracker_or_null();
     if (tracker) {
@@ -354,7 +354,7 @@ void reservation_aware_resource_adaptor::shrink_reservation_to_fit(reservation& 
         _total_allocated_bytes.fetch_sub(reclaimed_bytes);
       }
     } else {
-      auto reserved_bytes = std::exchange(res.slot_->size, 0UL);
+      auto reserved_bytes = std::exchange(res.arena_->size, 0UL);
       _total_allocated_bytes.fetch_sub(reserved_bytes);
     }
   } else {
@@ -493,7 +493,7 @@ bool reservation_aware_resource_adaptor::do_reserve(std::size_t size_bytes, std:
 }
 
 void reservation_aware_resource_adaptor::do_release_reservation(
-  device_reservation_slot* slot) noexcept
+  device_reserved_arena* slot) noexcept
 {
   if (!slot) return;
 

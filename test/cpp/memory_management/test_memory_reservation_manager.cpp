@@ -15,7 +15,7 @@
  */
 
 #include "catch.hpp"
-#include "memory/memory_reservation.hpp"
+#include "memory/memory_reservation_manager.hpp"
 #include "memory_test_common.hpp"
 
 #include <array>
