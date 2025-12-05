@@ -366,6 +366,36 @@ std::vector<NetworkDeviceWithTopology> discover_network_devices_with_topology()
   return devices;
 }
 
+std::vector<storage_device_info> discover_storage_devices_with_topology()
+{
+  std::vector<storage_device_info> devices;
+  std::string nvme_path = "/sys/class/nvme";
+
+  if (!fs::exists(nvme_path)) { return devices; }
+
+  try {
+    for (auto const& entry : fs::directory_iterator(nvme_path)) {
+      if (!entry.is_directory()) { continue; }
+
+      storage_device_info dev;
+      dev.name = entry.path().filename().string();
+      dev.type = StorageDriveType::NVME;
+
+      // Get device's NUMA node and PCI bus ID
+      std::string numa_path = entry.path().string() + "/device/numa_node";
+      std::string numa_str  = read_file_content(numa_path);
+      dev.numa_node         = numa_str.empty() ? -1 : std::stoi(numa_str);
+      dev.pci_bus_id        = get_pci_bus_id_from_device(entry.path().string());
+
+      devices.push_back(dev);
+    }
+  } catch (std::exception const& e) {
+    std::cerr << "Warning: Error discovering NVMe devices: " << e.what() << std::endl;
+  }
+
+  return devices;
+}
+
 /**
  * @brief Map network devices to a GPU based on PCIe topology and NUMA proximity.
  *
@@ -531,6 +561,8 @@ bool topology_discovery::discover()
     info.pci_bus_id = dev.pci_bus_id;
     topology.network_devices.push_back(info);
   }
+
+  topology.storage_devices = discover_storage_devices_with_topology();
 
   // Collect GPU information
   topology.gpus.clear();

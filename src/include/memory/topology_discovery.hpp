@@ -35,6 +35,20 @@ struct network_device_info {
   std::string pci_bus_id;  ///< PCI bus ID.
 };
 
+enum class StorageDriveType {
+  NVME,      // NVMe SSD
+  SATA_SSD,  // SATA Solid State Drive
+  SATA_HDD,  // SATA Hard Disk Drive
+  UNKNOWN
+};
+
+struct storage_device_info {
+  StorageDriveType type = StorageDriveType::UNKNOWN;  ///< Type of storage drive.
+  std::string name;                                   ///< Device name (e.g., "nvme0n1").
+  int numa_node{-1};                                  ///< NUMA node ID (-1 if unknown).
+  std::string pci_bus_id;                             ///< PCI bus ID.
+};
+
 /**
  * @brief System topology information.
  */
@@ -45,6 +59,7 @@ struct system_topology_info {
   int num_network_devices;                           ///< Total number of network devices.
   std::vector<gpu_topology_info> gpus;               ///< GPU topology information.
   std::vector<network_device_info> network_devices;  ///< Network device information.
+  std::vector<storage_device_info> storage_devices;  ///< Storage device information.
 };
 
 /**
