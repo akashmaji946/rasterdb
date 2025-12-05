@@ -191,6 +191,17 @@ std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
   return nullptr;
 }
 
+std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve_upto(
+  std::size_t bytes, std::unique_ptr<event_notifier> on_release)
+{
+  bytes               = rmm::align_up(bytes, block_size_);
+  auto reserved_bytes = do_reserve_upto(bytes, memory_limit_);
+  auto host_slot =
+    std::make_unique<chunked_reserved_area>(*this, reserved_bytes, std::move(on_release));
+  this->register_reservation(host_slot.get());
+  return reservation::create(space_id_, std::move(host_slot));
+}
+
 bool fixed_size_host_memory_resource::grow_reservation_by(reservation& res, std::size_t bytes)
 {
   std::lock_guard lock(mutex_);
@@ -289,6 +300,20 @@ bool fixed_size_host_memory_resource::do_reserve(std::size_t bytes, std::size_t 
     }
   }
   return false;
+}
+
+std::size_t fixed_size_host_memory_resource::do_reserve_upto(std::size_t bytes,
+                                                             std::size_t mem_limit)
+{
+  auto pre_reservation_bytes = allocated_bytes_.load();
+  while (pre_reservation_bytes < mem_limit) {
+    auto target = std::min(mem_limit, pre_reservation_bytes + bytes);
+    if (allocated_bytes_.compare_exchange_weak(
+          pre_reservation_bytes, target, std::memory_order_seq_cst)) {
+      return target - pre_reservation_bytes;
+    }
+  }
+  return 0;
 }
 
 }  // namespace memory

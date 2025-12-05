@@ -27,20 +27,29 @@ struct notification_channel : std::enable_shared_from_this<notification_channel>
   struct event_notifier {
     explicit event_notifier(notification_channel& channel) : _channel(channel.shared_from_this()) {}
 
+    ~event_notifier() { _channel->release_notifier(); }
+
     void post() { _channel->notify(); }
 
    private:
     std::shared_ptr<notification_channel> _channel;
   };
 
+  enum class wait_status { IDLE, NOTIFIED, SHUTDOWN };
+
   ~notification_channel() { shutdown(); }
 
-  void wait()
+  wait_status wait()
   {
     std::unique_lock lock(mutex_);
-    cv_.wait(lock, [self = shared_from_this()] {
-      return std::exchange(self->has_been_notified_, false) || not self->is_running_;
+    bool notified = false;
+    cv_.wait(lock, [&, self = shared_from_this()] {
+      notified = std::exchange(has_been_notified_, false);
+      return notified || (n_active_notifiers_ == 0) || not is_running_;
     });
+    return !is_running_ ? wait_status::SHUTDOWN
+           : (notified) ? wait_status::NOTIFIED
+                        : wait_status::IDLE;
   }
 
   std::unique_ptr<event_notifier> get_notifier() { return std::make_unique<event_notifier>(*this); }
@@ -60,9 +69,17 @@ struct notification_channel : std::enable_shared_from_this<notification_channel>
     cv_.notify_one();
   }
 
+  void release_notifier()
+  {
+    std::lock_guard lock(mutex_);
+    n_active_notifiers_--;
+    if (n_active_notifiers_ == 0) { cv_.notify_all(); }
+  }
+
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   bool has_been_notified_{false};
+  std::size_t n_active_notifiers_{0};
   bool is_running_{true};
 };
 

@@ -92,17 +92,29 @@ std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
     _reservation_allocator);
 }
 
-std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
+std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
 {
   return std::visit(
     sirius::overloaded{[&](auto others) { return std::unique_ptr<reservation>(nullptr); },
                        [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->reserve(size, notification_channel_->get_notifier());
+                         return mr->reserve_upto(size, notification_channel_->get_notifier());
                        },
                        [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->reserve(size, notification_channel_->get_notifier());
+                         return mr->reserve_upto(size, notification_channel_->get_notifier());
                        }},
     _reservation_allocator);
+}
+
+std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
+{
+  std::unique_ptr<reservation> res = make_reservation_or_null(size);
+  while (!res) {
+    auto status = notification_channel_->wait();
+    if (status == notification_channel::wait_status::SHUTDOWN) { return nullptr; }
+    if (status == notification_channel::wait_status::IDLE) { return make_reservation_upto(size); }
+    res = make_reservation_or_null(size);
+  }
+  return res;
 }
 
 bool memory_space::can_reserve(std::size_t size) const
@@ -214,6 +226,11 @@ std::string memory_space::to_string() const
   }
   oss << ", device_id=" << _id.device_id << ", limit=" << _memory_limit << ")";
   return oss.str();
+}
+
+void memory_space::shutdown()
+{
+  if (notification_channel_) { notification_channel_->shutdown(); }
 }
 
 //===----------------------------------------------------------------------===//

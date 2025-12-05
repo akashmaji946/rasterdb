@@ -96,6 +96,7 @@ class memory_space {
 
   // Reservation management - these are the core methods that do the actual work
   std::unique_ptr<reservation> make_reservation_or_null(size_t size);
+  std::unique_ptr<reservation> make_reservation_upto(size_t size);
   std::unique_ptr<reservation> make_reservation(size_t size);
   bool can_reserve(std::size_t size) const;
   std::size_t get_active_reservation_count() const;
@@ -111,6 +112,8 @@ class memory_space {
 
   // Utility methods
   std::string to_string() const;
+
+  void shutdown();
 
  protected:
   friend struct reservation;

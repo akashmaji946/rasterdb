@@ -233,6 +233,14 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
                                        std::unique_ptr<event_notifier> notifer = nullptr);
 
   /**
+   * @brief makes reservations upto the given size
+   * @param bytes the size of reservation
+   * @param on_release used to hook callbacks for when the reservation is released
+   */
+  std::unique_ptr<reservation> reserve_upto(std::size_t bytes,
+                                            std::unique_ptr<event_notifier> notifer = nullptr);
+
+  /**
    * @brief grows reservation by a `bytes` size
    * @param res current_reservation
    * @param bytes the size of reservation
@@ -266,6 +274,8 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
 
  protected:
   bool do_reserve(std::size_t bytes, std::size_t mem_limit);
+
+  std::size_t do_reserve_upto(std::size_t bytes, std::size_t mem_limit);
 
   /**
    * @brief Allocate memory of the specified size.

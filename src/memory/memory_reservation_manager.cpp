@@ -144,6 +144,8 @@ memory_reservation_manager::memory_reservation_manager(std::vector<memory_space_
   build_lookup_tables();
 }
 
+memory_reservation_manager::~memory_reservation_manager() { shutdown(); }
+
 memory_reservation_manager::memory_space_config::memory_space_config(
   Tier t, int dev_id, size_t mem_limit, std::unique_ptr<rmm::mr::device_memory_resource> alloc)
   : tier(t), device_id(dev_id), memory_limit(mem_limit), allocators(std::move(alloc))
@@ -385,6 +387,13 @@ void memory_reservation_manager::build_lookup_tables()
 
     // Build tier-to-spaces mapping
     _tier_to_memory_spaces[space_ptr->get_tier()].push_back(space_ptr);
+  }
+}
+
+void memory_reservation_manager::shutdown()
+{
+  for (const auto& space : _memory_spaces) {
+    space->shutdown();
   }
 }
 

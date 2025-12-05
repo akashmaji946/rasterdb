@@ -238,8 +238,7 @@ class memory_reservation_manager {
   memory_reservation_manager(memory_reservation_manager&&)                 = delete;
   memory_reservation_manager& operator=(memory_reservation_manager&&)      = delete;
 
-  // Public destructor (required for std::unique_ptr)
-  ~memory_reservation_manager() = default;
+  ~memory_reservation_manager();
 
   //===----------------------------------------------------------------------===//
   // Reservation Interface
@@ -287,11 +286,14 @@ class memory_reservation_manager {
   size_t get_total_reserved_memory() const;
   size_t get_active_reservation_count() const;
 
+  void shutdown();
+
  private:
   /**
    * Private constructor - use initialize() and get_instance() instead.
    */
   explicit memory_reservation_manager(std::vector<memory_space_config> configs);
+  ~memory_reservation_manager();
 
   memory_space* get_mutable_memory_space(Tier tier, int32_t device_id);
   std::vector<memory_space*> get_mutable_memory_space(std::span<memory_space_id> ids);

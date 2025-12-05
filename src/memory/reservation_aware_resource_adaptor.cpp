@@ -330,6 +330,17 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
   return nullptr;
 }
 
+std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve_upto(
+  std::size_t bytes, std::unique_ptr<event_notifier> release_notifer)
+{
+  std::lock_guard lock(reservation_mutex);
+  auto reserved_size = do_reserve_upto(bytes, _memory_limit);
+  auto slot =
+    std::make_unique<device_reserved_arena>(*this, reserved_size, std::move(release_notifer));
+  reservation_views.insert(slot.get());
+  return reservation::create(_space_id, std::move(slot));
+}
+
 bool reservation_aware_resource_adaptor::grow_reservation_by(reservation& res, std::size_t bytes)
 {
   std::lock_guard lock(reservation_mutex);
@@ -490,6 +501,20 @@ bool reservation_aware_resource_adaptor::do_reserve(std::size_t size_bytes, std:
     }
   }
   return false;
+}
+
+std::size_t reservation_aware_resource_adaptor::do_reserve_upto(std::size_t size_bytes,
+                                                                std::size_t limit_bytes)
+{
+  auto pre_reservation_bytes = _total_allocated_bytes.load();
+  while (pre_reservation_bytes < limit_bytes) {
+    auto target = std::min(limit_bytes, pre_reservation_bytes + size_bytes);
+    if (_total_allocated_bytes.compare_exchange_weak(
+          pre_reservation_bytes, target, std::memory_order_seq_cst)) {
+      return target - pre_reservation_bytes;
+    }
+  }
+  return 0;
 }
 
 void reservation_aware_resource_adaptor::do_release_reservation(

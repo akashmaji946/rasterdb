@@ -253,6 +253,14 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
                                        std::unique_ptr<event_notifier> release_notifer = nullptr);
 
   /**
+   * @brief makes reservations
+   * @param bytes the size of reservation
+   * @param on_release_notifer used to hook callbacks for when the reservation is released
+   */
+  std::unique_ptr<reservation> reserve_upto(
+    std::size_t bytes, std::unique_ptr<event_notifier> release_notifer = nullptr);
+
+  /**
    * @brief grows reservation by a `bytes` size
    * @param res current_reservation
    * @param bytes the size of reservation
@@ -355,6 +363,12 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
    * @param reservation pointer to the reservation being released
    */
   bool do_reserve(std::size_t size_bytes, std::size_t limit_bytes);
+
+  /**
+   * @brief releases reservations and returns the unsed reservation back to allocator
+   * @param reservation pointer to the reservation being released
+   */
+  std::size_t do_reserve_upto(std::size_t size_bytes, std::size_t limit_bytes);
 
   /**
    * @brief releases reservations and returns the unsed reservation back to allocator
