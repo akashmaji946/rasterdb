@@ -17,7 +17,6 @@
 #pragma once
 
 #include "memory/common.hpp"
-#include "memory/memory_space.hpp"
 #include "memory/notification_channel.hpp"
 
 #include <rmm/cuda_device.hpp>
@@ -175,6 +174,7 @@ struct reserved_arena {
 struct reservation {
   friend class reservation_aware_resource_adaptor;
   friend class fixed_size_host_memory_resource;
+  friend class disk_access_limiter;
 
   static std::unique_ptr<reservation> create(memory_space_id id,
                                              std::unique_ptr<reserved_arena> arena)

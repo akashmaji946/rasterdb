@@ -17,6 +17,7 @@
 #include "memory/memory_space.hpp"
 
 #include "memory/common.hpp"
+#include "memory/disk_access_limiter.hpp"
 #include "memory/fixed_size_host_memory_resource.hpp"
 #include "memory/memory_reservation.hpp"
 #include "memory/reservation_aware_resource_adaptor.hpp"
@@ -62,8 +63,8 @@ memory_space::memory_space(Tier tier,
   } else if (tier == Tier::HOST) {
     _reservation_allocator = std::make_unique<fixed_size_host_memory_resource>(
       _id.device_id, *_allocator, _memory_limit, _capacity);
-  } else {
-    _reservation_allocator = std::monostate{};
+  } else if (tier == Tier::DISK) {
+    _reservation_allocator = std::make_unique<disk_access_limiter>(_id, _memory_limit, _capacity);
   }
 }
 
@@ -82,7 +83,9 @@ int memory_space::get_device_id() const noexcept { return _id.device_id; }
 std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return std::unique_ptr<reservation>(nullptr); },
+    sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
+                         return mr->reserve(size, notification_channel_->get_notifier());
+                       },
                        [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
                          return mr->reserve(size, notification_channel_->get_notifier());
                        },
@@ -95,7 +98,9 @@ std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
 std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return std::unique_ptr<reservation>(nullptr); },
+    sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
+                         return mr->reserve_upto(size, notification_channel_->get_notifier());
+                       },
                        [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
                          return mr->reserve_upto(size, notification_channel_->get_notifier());
                        },
@@ -117,35 +122,25 @@ std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
   return res;
 }
 
-bool memory_space::can_reserve(std::size_t size) const
-{
-  return std::visit(
-    sirius::overloaded{[&](auto others) { return false; },
-                       [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->get_available_memory() > size;
-                       },
-                       [&](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->get_available_memory() > size;
-                       }},
-    _reservation_allocator);
-}
-
 bool memory_space::grow_reservation_by(reservation& res, std::size_t bytes)
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return false; },
-                       [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->grow_reservation_by(res, bytes);
-                       },
-                       [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->grow_reservation_by(res, bytes);
-                       }},
+    sirius::overloaded{
+      [&](std::unique_ptr<disk_access_limiter>& mr) { return mr->grow_reservation_by(res, bytes); },
+      [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+        return mr->grow_reservation_by(res, bytes);
+      },
+      [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+        return mr->grow_reservation_by(res, bytes);
+      }},
     _reservation_allocator);
 }
 
 void memory_space::shrink_to_fit(reservation& res)
 {
-  std::visit(sirius::overloaded{[&](auto others) {},
+  std::visit(sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
+                                  mr->shrink_reservation_to_fit(res);
+                                },
                                 [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
                                   mr->shrink_reservation_to_fit(res);
                                 },
@@ -158,7 +153,9 @@ void memory_space::shrink_to_fit(reservation& res)
 std::size_t memory_space::get_active_reservation_count() const
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return 0UL; },
+    sirius::overloaded{[&](const std::unique_ptr<disk_access_limiter>& mr) {
+                         return mr->get_active_reservation_count();
+                       },
                        [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
                          return mr->get_active_reservation_count();
                        },
@@ -171,33 +168,37 @@ std::size_t memory_space::get_active_reservation_count() const
 size_t memory_space::get_available_memory(rmm::cuda_stream_view stream) const
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return _memory_limit; },
-                       [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->get_available_memory(stream);
-                       },
-                       [&](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->get_available_memory();
-                       }},
+    sirius::overloaded{
+      [&](const std::unique_ptr<disk_access_limiter>& mr) { return mr->get_available_memory(); },
+      [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+        return mr->get_available_memory(stream);
+      },
+      [&](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+        return mr->get_available_memory();
+      }},
     _reservation_allocator);
 }
 
 size_t memory_space::get_available_memory() const
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return _memory_limit; },
-                       [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->get_available_memory();
-                       },
-                       [](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->get_available_memory();
-                       }},
+    sirius::overloaded{
+      [&](const std::unique_ptr<disk_access_limiter>& mr) { return mr->get_available_memory(); },
+      [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+        return mr->get_available_memory();
+      },
+      [](const std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+        return mr->get_available_memory();
+      }},
     _reservation_allocator);
 }
 
 size_t memory_space::get_total_reserved_memory() const
 {
   return std::visit(
-    sirius::overloaded{[&](auto others) { return 0UL; },
+    sirius::overloaded{[&](const std::unique_ptr<disk_access_limiter>& mr) {
+                         return mr->get_total_reserved_bytes();
+                       },
                        [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
                          return mr->get_total_reserved_bytes();
                        },

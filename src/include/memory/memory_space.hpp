@@ -17,6 +17,7 @@
 #pragma once
 
 #include "memory/common.hpp"
+#include "memory/disk_access_limiter.hpp"
 #include "memory/notification_channel.hpp"
 
 #include <cstdint>
@@ -98,7 +99,6 @@ class memory_space {
   std::unique_ptr<reservation> make_reservation_or_null(size_t size);
   std::unique_ptr<reservation> make_reservation_upto(size_t size);
   std::unique_ptr<reservation> make_reservation(size_t size);
-  bool can_reserve(std::size_t size) const;
   std::size_t get_active_reservation_count() const;
 
   // State queries
@@ -121,9 +121,9 @@ class memory_space {
   const memory_space_id _id;
   const size_t _memory_limit;
   const size_t _capacity;
-  using reserving_adaptor_type = std::variant<std::monostate,
-                                              std::unique_ptr<reservation_aware_resource_adaptor>,
-                                              std::unique_ptr<fixed_size_host_memory_resource>>;
+  using reserving_adaptor_type = std::variant<std::unique_ptr<reservation_aware_resource_adaptor>,
+                                              std::unique_ptr<fixed_size_host_memory_resource>,
+                                              std::unique_ptr<disk_access_limiter>>;
 
   std::shared_ptr<notification_channel> notification_channel_;
 

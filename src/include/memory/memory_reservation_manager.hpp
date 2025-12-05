@@ -293,7 +293,6 @@ class memory_reservation_manager {
    * Private constructor - use initialize() and get_instance() instead.
    */
   explicit memory_reservation_manager(std::vector<memory_space_config> configs);
-  ~memory_reservation_manager();
 
   memory_space* get_mutable_memory_space(Tier tier, int32_t device_id);
   std::vector<memory_space*> get_mutable_memory_space(std::span<memory_space_id> ids);
