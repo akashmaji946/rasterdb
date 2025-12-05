@@ -39,21 +39,19 @@ namespace memory {
 memory_space::memory_space(Tier tier,
                            int device_id,
                            size_t memory_limit,
-                           std::unique_ptr<rmm::mr::device_memory_resource> allocator,
-                           std::optional<std::size_t> capacity)
+                           std::unique_ptr<rmm::mr::device_memory_resource> allocator)
+  : memory_space(tier, device_id, memory_limit, memory_limit, std::move(allocator))
+{
+}
+
+memory_space::memory_space(Tier tier,
+                           int device_id,
+                           size_t memory_limit,
+                           size_t capacity,
+                           std::unique_ptr<rmm::mr::device_memory_resource> allocator)
   : _id(tier, device_id),
     _memory_limit(memory_limit),
-    _capacity([&]() {
-      if (capacity.has_value()) {
-        return capacity.value();
-      } else if (tier == Tier::GPU) {
-        // Query device for total memory capacity
-        rmm::cuda_set_device_raii guard(rmm::cuda_device_id{device_id});
-        return rmm::available_device_memory().second;
-      } else {
-        return std::numeric_limits<std::size_t>::max();
-      }
-    }()),
+    _capacity(capacity),
     _allocator(std::move(allocator))
 {
   if (memory_limit == 0) { throw std::invalid_argument("Memory limit must be greater than 0"); }
@@ -81,7 +79,7 @@ Tier memory_space::get_tier() const noexcept { return _id.tier; }
 
 int memory_space::get_device_id() const noexcept { return _id.device_id; }
 
-std::unique_ptr<reservation> memory_space::request_reservation_or_null(size_t size)
+std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
 {
   return std::visit(
     sirius::overloaded{[&](auto others) { return std::unique_ptr<reservation>(nullptr); },
@@ -94,7 +92,7 @@ std::unique_ptr<reservation> memory_space::request_reservation_or_null(size_t si
     _reservation_allocator);
 }
 
-std::unique_ptr<reservation> memory_space::request_reservation(size_t size)
+std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
 {
   return std::visit(
     sirius::overloaded{[&](auto others) { return std::unique_ptr<reservation>(nullptr); },

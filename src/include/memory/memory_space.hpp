@@ -18,20 +18,15 @@
 
 #include "memory/common.hpp"
 #include "memory/notification_channel.hpp"
-#include "memory/null_device_memory_resource.hpp"
 
-#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <string>
 #include <variant>
 
 // RMM includes for memory resource management
 #include <rmm/mr/device/device_memory_resource.hpp>
-#include <rmm/mr/device/limiting_resource_adaptor.hpp>
 #include <rmm/resource_ref.hpp>
 
 namespace sirius {
@@ -61,13 +56,26 @@ class memory_space {
    * @param device_id The device identifier within the tier
    * @param memory_limit Maximum memory capacity in bytes
    * @param allocator RMM memory allocator (must be non-empty)
-   * @param capacity Total memory capacity in bytes (optional [default: device capacity])
    */
   memory_space(Tier tier,
                int device_id,
                size_t memory_limit,
-               std::unique_ptr<rmm::mr::device_memory_resource> allocator,
-               std::optional<std::size_t> capacity = std::nullopt);
+               std::unique_ptr<rmm::mr::device_memory_resource> allocator);
+
+  /**
+   * Construct a memory_space with the given parameters.
+   *
+   * @param tier The memory tier (GPU, HOST, DISK)
+   * @param device_id The device identifier within the tier
+   * @param memory_limit Maximum memory capacity in bytes
+   * @param capacity Total memory capacity in bytes (optional [default: device capacity])
+   * @param allocator RMM memory allocator (must be non-empty)
+   */
+  memory_space(Tier tier,
+               int device_id,
+               size_t memory_limit,
+               size_t capacity,
+               std::unique_ptr<rmm::mr::device_memory_resource> allocator);
 
   // Disable copy/move to ensure stable addresses for reservations
   memory_space(const memory_space&)            = delete;
@@ -87,8 +95,8 @@ class memory_space {
   int get_device_id() const noexcept;
 
   // Reservation management - these are the core methods that do the actual work
-  std::unique_ptr<reservation> request_reservation_or_null(size_t size);
-  std::unique_ptr<reservation> request_reservation(size_t size);
+  std::unique_ptr<reservation> make_reservation_or_null(size_t size);
+  std::unique_ptr<reservation> make_reservation(size_t size);
   bool can_reserve(std::size_t size) const;
   std::size_t get_active_reservation_count() const;
 
