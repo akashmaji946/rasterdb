@@ -19,6 +19,8 @@
 #include "memory/common.hpp"
 #include "memory/memory_reservation.hpp"
 #include "memory/memory_space.hpp"
+#include "memory/numa_region_pinned_host_allocator.hpp"
+#include "mr/device/cuda_async_memory_resource.hpp"
 
 #include <rmm/cuda_device.hpp>
 
@@ -131,12 +133,11 @@ memory_reservation_manager::memory_reservation_manager(std::vector<memory_space_
   // Create memory_space instances
   for (auto& config : configs) {
     // Move the allocators from config to the memory_space
-    auto mem_space =
-      std::make_unique<memory_space>(config.tier,
-                                     config.device_id,
-                                     config.memory_limit,
-                                     config.memory_capacity.value_or(config.memory_limit),
-                                     std::move(config.allocators));
+    auto mem_space = std::make_unique<memory_space>(config.tier,
+                                                    config.device_id,
+                                                    config.memory_limit,
+                                                    config.memory_capacity,
+                                                    config.mr_factory_fn(config.device_id));
     _memory_spaces.push_back(std::move(mem_space));
   }
 
@@ -147,13 +148,11 @@ memory_reservation_manager::memory_reservation_manager(std::vector<memory_space_
 memory_reservation_manager::~memory_reservation_manager() { shutdown(); }
 
 memory_reservation_manager::memory_space_config::memory_space_config(
-  Tier t, int dev_id, size_t mem_limit, std::unique_ptr<rmm::mr::device_memory_resource> alloc)
-  : tier(t), device_id(dev_id), memory_limit(mem_limit), allocators(std::move(alloc))
+  Tier t, int dev_id, size_t mem_limit, DeviceMemoryResourceFactoryFn mr_fn)
+  : tier(t), device_id(dev_id), memory_limit(mem_limit), mr_factory_fn(std::move(mr_fn))
 {
-  if (allocators == nullptr) {
-    throw std::invalid_argument("At least one allocator must be provided");
-  }
-  assert(mem_limit < memory_capacity && "Memory limit cannot exceed device capacity");
+  if (mr_factory_fn == nullptr) { mr_factory_fn = make_default_allocator_for_tier(t); }
+  assert(mem_limit <= memory_capacity && "Memory limit cannot exceed device capacity");
 }
 
 memory_reservation_manager::memory_space_config::memory_space_config(
@@ -161,18 +160,15 @@ memory_reservation_manager::memory_space_config::memory_space_config(
   int dev_id,
   size_t mem_limit,
   std::size_t mem_capacity,
-  std::unique_ptr<rmm::mr::device_memory_resource> allocs)
+  DeviceMemoryResourceFactoryFn mr_fn)
   : tier(t),
     device_id(dev_id),
     memory_limit(mem_limit),
     memory_capacity(mem_capacity),
-    allocators(std::move(allocs))
+    mr_factory_fn(std::move(mr_fn))
 {
-  assert(allocators && "cannot be nullptr");
-  assert(memory_limit < memory_capacity && "Memory limit cannot exceed device capacity");
-  if (allocators == nullptr) {
-    throw std::invalid_argument("At least one allocator must be provided");
-  }
+  assert(memory_limit <= memory_capacity && "Memory limit cannot exceed device capacity");
+  if (mr_factory_fn == nullptr) { mr_factory_fn = make_default_allocator_for_tier(t); }
 }
 
 void memory_reservation_manager::initialize(std::vector<memory_space_config> configs)
@@ -246,7 +242,8 @@ std::span<const memory_space*> memory_reservation_manager::get_memory_spaces_for
 
 std::span<const memory_space*> memory_reservation_manager::get_all_memory_spaces() const noexcept
 {
-  // return std::span<const memory_space*>{_memory_space_views.data(), _memory_space_views.size()};
+  // return std::span<const memory_space*>{_memory_space_views.data(),
+  // _memory_space_views.size()};
   return {};
 }
 

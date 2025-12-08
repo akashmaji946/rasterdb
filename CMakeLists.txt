@@ -37,6 +37,20 @@ find_package(cudf REQUIRED CONFIG)
 
 if(DEFINED ENV{LIBCUDF_ENV_PREFIX})
   set(CONDA_PREFIX "$ENV{LIBCUDF_ENV_PREFIX}")
+
+  find_library(NUMA_LIB 
+    NAMES numa
+    HINTS "${CONDA_PREFIX}/lib"
+    DOC "Path to the libnuma library"
+  )
+
+# Inform the user if found
+  if (NUMA_LIB)
+      message(STATUS "Found libnuma: ${NUMA_LIB}")
+  else()
+      message(FATAL_ERROR "libnuma not found. Checked system paths and ${CONDA_PREFIX}/lib.")
+  endif()
+
 else()
   message(FATAL_ERROR "LIBCUDF_ENV_PREFIX environment variable is not set.")
 endif()
@@ -135,6 +149,7 @@ target_link_libraries(${EXTENSION_NAME}
   substrait_extension
   cudf::cudf
   rmm::rmm
+  ${NUMA_LIB}
 )
 target_link_libraries(${LOADABLE_EXTENSION_NAME}
   substrait_extension

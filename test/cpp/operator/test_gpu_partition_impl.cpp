@@ -34,8 +34,7 @@ void initialize_memory_manager()
 {
   memory_reservation_manager::reset_for_testing();
   std::vector<memory_reservation_manager::memory_space_config> configs;
-  configs.emplace_back(
-    Tier::GPU, 0, 1024 * 1024, create_test_allocators(Tier::GPU));  // GPU device 0: 1MB
+  configs.emplace_back(Tier::GPU, 0, 1024 * 1024);  // GPU device 0: 1MB
   memory_reservation_manager::initialize(std::move(configs));
 }
 

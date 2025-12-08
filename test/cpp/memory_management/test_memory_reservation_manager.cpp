@@ -34,9 +34,9 @@ void initializeTestManager()
   memory_reservation_manager::reset_for_testing();
   // Initialize with test memory_spaces: GPU(id:0)=1000, HOST(id:0)=2000, DISK(id:0)=5000
   std::vector<memory_reservation_manager::memory_space_config> configs;
-  configs.emplace_back(Tier::GPU, 0, 1000, create_test_allocators(Tier::GPU));
-  configs.emplace_back(Tier::HOST, 0, 2000, create_test_allocators(Tier::HOST));
-  configs.emplace_back(Tier::DISK, 0, 5000, create_test_allocators(Tier::DISK));
+  configs.emplace_back(Tier::GPU, 0, 1000);
+  configs.emplace_back(Tier::HOST, 0, 2000);
+  configs.emplace_back(Tier::DISK, 0, 5000);
   memory_reservation_manager::initialize(std::move(configs));
 }
 
@@ -45,10 +45,10 @@ void initializeMultiDeviceManager()
 {
   memory_reservation_manager::reset_for_testing();
   std::vector<memory_reservation_manager::memory_space_config> configs;
-  configs.emplace_back(Tier::GPU, 0, 1000, create_test_allocators(Tier::GPU));    // GPU device 0
-  configs.emplace_back(Tier::GPU, 1, 2000, create_test_allocators(Tier::GPU));    // GPU device 1
-  configs.emplace_back(Tier::HOST, 0, 1500, create_test_allocators(Tier::HOST));  // Host
-  configs.emplace_back(Tier::DISK, 0, 5000, create_test_allocators(Tier::DISK));  // Disk
+  configs.emplace_back(Tier::GPU, 0, 100);    // GPU device 0
+  configs.emplace_back(Tier::GPU, 1, 2000);   // GPU device 1
+  configs.emplace_back(Tier::HOST, 0, 1500);  // Host
+  configs.emplace_back(Tier::DISK, 0, 5000);  // Disk
   memory_reservation_manager::initialize(std::move(configs));
 }
 

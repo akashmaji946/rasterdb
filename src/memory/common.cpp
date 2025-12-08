@@ -16,6 +16,12 @@
 
 #include "memory/common.hpp"
 
+#include "memory/null_device_memory_resource.hpp"
+#include "memory/numa_region_pinned_host_allocator.hpp"
+
+#include <rmm/cuda_device.hpp>
+#include <rmm/mr/device/cuda_async_memory_resource.hpp>
+
 namespace sirius {
 
 namespace memory {
@@ -49,6 +55,28 @@ sirius_out_of_memory::sirius_out_of_memory(std::string_view message,
                                            std::size_t global_usage)
   : rmm::out_of_memory(message.data()), requested_bytes(requested_bytes), global_usage(global_usage)
 {
+}
+
+std::unique_ptr<rmm::mr::device_memory_resource> make_default_gpu_memory_resource(int device_id)
+{
+  rmm::cuda_set_device_raii set_device(rmm::cuda_device_id{device_id});
+  return std::make_unique<rmm::mr::cuda_async_memory_resource>();
+}
+
+std::unique_ptr<rmm::mr::device_memory_resource> make_default_host_memory_resource(int numa_node_id)
+{
+  return std::make_unique<sirius::memory::numa_region_pinned_host_memory_resource>(numa_node_id);
+}
+
+DeviceMemoryResourceFactoryFn make_default_allocator_for_tier(Tier tier)
+{
+  if (tier == Tier::GPU) {
+    return make_default_gpu_memory_resource;
+  } else if (tier == Tier::HOST) {
+    return make_default_host_memory_resource;
+  } else {
+    return [](int) { return std::make_unique<null_device_memory_resource>(); };
+  }
 }
 
 }  // namespace memory

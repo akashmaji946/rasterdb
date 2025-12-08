@@ -17,10 +17,12 @@
 #pragma once
 
 #include <rmm/error.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <system_error>
 #include <utility>
 
@@ -88,6 +90,15 @@ struct sirius_out_of_memory : public rmm::out_of_memory {
   const std::size_t requested_bytes;
   const std::size_t global_usage;
 };
+
+using DeviceMemoryResourceFactoryFn =
+  std::function<std::unique_ptr<rmm::mr::device_memory_resource>(int device_id)>;
+
+std::unique_ptr<rmm::mr::device_memory_resource> make_default_gpu_memory_resource(int device_id);
+
+std::unique_ptr<rmm::mr::device_memory_resource> make_default_host_memory_resource(int device_id);
+
+DeviceMemoryResourceFactoryFn make_default_allocator_for_tier(Tier tier);
 
 }  // namespace memory
 }  // namespace sirius

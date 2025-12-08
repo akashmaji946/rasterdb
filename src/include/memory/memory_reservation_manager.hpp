@@ -23,6 +23,7 @@
 #include <rmm/cuda_device.hpp>
 
 #include <condition_variable>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -188,22 +189,21 @@ class memory_reservation_manager {
     Tier tier;
     int device_id;
     size_t memory_limit;
-    std::optional<std::size_t>
-      memory_capacity;  // Optional total capacity, defaults to device capacity
-    std::unique_ptr<rmm::mr::device_memory_resource> allocators;
+    std::size_t memory_capacity;  // Optional total capacity, defaults to device capacity
+    DeviceMemoryResourceFactoryFn mr_factory_fn;
 
     // Constructor - allocators must be explicitly provided
     memory_space_config(Tier t,
                         int dev_id,
                         size_t mem_limit,
-                        std::unique_ptr<rmm::mr::device_memory_resource> mr);
+                        DeviceMemoryResourceFactoryFn mr_fn = nullptr);
 
     // Constructor - allocators must be explicitly provided
     memory_space_config(Tier t,
                         int dev_id,
                         size_t mem_limit,
                         size_t mem_capacity,
-                        std::unique_ptr<rmm::mr::device_memory_resource> mr);
+                        DeviceMemoryResourceFactoryFn mr_fn = nullptr);
 
     // Move constructor
     memory_space_config(memory_space_config&&)            = default;
