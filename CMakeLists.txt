@@ -98,6 +98,7 @@ set(EXTENSION_SOURCES
   src/memory/null_device_memory_resource.cpp
   src/memory/topology_discovery.cpp
   src/memory/reservation_aware_resource_adaptor.cpp
+  src/memory/reservation_manager_configurator.cpp
   src/memory/disk_access_limiter.cpp
   src/parallel/task_executor.cpp
 )
