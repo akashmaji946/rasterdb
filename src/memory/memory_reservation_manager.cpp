@@ -133,11 +133,12 @@ memory_reservation_manager::memory_reservation_manager(std::vector<memory_space_
   // Create memory_space instances
   for (auto& config : configs) {
     // Move the allocators from config to the memory_space
-    auto mem_space = std::make_unique<memory_space>(config.tier,
-                                                    config.device_id,
-                                                    config.memory_limit,
-                                                    config.memory_capacity,
-                                                    config.mr_factory_fn(config.device_id));
+    auto mem_space = std::make_unique<memory_space>(
+      config.tier,
+      config.device_id,
+      config.memory_limit,
+      config.memory_capacity,
+      config.mr_factory_fn(config.device_id, config.memory_limit, config.memory_capacity));
     _memory_spaces.push_back(std::move(mem_space));
   }
 

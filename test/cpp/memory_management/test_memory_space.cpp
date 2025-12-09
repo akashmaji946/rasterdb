@@ -73,10 +73,6 @@ void initializeDualGpuMemoryManager()
   builder.set_host_id_to_numa_maps({{0, -1}});
   builder.set_device_tier_id_to_gpu_id_map({{0, 0}, {1, 0}});
   builder.set_reservation_limit_ratio_per_numa_node(limit_ratio);
-  builder.set_gpu_memory_resource_factory(
-    [](int) -> std::unique_ptr<rmm::mr::device_memory_resource> {
-      return std::make_unique<rmm::mr::cuda_memory_resource>();
-    });
 
   auto space_configs = builder.build_with_topology();
   memory_reservation_manager::initialize(std::move(space_configs));
