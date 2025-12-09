@@ -37,7 +37,7 @@
 using namespace sirius::memory;
 
 // Test topology discovery
-TEST_CASE("Topology Discovery", "[memory_space]")
+TEST_CASE("Topology Discovery", "[hw_topology]")
 {
   topology_discovery discovery;
 

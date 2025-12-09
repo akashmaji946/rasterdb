@@ -149,7 +149,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
     std::size_t capacity,
     std::unique_ptr<reservation_limit_policy> stream_reservation_policy = nullptr,
     std::unique_ptr<oom_handling_policy> default_oom_policy             = nullptr,
-    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_THREAD);
+    AllocationTrackingScope tracking_scope = AllocationTrackingScope::PER_STREAM);
 
   /**
    * @brief Constructs a per-stream tracking resource adaptor.

@@ -66,6 +66,7 @@ memory_space::memory_space(Tier tier,
   } else if (tier == Tier::DISK) {
     _reservation_allocator = std::make_unique<disk_access_limiter>(_id, _memory_limit, _capacity);
   }
+  notification_channel_ = std::make_shared<notification_channel>();
 }
 
 memory_space::~memory_space() = default;
@@ -212,7 +213,14 @@ size_t memory_space::get_max_memory() const noexcept { return _memory_limit; }
 
 rmm::mr::device_memory_resource* memory_space::get_default_allocator() const noexcept
 {
-  return _allocator.get();
+  return std::visit(
+    sirius::overloaded{[this](const std::unique_ptr<disk_access_limiter>& other)
+                         -> rmm::mr::device_memory_resource* { return _allocator.get(); },
+                       [](const std::unique_ptr<reservation_aware_resource_adaptor>& mr)
+                         -> rmm::mr::device_memory_resource* { return mr.get(); },
+                       [](const std::unique_ptr<fixed_size_host_memory_resource>& mr)
+                         -> rmm::mr::device_memory_resource* { return mr.get(); }},
+    _reservation_allocator);
 }
 
 std::string memory_space::to_string() const

@@ -204,14 +204,6 @@ class memory_reservation_manager {
                         size_t mem_limit,
                         size_t mem_capacity,
                         DeviceMemoryResourceFactoryFn mr_fn = nullptr);
-
-    // Move constructor
-    memory_space_config(memory_space_config&&)            = default;
-    memory_space_config& operator=(memory_space_config&&) = default;
-
-    // Delete copy constructor/assignment since allocators contain unique_ptr
-    memory_space_config(const memory_space_config&)            = delete;
-    memory_space_config& operator=(const memory_space_config&) = delete;
   };
 
   /**

@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-#pragma once
-
 #include "memory/reservation_manager_configurator.hpp"
 
+#include "memory/common.hpp"
 #include "memory/topology_discovery.hpp"
+#include "mr/device/device_memory_resource.hpp"
 
 #include <rmm/cuda_device.hpp>
 
 #include <numa.h>
 
 #include <algorithm>
+#include <memory>
 #include <numeric>
 #include <set>
 #include <variant>
@@ -32,38 +33,45 @@
 namespace sirius {
 namespace memory {
 
-using builder_reference   = reservation_manager_config_builder::builder_reference;
-using memory_space_config = reservation_manager_config_builder::memory_space_config;
+using builder_reference   = reservation_manager_configurator::builder_reference;
+using memory_space_config = reservation_manager_configurator::memory_space_config;
 
-builder_reference& reservation_manager_config_builder::set_number_of_gpus(std::size_t n_gpus)
+builder_reference& reservation_manager_configurator::set_number_of_gpus(std::size_t n_gpus)
 {
   assert(n_gpus > 0 && "Number of GPUs must be positive");
   n_gpus_or_gpu_ids_ = n_gpus;
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_gpu_ids(std::vector<int> gpu_ids)
+builder_reference& reservation_manager_configurator::set_gpu_ids(std::vector<int> gpu_ids)
 {
   assert(!gpu_ids.empty() && "GPU IDs list cannot be empty");
   n_gpus_or_gpu_ids_ = std::move(gpu_ids);
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_gpu_usage_limit(std::size_t bytes)
+builder_reference& reservation_manager_configurator::set_device_tier_id_to_gpu_id_map(
+  const std::unordered_map<int, int>& device_to_gpu_map)
+{
+  assert(!device_to_gpu_map.empty() && "GPU IDs list cannot be empty");
+  n_gpus_or_gpu_ids_ = device_to_gpu_map;
+  return *this;
+}
+
+builder_reference& reservation_manager_configurator::set_gpu_usage_limit(std::size_t bytes)
 {
   gpu_usage_limit_or_ratio_ = bytes;
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_usage_limit_ratio_per_gpu(
-  double fraction)
+builder_reference& reservation_manager_configurator::set_usage_limit_ratio_per_gpu(double fraction)
 {
   assert(fraction > 0.0 && fraction <= 1.0 && "Usage limit ratio must be in (0.0, 1.0]");
   gpu_usage_limit_or_ratio_ = fraction;
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_reservation_limit_ratio_per_gpu(
+builder_reference& reservation_manager_configurator::set_reservation_limit_ratio_per_gpu(
   double fraction)
 {
   assert(fraction > 0.0 && fraction <= 1.0 && "Reservation limit ratio must be in (0.0, 1.0]");
@@ -71,14 +79,14 @@ builder_reference& reservation_manager_config_builder::set_reservation_limit_rat
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_capacity_per_numa_node(std::size_t bytes)
+builder_reference& reservation_manager_configurator::set_capacity_per_numa_node(std::size_t bytes)
 {
   assert(bytes > 0 && "Capacity per NUMA node must be positive");
   capacity_per_numa_node_ = bytes;
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_reservation_limit_ratio_per_numa_node(
+builder_reference& reservation_manager_configurator::set_reservation_limit_ratio_per_numa_node(
   double fraction)
 {
   assert(fraction > 0.0 && fraction <= 1.0 && "Reservation limit ratio must be in (0.0, 1.0]");
@@ -86,7 +94,7 @@ builder_reference& reservation_manager_config_builder::set_reservation_limit_rat
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_gpu_memory_resource_factory(
+builder_reference& reservation_manager_configurator::set_gpu_memory_resource_factory(
   DeviceMemoryResourceFactoryFn mr_fn)
 {
   assert(mr_fn && "GPU memory resource factory cannot be nullptr");
@@ -94,7 +102,7 @@ builder_reference& reservation_manager_config_builder::set_gpu_memory_resource_f
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_cpu_memory_resource_factory(
+builder_reference& reservation_manager_configurator::set_cpu_memory_resource_factory(
   DeviceMemoryResourceFactoryFn mr_fn)
 {
   assert(mr_fn && "CPU memory resource factory cannot be nullptr");
@@ -102,47 +110,63 @@ builder_reference& reservation_manager_config_builder::set_cpu_memory_resource_f
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::set_numa_ids(std::vector<int> numa_ids)
+builder_reference& reservation_manager_configurator::set_numa_ids(const std::vector<int>& numa_ids)
 {
   assert(!numa_ids.empty() && "NUMA IDs list cannot be empty");
   auto_binding_or_numa_ids_ = std::move(numa_ids);
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::bind_cpu_tier_to_gpus()
+builder_reference& reservation_manager_configurator::bind_cpu_tier_to_gpus()
 {
   auto_binding_or_numa_ids_ = std::monostate{};
   return *this;
 }
 
-builder_reference& reservation_manager_config_builder::ignore_topology()
+builder_reference& reservation_manager_configurator::set_host_id_to_numa_maps(
+  const std::unordered_map<int, int>& host_to_numa_maps)
+{
+  auto_binding_or_numa_ids_ = host_to_numa_maps;
+  return *this;
+}
+
+builder_reference& reservation_manager_configurator::ignore_topology()
 {
   ignore_topology_ = true;
   return *this;
 }
 
-std::vector<memory_space_config> reservation_manager_config_builder::build(
+std::vector<memory_space_config> reservation_manager_configurator::build(
   const system_topology_info& topology) const
 {
   return build(ignore_topology_ ? nullptr : &topology);
 }
 
-std::vector<memory_space_config> reservation_manager_config_builder::build() const
+std::vector<memory_space_config> reservation_manager_configurator::build_with_topology() const
+{
+  topology_discovery discovery;
+  [[maybe_unused]] bool status = discovery.discover();
+  assert(status);
+  auto& topology = discovery.get_topology();
+  return build(&topology);
+}
+
+std::vector<memory_space_config> reservation_manager_configurator::build() const
 {
   return build(nullptr);
 }
 
-std::vector<memory_space_config> reservation_manager_config_builder::build(
+std::vector<memory_space_config> reservation_manager_configurator::build(
   const system_topology_info* topology) const
 {
-  std::vector<int> gpu_ids  = extract_gpu_ids(topology);
+  auto [gpu_ids, tier_ids]  = extract_gpu_ids(topology);
   auto gpu_memory_threshold = extract_gpu_memory_thresholds(gpu_ids, topology);
 
   std::vector<memory_space_config> configs;
   for (std::size_t index = 0; index < gpu_ids.size(); ++index) {
-    int gpu_id = gpu_ids[index];
+    int tier_id = tier_ids[index];
     configs.emplace_back(Tier::GPU,
-                         gpu_id,
+                         tier_id,
                          gpu_memory_threshold[index].first,
                          gpu_memory_threshold[index].second,
                          gpu_mr_fn_);
@@ -161,7 +185,7 @@ std::vector<memory_space_config> reservation_manager_config_builder::build(
   return configs;
 }
 
-std::vector<int> reservation_manager_config_builder::extract_gpu_ids(
+std::pair<std::vector<int>, std::vector<int>> reservation_manager_configurator::extract_gpu_ids(
   const system_topology_info* topology) const
 {
   std::vector<int> gpu_ids;
@@ -169,19 +193,42 @@ std::vector<int> reservation_manager_config_builder::extract_gpu_ids(
     std::size_t n_gpus = std::get<std::size_t>(n_gpus_or_gpu_ids_);
     assert((n_gpus <= topology->num_gpus) && "Requested number of GPUs exceeds available GPUs");
     gpu_ids.resize(n_gpus);
-    std::iota(gpu_ids.begin(), gpu_ids.end(), 0);
+    for (int gpu_id = 0; gpu_id != n_gpus; ++gpu_id) {
+      gpu_ids.push_back(gpu_id);
+    }
+    return {gpu_ids, gpu_ids};
+  } else if (std::holds_alternative<std::unordered_map<int, int>>(n_gpus_or_gpu_ids_)) {
+    const auto& device_to_gpu_map = std::get<std::unordered_map<int, int>>(n_gpus_or_gpu_ids_);
+    std::vector<int> tier_ids;
+    for (const auto& [device_tier_id, gpu_id] : device_to_gpu_map) {
+      assert(gpu_id >= 0 && (gpu_id < static_cast<int>(topology->num_gpus)) &&
+             "GPU ID out of range");
+
+      tier_ids.push_back(device_tier_id);
+      gpu_ids.push_back(gpu_id);
+      gpu_mr_fn_ = [device_to_gpu_map, current_mr_fn = gpu_mr_fn_](
+                     int tier_id) -> std::unique_ptr<rmm::mr::device_memory_resource> {
+        auto it = device_to_gpu_map.find(tier_id);
+        if (it == device_to_gpu_map.end()) {
+          throw std::runtime_error("GPU ID not found in device to GPU map");
+        }
+        int gpu_id = it->second;
+        return current_mr_fn(gpu_id);
+      };
+    };
+    return {gpu_ids, tier_ids};
   } else {
     gpu_ids = std::get<std::vector<int>>(n_gpus_or_gpu_ids_);
     for (int gpu_id : gpu_ids) {
       assert(gpu_id >= 0 && (gpu_id < static_cast<int>(topology->num_gpus)) &&
              "GPU ID out of range");
     }
+    return {gpu_ids, gpu_ids};
   }
-  return gpu_ids;
 }
 
 std::vector<std::pair<size_t, size_t>>
-reservation_manager_config_builder::extract_gpu_memory_thresholds(
+reservation_manager_configurator::extract_gpu_memory_thresholds(
   const std::vector<int>& gpu_ids, const system_topology_info* topology) const
 {
   std::vector<std::pair<size_t, size_t>> ts;
@@ -200,7 +247,7 @@ reservation_manager_config_builder::extract_gpu_memory_thresholds(
   return ts;
 }
 
-std::vector<int> reservation_manager_config_builder::extract_host_ids(
+std::vector<int> reservation_manager_configurator::extract_host_ids(
   const std::vector<int>& gpu_ids, const system_topology_info* topology) const
 {
   std::vector<int> host_numa_ids;
@@ -212,8 +259,25 @@ std::vector<int> reservation_manager_config_builder::extract_host_ids(
       gpu_numa_ids.insert(gpu_info.numa_node);
     }
     host_numa_ids.insert(host_numa_ids.end(), gpu_numa_ids.begin(), gpu_numa_ids.end());
-  } else {
+  } else if (std::holds_alternative<std::vector<int>>(auto_binding_or_numa_ids_)) {
     host_numa_ids = std::get<std::vector<int>>(auto_binding_or_numa_ids_);
+  } else {
+    const auto& host_to_numa_maps =
+      std::get<std::unordered_map<int, int>>(auto_binding_or_numa_ids_);
+    for (const auto& [host_id, numa_id] : host_to_numa_maps) {
+      host_numa_ids.push_back(host_id);
+    }
+    auto current_mr_fn = cpu_mr_fn_;
+    cpu_mr_fn_         = [host_to_numa_maps,
+                  current_mr_fn](int host_id) -> std::unique_ptr<rmm::mr::device_memory_resource> {
+      auto it = host_to_numa_maps.find(host_id);
+      if (it != host_to_numa_maps.end()) {
+        int numa_id = it->second;
+        return current_mr_fn(numa_id);
+      } else {
+        throw std::runtime_error("NUMA ID not found in host to NUMA maps");
+      }
+    };
   }
   return host_numa_ids;
 }

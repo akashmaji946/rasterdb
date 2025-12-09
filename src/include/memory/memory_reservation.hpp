@@ -185,6 +185,10 @@ struct reservation {
 
   [[gnu::always_inline]] size_t size() const noexcept { return arena_->size; }
 
+  [[nodiscard]] Tier tier() const noexcept { return space_id_.tier; }
+
+  [[nodiscard]] int device_id() const noexcept { return space_id_.device_id; }
+
   //===----------------------------------------------------------------------===//
   // Reservation Size Management
   //===----------------------------------------------------------------------===//
