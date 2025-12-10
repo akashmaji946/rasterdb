@@ -18,10 +18,6 @@
 
 #include <rmm/aligned.hpp>
 #include <rmm/detail/aligned.hpp>
-#include <rmm/detail/cccl_adaptors.hpp>
-#include <rmm/detail/cuda_memory_resource.hpp>
-#include <rmm/detail/error.hpp>
-#include <rmm/detail/export.hpp>
 #include <rmm/detail/nvtx/ranges.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
 
@@ -31,6 +27,7 @@
 #include <numa.h>
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 
 namespace sirius {
@@ -65,13 +62,20 @@ class numa_region_pinned_host_memory_resource final : public rmm::mr::device_mem
    */
   void* do_allocate(std::size_t bytes, [[maybe_unused]] rmm::cuda_stream_view stream) override
   {
+    RMM_FUNC_RANGE();
     // don't allocate anything if the user requested zero bytes
     if (0 == bytes) { return nullptr; }
-    void* ptr = numa_alloc_onnode(bytes, numa_node_);
-    if (ptr == nullptr) { throw rmm::bad_alloc(std::strerror(errno)); }
-    RMM_CUDA_TRY_ALLOC(cudaHostRegister(ptr, bytes, cudaHostRegisterMapped), bytes);
 
-    return ptr;
+    if (numa_node_ == -1) {
+      void* ptr{nullptr};
+      RMM_CUDA_TRY_ALLOC(cudaHostAlloc(&ptr, bytes, cudaHostAllocDefault), bytes);
+      return ptr;
+    } else {
+      void* ptr = numa_alloc_onnode(bytes, numa_node_);
+      if (ptr == nullptr) { throw rmm::bad_alloc(std::strerror(errno)); }
+      RMM_CUDA_TRY_ALLOC(cudaHostRegister(ptr, bytes, cudaHostRegisterMapped), bytes);
+      return ptr;
+    }
   }
 
   /**
@@ -88,8 +92,13 @@ class numa_region_pinned_host_memory_resource final : public rmm::mr::device_mem
                      std::size_t bytes,
                      [[maybe_unused]] rmm::cuda_stream_view stream) noexcept override
   {
-    cudaHostUnregister(ptr);
-    numa_free(ptr, bytes);
+    RMM_FUNC_RANGE();
+    if (numa_node_ == -1) {
+      RMM_ASSERT_CUDA_SUCCESS(cudaFreeHost(ptr));
+    } else {
+      cudaHostUnregister(ptr);
+      numa_free(ptr, bytes);
+    }
   }
 
   /**

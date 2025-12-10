@@ -51,7 +51,7 @@ std::size_t disk_access_limiter::get_total_reserved_bytes() const
   return _total_allocated_bytes.load();
 }
 
-std::unique_ptr<reservation> disk_access_limiter::reserve(
+std::unique_ptr<reserved_arena> disk_access_limiter::reserve(
   std::size_t bytes, std::unique_ptr<event_notifier> release_notifer)
 {
   if (do_reserve(bytes, _memory_limit)) {
@@ -59,12 +59,12 @@ std::unique_ptr<reservation> disk_access_limiter::reserve(
       *this, bytes, "disk_reservation", std::move(release_notifer));
     _total_reservation_count.fetch_add(1);
     update_peak_allocated_bytes();
-    return reservation::create(_space_id, std::move(slot));
+    return slot;
   }
   return nullptr;
 }
 
-std::unique_ptr<reservation> disk_access_limiter::reserve_upto(
+std::unique_ptr<reserved_arena> disk_access_limiter::reserve_upto(
   std::size_t bytes, std::unique_ptr<event_notifier> release_notifer)
 {
   auto reserved_bytes = do_reserve_upto(bytes, _memory_limit);
@@ -72,25 +72,24 @@ std::unique_ptr<reservation> disk_access_limiter::reserve_upto(
     *this, reserved_bytes, "disk_reservation", std::move(release_notifer));
   _total_reservation_count.fetch_add(1);
   update_peak_allocated_bytes();
-  return reservation::create(_space_id, std::move(slot));
+  return slot;
 }
 
-bool disk_access_limiter::grow_reservation_by(reservation& res, std::size_t bytes)
+bool disk_access_limiter::grow_reservation_by(reserved_arena& arena, std::size_t bytes)
 {
-  auto* disk_reservation = dynamic_cast<disk_reserved_arena*>(res.arena_.get());
+  auto* disk_reservation = dynamic_cast<disk_reserved_arena*>(&arena);
   if (do_reserve(bytes, _memory_limit)) {
-    disk_reservation->size += bytes;
+    disk_reservation->size_ += bytes;
     update_peak_allocated_bytes();
     return true;
   }
   return false;
 }
 
-void disk_access_limiter::shrink_reservation_to_fit(reservation& res)
+void disk_access_limiter::shrink_reservation_to_fit(reserved_arena& arena)
 {
-  auto* disk_reservation = dynamic_cast<disk_reserved_arena*>(res.arena_.get());
-  _total_allocated_bytes.fetch_sub(res.size());
-  disk_reservation->size = 0UL;
+  _total_allocated_bytes.fetch_sub(arena.size());
+  arena.size_ = 0UL;
 }
 
 std::size_t disk_access_limiter::get_active_reservation_count() const noexcept
@@ -123,12 +122,12 @@ std::size_t disk_access_limiter::do_reserve_upto(std::size_t size_bytes, std::si
   return 0;
 }
 
-void disk_access_limiter::do_release_reservation(disk_reserved_arena* reservation) noexcept
+void disk_access_limiter::do_release_reservation(disk_reserved_arena* arena) noexcept
 {
-  if (!reservation) return;
-  _total_allocated_bytes.fetch_sub(reservation->size);
+  if (!arena) return;
+  _total_allocated_bytes.fetch_sub(arena->size());
   _total_reservation_count.fetch_sub(1);
-  reservation->size = 0UL;
+  arena->size_ = 0UL;
 }
 
 void disk_access_limiter::update_peak_allocated_bytes() noexcept

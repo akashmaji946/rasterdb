@@ -55,7 +55,7 @@ struct stream_ordered_allocation_tracker
   }
 
   void assign_reservation_to_tracker(rmm::cuda_stream_view stream,
-                                     std::unique_ptr<reservation> reservation,
+                                     std::unique_ptr<reserved_arena> reservation,
                                      std::unique_ptr<reservation_limit_policy> policy,
                                      std::unique_ptr<oom_handling_policy> oom_policy) override
   {
@@ -97,14 +97,11 @@ struct ptds_allocation_tracker
 
   void reset_tracker_state(rmm::cuda_stream_view stream) override
   {
-    if (thread_reservation_state) {
-      auto* res_pnt = thread_reservation_state->memory_reservation.get();
-      thread_reservation_state.reset();
-    }
+    if (thread_reservation_state) { thread_reservation_state.reset(); }
   }
 
   void assign_reservation_to_tracker(rmm::cuda_stream_view stream,
-                                     std::unique_ptr<reservation> reservation,
+                                     std::unique_ptr<reserved_arena> reservation,
                                      std::unique_ptr<reservation_limit_policy> policy,
                                      std::unique_ptr<oom_handling_policy> oom_policy) override
   {
@@ -279,7 +276,7 @@ std::size_t reservation_aware_resource_adaptor::get_total_reserved_bytes() const
   std::lock_guard lock(reservation_mutex);
   std::size_t total = 0;
   for (const auto& res : reservation_views) {
-    total += res->size;
+    total += res->size();
   }
   return total;
 }
@@ -305,7 +302,7 @@ bool reservation_aware_resource_adaptor::attach_reservation_to_tracker(
   if (!stream_oom_policy) { stream_oom_policy = make_default_oom_policy(); }
 
   _allocation_tracker->assign_reservation_to_tracker(stream,
-                                                     std::move(reserved_bytes),
+                                                     std::move(reserved_bytes->arena_),
                                                      std::move(stream_reservation_policy),
                                                      std::move(stream_oom_policy));
 
@@ -317,20 +314,19 @@ void reservation_aware_resource_adaptor::reset_stream_reservation(rmm::cuda_stre
   _allocation_tracker->reset_tracker_state(stream);
 }
 
-std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve(
-  std::size_t size_bytes, std::unique_ptr<event_notifier> release_notifer)
+std::unique_ptr<reserved_arena> reservation_aware_resource_adaptor::reserve(
+  std::size_t bytes, std::unique_ptr<event_notifier> release_notifer)
 {
   std::lock_guard lock(reservation_mutex);
-  if (do_reserve(size_bytes, _memory_limit)) {
-    auto slot =
-      std::make_unique<device_reserved_arena>(*this, size_bytes, std::move(release_notifer));
+  if (do_reserve(bytes, _memory_limit)) {
+    auto slot = std::make_unique<device_reserved_arena>(*this, bytes, std::move(release_notifer));
     reservation_views.insert(slot.get());
-    return reservation::create(_space_id, std::move(slot));
+    return slot;
   }
   return nullptr;
 }
 
-std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve_upto(
+std::unique_ptr<reserved_arena> reservation_aware_resource_adaptor::reserve_upto(
   std::size_t bytes, std::unique_ptr<event_notifier> release_notifer)
 {
   std::lock_guard lock(reservation_mutex);
@@ -338,38 +334,33 @@ std::unique_ptr<reservation> reservation_aware_resource_adaptor::reserve_upto(
   auto slot =
     std::make_unique<device_reserved_arena>(*this, reserved_size, std::move(release_notifer));
   reservation_views.insert(slot.get());
-  return reservation::create(_space_id, std::move(slot));
+  return slot;
 }
 
-bool reservation_aware_resource_adaptor::grow_reservation_by(reservation& res, std::size_t bytes)
+bool reservation_aware_resource_adaptor::grow_reservation_by(device_reserved_arena& arena,
+                                                             std::size_t bytes)
 {
   std::lock_guard lock(reservation_mutex);
   if (do_reserve(bytes, _memory_limit)) {
-    res.arena_->size += bytes;
+    arena.size_ += bytes;
     return true;
   }
   return false;
 }
 
-void reservation_aware_resource_adaptor::shrink_reservation_to_fit(reservation& res)
+void reservation_aware_resource_adaptor::shrink_reservation_to_fit(device_reserved_arena& arena)
 {
   std::lock_guard lock(reservation_mutex);
-  auto* d_reservation_slot = dynamic_cast<device_reserved_arena*>(res.arena_.get());
-  if (d_reservation_slot) {
-    const auto* tracker = d_reservation_slot->get_tracker_or_null();
-    if (tracker) {
-      int64_t current_bytes = tracker->allocated_bytes.load();
-      if (current_bytes < d_reservation_slot->size) {
-        auto reclaimed_bytes =
-          std::exchange(d_reservation_slot->size, current_bytes) - current_bytes;
-        _total_allocated_bytes.fetch_sub(reclaimed_bytes);
-      }
-    } else {
-      auto reserved_bytes = std::exchange(res.arena_->size, 0UL);
-      _total_allocated_bytes.fetch_sub(reserved_bytes);
+  const auto* tracker = arena.get_tracker_or_null();
+  if (tracker) {
+    int64_t current_bytes = tracker->allocated_bytes.load();
+    if (current_bytes < arena.size()) {
+      auto reclaimed_bytes = std::exchange(arena.size_, current_bytes) - current_bytes;
+      _total_allocated_bytes.fetch_sub(reclaimed_bytes);
     }
   } else {
-    throw std::invalid_argument("expected reservation made by reservation_aware_resource_adaptor");
+    auto reserved_bytes = std::exchange(arena.size_, 0UL);
+    _total_allocated_bytes.fetch_sub(reserved_bytes);
   }
 }
 
@@ -518,23 +509,23 @@ std::size_t reservation_aware_resource_adaptor::do_reserve_upto(std::size_t size
 }
 
 void reservation_aware_resource_adaptor::do_release_reservation(
-  device_reserved_arena* slot) noexcept
+  device_reserved_arena* arena) noexcept
 {
-  if (!slot) return;
+  if (!arena) return;
 
   std::lock_guard lock(reservation_mutex);
-  reservation_views.erase(slot);
-  const auto* tracker        = slot->get_tracker_or_null();
+  reservation_views.erase(arena);
+  const auto* tracker        = arena->get_tracker_or_null();
   int64_t allocation_size    = (tracker) ? tracker->allocated_bytes.load() : 0UL;
-  std::size_t released_bytes = slot->size;
-  if (slot->size > allocation_size) {
-    released_bytes = slot->size - allocation_size;
+  std::size_t released_bytes = arena->size();
+  if (arena->size() > allocation_size) {
+    released_bytes = arena->size() - allocation_size;
   } else {
     released_bytes = 0;
   }
 
   _total_allocated_bytes.fetch_sub(released_bytes);
-  slot->size = 0UL;
+  arena->size_ = 0UL;
 }
 
 }  // namespace memory

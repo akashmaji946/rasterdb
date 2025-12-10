@@ -83,22 +83,23 @@ int memory_space::get_device_id() const noexcept { return _id.device_id; }
 
 std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
 {
-  return std::visit(
-    sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
-                         return mr->reserve(size, notification_channel_->get_notifier());
-                       },
-                       [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                         return mr->reserve(size, notification_channel_->get_notifier());
-                       },
-                       [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                         return mr->reserve(size, notification_channel_->get_notifier());
-                       }},
-    _reservation_allocator);
+  std::unique_ptr<reserved_arena> arena =
+    std::visit(sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
+                                    return mr->reserve(size, notification_channel_->get_notifier());
+                                  },
+                                  [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+                                    return mr->reserve(size, notification_channel_->get_notifier());
+                                  },
+                                  [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
+                                    return mr->reserve(size, notification_channel_->get_notifier());
+                                  }},
+               _reservation_allocator);
+  return reservation::create(_id, std::move(arena));
 }
 
 std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
 {
-  return std::visit(
+  std::unique_ptr<reserved_arena> arena = std::visit(
     sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
                          return mr->reserve_upto(size, notification_channel_->get_notifier());
                        },
@@ -109,6 +110,7 @@ std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
                          return mr->reserve_upto(size, notification_channel_->get_notifier());
                        }},
     _reservation_allocator);
+  return reservation::create(_id, std::move(arena));
 }
 
 std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
@@ -121,34 +123,6 @@ std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
     res = make_reservation_or_null(size);
   }
   return res;
-}
-
-bool memory_space::grow_reservation_by(reservation& res, std::size_t bytes)
-{
-  return std::visit(
-    sirius::overloaded{
-      [&](std::unique_ptr<disk_access_limiter>& mr) { return mr->grow_reservation_by(res, bytes); },
-      [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-        return mr->grow_reservation_by(res, bytes);
-      },
-      [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-        return mr->grow_reservation_by(res, bytes);
-      }},
-    _reservation_allocator);
-}
-
-void memory_space::shrink_to_fit(reservation& res)
-{
-  std::visit(sirius::overloaded{[&](std::unique_ptr<disk_access_limiter>& mr) {
-                                  mr->shrink_reservation_to_fit(res);
-                                },
-                                [&](std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
-                                  mr->shrink_reservation_to_fit(res);
-                                },
-                                [&](std::unique_ptr<fixed_size_host_memory_resource>& mr) {
-                                  mr->shrink_reservation_to_fit(res);
-                                }},
-             _reservation_allocator);
 }
 
 std::size_t memory_space::get_active_reservation_count() const

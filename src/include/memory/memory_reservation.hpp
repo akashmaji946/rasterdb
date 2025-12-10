@@ -36,7 +36,9 @@ namespace memory {
 // Forward declarations
 class reservation_aware_resource_adaptor;
 class fixed_size_host_memory_resource;
+class disk_access_limiter;
 struct reservation;
+struct reserved_arena;
 
 //===----------------------------------------------------------------------===//
 // Reservation Limit Policy Interface
@@ -72,7 +74,7 @@ class reservation_limit_policy {
   virtual void handle_over_reservation(rmm::cuda_stream_view stream,
                                        std::size_t requested_bytes,
                                        std::size_t current_allocated,
-                                       reservation* reserved_bytes) = 0;
+                                       reserved_arena* reserved_bytes) = 0;
 
   /**
    * @brief Get a human-readable name for this policy.
@@ -94,7 +96,7 @@ class ignore_reservation_limit_policy : public reservation_limit_policy {
   void handle_over_reservation(rmm::cuda_stream_view stream,
                                std::size_t requested_bytes,
                                std::size_t current_allocated,
-                               reservation* reserved_bytes) final;
+                               reserved_arena* reserved_bytes) final;
 
   std::string get_policy_name() const override;
 };
@@ -112,7 +114,7 @@ class fail_reservation_limit_policy : public reservation_limit_policy {
   void handle_over_reservation(rmm::cuda_stream_view stream,
                                std::size_t requested_bytes,
                                std::size_t current_allocated,
-                               reservation* reserved_bytes) final;
+                               reserved_arena* reserved_bytes) final;
 
   std::string get_policy_name() const override;
 };
@@ -136,7 +138,7 @@ class increase_reservation_limit_policy : public reservation_limit_policy {
   void handle_over_reservation(rmm::cuda_stream_view stream,
                                std::size_t requested_bytes,
                                std::size_t current_allocated,
-                               reservation* reserved_bytes) override;
+                               reserved_arena* reserved_bytes) override;
 
   std::string get_policy_name() const override;
 
@@ -152,17 +154,26 @@ std::unique_ptr<reservation_limit_policy> make_default_reservation_limit_policy(
 //===----------------------------------------------------------------------===//
 
 struct reserved_arena {
+  friend class reservation_aware_resource_adaptor;
+  friend class fixed_size_host_memory_resource;
+  friend class disk_access_limiter;
+
   explicit reserved_arena(std::size_t len,
                           std::unique_ptr<event_notifier> release_notifer = nullptr)
-    : size(len), on_exit_(std::move(release_notifer))
+    : size_(len), on_exit_(std::move(release_notifer))
   {
   }
 
   virtual ~reserved_arena() = default;
 
-  std::size_t size;
+  virtual bool grow_by(std::size_t additional_bytes) = 0;
+
+  virtual void shrink_to_fit() = 0;
+
+  [[gnu::always_inline]] std::size_t size() const noexcept { return size_; }
 
  private:
+  std::size_t size_;
   const notify_on_exit on_exit_;
 };
 
@@ -183,7 +194,7 @@ struct reservation {
     return std::unique_ptr<reservation>(new reservation(id, std::move(arena)));
   }
 
-  [[gnu::always_inline]] size_t size() const noexcept { return arena_->size; }
+  [[gnu::always_inline]] size_t size() const noexcept { return arena_->size(); }
 
   [[nodiscard]] Tier tier() const noexcept { return space_id_.tier; }
 

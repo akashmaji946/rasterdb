@@ -270,8 +270,6 @@ SCENARIO("Reservation Concepts on Single Gpu Manager", "[memory_space]")
         REQUIRE(mr->get_allocated_bytes(reserved_stream) == allocation_size);
         mr->deallocate(ptr, allocation_size, reserved_stream);
       }
-
-      mr->reset_stream_reservation(reserved_stream);
     }
   }
 }

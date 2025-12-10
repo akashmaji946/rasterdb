@@ -74,7 +74,7 @@ std::size_t fixed_size_host_memory_resource::get_total_reserved_bytes() const no
   std::lock_guard<std::mutex> lock(mutex_);
   std::size_t total = 0;
   for (const auto& [res, tracker] : active_reservations_) {
-    total += res->size;
+    total += res->size();
   }
   return total;
 }
@@ -124,10 +124,10 @@ fixed_size_host_memory_resource::allocate_multiple_blocks(std::size_t total_byte
     tracker                      = std::addressof(iter->second);
     int64_t pre_allocation_size  = tracker->allocated_bytes.fetch_add(total_bytes);
     int64_t post_allocation_size = pre_allocation_size + total_bytes;
-    if (post_allocation_size <= h_reservation_slot->size) {
+    if (post_allocation_size <= h_reservation_slot->size()) {
       upstream_tracked_bytes = 0;
-    } else if (pre_allocation_size < h_reservation_slot->size) {
-      upstream_tracked_bytes = post_allocation_size - h_reservation_slot->size;
+    } else if (pre_allocation_size < h_reservation_slot->size()) {
+      upstream_tracked_bytes = post_allocation_size - h_reservation_slot->size();
     }
   }
 
@@ -179,19 +179,19 @@ bool fixed_size_host_memory_resource::do_is_equal(
   return this == &other;
 }
 
-std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve(
+std::unique_ptr<reserved_arena> fixed_size_host_memory_resource::reserve(
   std::size_t bytes, std::unique_ptr<event_notifier> on_release)
 {
   bytes = rmm::align_up(bytes, block_size_);
   if (do_reserve(bytes, memory_limit_)) {
     auto host_slot = std::make_unique<chunked_reserved_area>(*this, bytes, std::move(on_release));
     this->register_reservation(host_slot.get());
-    return reservation::create(space_id_, std::move(host_slot));
+    return host_slot;
   }
   return nullptr;
 }
 
-std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve_upto(
+std::unique_ptr<reserved_arena> fixed_size_host_memory_resource::reserve_upto(
   std::size_t bytes, std::unique_ptr<event_notifier> on_release)
 {
   bytes               = rmm::align_up(bytes, block_size_);
@@ -199,31 +199,31 @@ std::unique_ptr<reservation> fixed_size_host_memory_resource::reserve_upto(
   auto host_slot =
     std::make_unique<chunked_reserved_area>(*this, reserved_bytes, std::move(on_release));
   this->register_reservation(host_slot.get());
-  return reservation::create(space_id_, std::move(host_slot));
+  return host_slot;
 }
 
-bool fixed_size_host_memory_resource::grow_reservation_by(reservation& res, std::size_t bytes)
+bool fixed_size_host_memory_resource::grow_reservation_by(reserved_arena& arena, std::size_t bytes)
 {
   std::lock_guard lock(mutex_);
   bytes = rmm::align_up(bytes, block_size_);
   if (do_reserve(bytes, memory_limit_)) {
-    res.arena_->size += bytes;
+    arena.size_ += bytes;
     return true;
   }
   return false;
 }
 
-void fixed_size_host_memory_resource::shrink_reservation_to_fit(reservation& res)
+void fixed_size_host_memory_resource::shrink_reservation_to_fit(reserved_arena& arena)
 {
-  auto* h_reservation_slot = dynamic_cast<chunked_reserved_area*>(res.arena_.get());
+  auto* h_reservation_slot = dynamic_cast<chunked_reserved_area*>(&arena);
   assert(h_reservation_slot);
   std::lock_guard lock(mutex_);
   auto iter = active_reservations_.find(h_reservation_slot);
   assert(iter != active_reservations_.end());
   auto& tracker = iter->second;
   auto current  = tracker.allocated_bytes.load();
-  if (current < h_reservation_slot->size) {
-    auto old_res = std::exchange(h_reservation_slot->size, current);
+  if (current < h_reservation_slot->size()) {
+    auto old_res = std::exchange(h_reservation_slot->size_, current);
     allocated_bytes_.fetch_sub(old_res - current);
   }
 }
@@ -255,36 +255,37 @@ void fixed_size_host_memory_resource::register_reservation(chunked_reserved_area
   assert(r.second && "insertion failed");
 }
 
-void fixed_size_host_memory_resource::release_reservation(chunked_reserved_area* res)
+void fixed_size_host_memory_resource::release_reservation(chunked_reserved_area* arena)
 {
-  assert(!res);
+  if (!arena) return;
+
   std::lock_guard guard(mutex_);
-  auto iter = active_reservations_.find(res);
+  auto iter = active_reservations_.find(arena);
   if (iter == active_reservations_.end()) {
     throw std::runtime_error("reservation was not registered or already freed");
   }
 
   auto current                = iter->second.allocated_bytes.load();
-  std::size_t reclaimed_bytes = res->size > current ? res->size - current : 0;
+  std::size_t reclaimed_bytes = arena->size() > current ? arena->size() - current : 0;
   allocated_bytes_.fetch_sub(reclaimed_bytes);
   active_reservations_.erase(iter);
 }
 
 void fixed_size_host_memory_resource::return_allocated_chunks(std::vector<std::byte*> chunks,
-                                                              chunked_reserved_area* res)
+                                                              chunked_reserved_area* arena)
 {
   size_t reclaimed_bytes = chunks.size() * block_size_;
   std::lock_guard lock(mutex_);
-  if (res != nullptr && active_reservations_.contains(res)) {
-    auto& tracker                  = active_reservations_.at(res);
+  if (arena != nullptr && active_reservations_.contains(arena)) {
+    auto& tracker                  = active_reservations_.at(arena);
     int64_t pre_reclaimation_size  = tracker.allocated_bytes.fetch_sub(reclaimed_bytes);
     int64_t post_reclaimation_size = pre_reclaimation_size - reclaimed_bytes;
-    if (pre_reclaimation_size <= res->size) {
+    if (pre_reclaimation_size <= arena->size()) {
       // allocation fit in reservation
       reclaimed_bytes = 0;
-    } else if (post_reclaimation_size < res->size) {
+    } else if (post_reclaimation_size < arena->size()) {
       // part of allocation fit in the reservation
-      reclaimed_bytes = pre_reclaimation_size - res->size;
+      reclaimed_bytes = pre_reclaimation_size - arena->size();
     }
   }
   allocated_bytes_.fetch_sub(reclaimed_bytes);

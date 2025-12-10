@@ -35,19 +35,9 @@ reservation::reservation(memory_space_id s_id, std::unique_ptr<reserved_arena> a
   assert(arena_ != nullptr && "Release callback must be provided");
 }
 
-bool reservation::grow_by(size_t additional_bytes)
-{
-  auto& manager      = memory_reservation_manager::get_instance();
-  auto* memory_space = manager.get_mutable_memory_space(space_id_.tier, space_id_.device_id);
-  return memory_space->grow_reservation_by(*this, additional_bytes);
-}
+bool reservation::grow_by(size_t additional_bytes) { return arena_->grow_by(additional_bytes); }
 
-void reservation::shrink_to_fit()
-{
-  auto& manager      = memory_reservation_manager::get_instance();
-  auto* memory_space = manager.get_mutable_memory_space(space_id_.tier, space_id_.device_id);
-  return memory_space->shrink_to_fit(*this);
-}
+void reservation::shrink_to_fit() { return arena_->shrink_to_fit(); }
 
 //===----------------------------------------------------------------------===//
 // Reservation Limit Policy Implementations
@@ -59,7 +49,7 @@ void ignore_reservation_limit_policy::handle_over_reservation(
   [[maybe_unused]] rmm::cuda_stream_view stream,
   [[maybe_unused]] std::size_t requested_bytes,
   [[maybe_unused]] std::size_t current_allocated,
-  [[maybe_unused]] reservation* reserved_bytes)
+  [[maybe_unused]] reserved_arena* reserved_bytes)
 {
   // do nothing
 }
@@ -72,7 +62,7 @@ void fail_reservation_limit_policy::handle_over_reservation(
   [[maybe_unused]] rmm::cuda_stream_view stream,
   std::size_t requested_bytes,
   std::size_t current_allocated,
-  reservation* reserved_bytes)
+  reserved_arena* reserved_bytes)
 {
   std::size_t reservation_size = reserved_bytes ? reserved_bytes->size() : 0;
   RMM_FAIL("Allocation of " + std::to_string(requested_bytes) +
@@ -94,7 +84,7 @@ increase_reservation_limit_policy::increase_reservation_limit_policy(double padd
 void increase_reservation_limit_policy::handle_over_reservation(rmm::cuda_stream_view stream,
                                                                 std::size_t requested_bytes,
                                                                 std::size_t current_allocated,
-                                                                reservation* reserved_bytes)
+                                                                reserved_arena* reserved_bytes)
 {
   if (!reserved_bytes) { RMM_FAIL("No reservation set for stream", rmm::out_of_memory); }
 

@@ -48,6 +48,10 @@ class disk_access_limiter {
 
     std::string_view base_name() const noexcept { return base_name_; }
 
+    bool grow_by(std::size_t) final { return false; }
+
+    void shrink_to_fit() final {}
+
    private:
     std::string base_name_;
     disk_access_limiter* mr_;
@@ -99,29 +103,16 @@ class disk_access_limiter {
    * @param bytes the size of reservation
    * @param on_release_notifer used to hook callbacks for when the reservation is released
    */
-  std::unique_ptr<reservation> reserve(std::size_t bytes,
-                                       std::unique_ptr<event_notifier> release_notifer = nullptr);
+  std::unique_ptr<reserved_arena> reserve(
+    std::size_t bytes, std::unique_ptr<event_notifier> release_notifer = nullptr);
 
   /**
    * @brief makes reservations
    * @param bytes the size of reservation
    * @param on_release_notifer used to hook callbacks for when the reservation is released
    */
-  std::unique_ptr<reservation> reserve_upto(
+  std::unique_ptr<reserved_arena> reserve_upto(
     std::size_t bytes, std::unique_ptr<event_notifier> release_notifer = nullptr);
-
-  /**
-   * @brief grows reservation by a `bytes` size
-   * @param res current_reservation
-   * @param bytes the size of reservation
-   */
-  bool grow_reservation_by(reservation& res, std::size_t bytes);
-
-  /**
-   * @brief grows reservation by a `bytes` size
-   * @param res current_reservation
-   */
-  void shrink_reservation_to_fit([[maybe_unused]] reservation& res);
 
   /**
    * @brief Return number of activate reservation count
@@ -148,6 +139,19 @@ class disk_access_limiter {
   void do_release_reservation(disk_reserved_arena* reservation) noexcept;
 
   void update_peak_allocated_bytes() noexcept;
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   * @param bytes the size of reservation
+   */
+  bool grow_reservation_by(reserved_arena& res, std::size_t bytes);
+
+  /**
+   * @brief grows reservation by a `bytes` size
+   * @param res current_reservation
+   */
+  void shrink_reservation_to_fit(reserved_arena& res);
 
   memory_space_id _space_id;
 

@@ -127,9 +127,6 @@ class memory_space {
 
   std::shared_ptr<notification_channel> notification_channel_;
 
-  bool grow_reservation_by(reservation& res, std::size_t bytes);
-  void shrink_to_fit(reservation& res);
-
   // Memory resources owned by this memory_space
   std::unique_ptr<rmm::mr::device_memory_resource> _allocator;
   reserving_adaptor_type _reservation_allocator;
