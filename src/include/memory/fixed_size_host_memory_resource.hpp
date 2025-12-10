@@ -191,6 +191,8 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
    */
   ~fixed_size_host_memory_resource() override;
 
+  [[nodiscard]] int get_total_allocated_bytes() const noexcept { return allocated_bytes_.load(); }
+
   /**
    * @brief return the total available memory in the memory resource
    */

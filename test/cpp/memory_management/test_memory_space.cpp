@@ -30,6 +30,7 @@
 
 #include "catch.hpp"
 #include "memory/common.hpp"
+#include "memory/fixed_size_host_memory_resource.hpp"
 #include "memory/memory_reservation.hpp"
 #include "memory/memory_reservation_manager.hpp"
 #include "memory/reservation_aware_resource_adaptor.hpp"
@@ -215,16 +216,13 @@ SCENARIO("Reservation Concepts on Single Gpu Manager", "[memory_space]")
 
   GIVEN("A single gpu manager")
   {
-    auto* gpu_space = manager.get_memory_space(Tier::GPU, 0);
-    auto* mr =
-      dynamic_cast<reservation_aware_resource_adaptor*>(gpu_space->get_default_allocator());
-    REQUIRE(mr != nullptr);
-
     WHEN("a reservation is made with overflow policy to ignore")
     {
       auto res = manager.request_reservation(specific_memory_space{Tier::GPU, 0}, reservation_size);
       REQUIRE(res->size() == reservation_size);
       REQUIRE(res->tier() == Tier::GPU);
+      auto* mr = res->get_memory_resource_as<reservation_aware_resource_adaptor>();
+      REQUIRE(mr != nullptr);
 
       rmm::cuda_stream reserved_stream;
       rmm::cuda_stream other_streams;
@@ -274,7 +272,7 @@ SCENARIO("Reservation Concepts on Single Gpu Manager", "[memory_space]")
   }
 }
 
-SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
+SCENARIO("Reservation Overflow Policy", "[memory_space][.overflow_policy]")
 {
   initializeSingleDeviceMemoryManager();
   auto& manager                 = memory_reservation_manager::get_instance();
@@ -282,16 +280,13 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
 
   GIVEN("A single gpu manager")
   {
-    auto* gpu_space = manager.get_memory_space(Tier::GPU, 0);
-    auto* mr =
-      dynamic_cast<reservation_aware_resource_adaptor*>(gpu_space->get_default_allocator());
-    REQUIRE(mr != nullptr);
-
     WHEN("allocation beyond reservation with ignore policy")
     {
       auto res = manager.request_reservation(specific_memory_space{Tier::GPU, 0}, reservation_size);
       REQUIRE(res->tier() == Tier::GPU);
       REQUIRE(res->size() == reservation_size);
+      auto* mr = res->get_memory_resource_of<Tier::GPU>();
+      REQUIRE(mr != nullptr);
 
       rmm::cuda_stream stream;
       mr->attach_reservation_to_tracker(
@@ -304,8 +299,6 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
         REQUIRE(mr->get_total_allocated_bytes() == reservation_size * 2);
         mr->deallocate(buffer, reservation_size * 2, stream);
       }
-
-      mr->reset_stream_reservation(stream);
     }
 
     WHEN("allocation beyond reservation with fail policy")
@@ -313,6 +306,9 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
       auto res = manager.request_reservation(specific_memory_space{Tier::GPU, 0}, reservation_size);
       REQUIRE(res->tier() == Tier::GPU);
       REQUIRE(res->size() == reservation_size);
+
+      auto* mr = res->get_memory_resource_as<reservation_aware_resource_adaptor>();
+      REQUIRE(mr != nullptr);
 
       rmm::cuda_stream stream;
       mr->attach_reservation_to_tracker(
@@ -322,8 +318,6 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
       {
         REQUIRE_THROWS_AS(mr->allocate(reservation_size * 2, stream), rmm::bad_alloc);
       }
-
-      mr->reset_stream_reservation(stream);
     }
 
     WHEN("allocation beyond reservation with increase policy")
@@ -331,6 +325,9 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
       auto res = manager.request_reservation(specific_memory_space{Tier::GPU, 0}, reservation_size);
       REQUIRE(res->tier() == Tier::GPU);
       REQUIRE(res->size() == reservation_size);
+
+      auto* mr = res->get_memory_resource_of<Tier::GPU>();
+      REQUIRE(mr != nullptr);
 
       rmm::cuda_stream stream;
       mr->attach_reservation_to_tracker(
@@ -343,8 +340,6 @@ SCENARIO("Reservation Overflow Policy", "[memory_space][overflow_policy]")
         REQUIRE(mr->get_total_allocated_bytes() >= reservation_size * 2);
         mr->deallocate(buffer, reservation_size * 2, stream);
       }
-
-      mr->reset_stream_reservation(stream);
     }
   }
 }
@@ -391,6 +386,93 @@ SCENARIO("Reservation On Multi Gpu System", "[memory_space][.multi-device]")
         REQUIRE(other_res->size() == large_reservation);
         REQUIRE(other_res->tier() == Tier::GPU);
         REQUIRE(other_res->device_id() == 1);
+      }
+    }
+  }
+}
+
+SCENARIO("Host Reservation", "[memory_space][host_reservation]")
+{
+  initializeSingleDeviceMemoryManager();
+  auto& manager                = memory_reservation_manager::get_instance();
+  std::size_t reservation_size = 2UL << 20;
+  std::size_t small_allocation = 1UL << 20;
+  std::size_t large_allocation = 4UL << 20;
+
+  GIVEN("making a host reservation")
+  {
+    auto reservation =
+      manager.request_reservation(any_memory_space_in_tier{Tier::HOST}, reservation_size);
+    REQUIRE(reservation->size() == reservation_size);
+    REQUIRE(reservation->tier() == Tier::HOST);
+    auto* mr = reservation->get_memory_resource_of<Tier::HOST>();
+    REQUIRE(mr != nullptr);
+    REQUIRE(mr->get_total_allocated_bytes() == reservation_size);
+
+    WHEN("allocation made larger than reservation")
+    {
+      auto free_memory_before = mr->get_available_memory();
+      auto blocks             = mr->allocate_multiple_blocks(large_allocation, reservation.get());
+
+      THEN("upstream and others see it as allocated/unavailable")
+      {
+        REQUIRE(mr->get_available_memory() < free_memory_before);
+        REQUIRE(mr->get_total_reserved_bytes() == reservation_size);
+        REQUIRE(mr->get_total_allocated_bytes() == large_allocation);
+      }
+
+      blocks.reset(nullptr);
+
+      THEN("after deallocation, reservation is still held, extra is freed")
+      {
+        REQUIRE(mr->get_available_memory() == free_memory_before);
+        REQUIRE(mr->get_total_reserved_bytes() == reservation_size);
+        REQUIRE(mr->get_total_allocated_bytes() == reservation_size);
+      }
+    }
+
+    WHEN("allocation made fits inside reservation")
+    {
+      rmm::cuda_stream stream;
+      auto free_memory_before = mr->get_available_memory();
+      auto blocks             = mr->allocate_multiple_blocks(small_allocation, reservation.get());
+
+      THEN("upstream and others see doesn't change")
+      {
+        REQUIRE(mr->get_available_memory() == free_memory_before);
+        REQUIRE(mr->get_total_reserved_bytes() == reservation_size);
+        REQUIRE(mr->get_total_allocated_bytes() == reservation_size);
+      }
+
+      blocks.reset(nullptr);
+
+      THEN("after deallocation, reservation is still held")
+      {
+        REQUIRE(mr->get_available_memory() == free_memory_before);
+        REQUIRE(mr->get_total_reserved_bytes() == reservation_size);
+        REQUIRE(mr->get_total_allocated_bytes() == reservation_size);
+      }
+    }
+
+    WHEN("reservation is freed before allocation")
+    {
+      rmm::cuda_stream stream;
+      auto free_memory_before = mr->get_available_memory();
+      auto blocks             = mr->allocate_multiple_blocks(small_allocation, reservation.get());
+      reservation.reset();
+
+      THEN("upstream shrink the reservation to fit")
+      {
+        REQUIRE(mr->get_total_reserved_bytes() == 0);
+        REQUIRE(mr->get_total_allocated_bytes() == small_allocation);
+      }
+
+      blocks.reset(nullptr);
+
+      THEN("after deallocation, reservation is still held")
+      {
+        REQUIRE(mr->get_total_reserved_bytes() == 0);
+        REQUIRE(mr->get_total_allocated_bytes() == 0);
       }
     }
   }

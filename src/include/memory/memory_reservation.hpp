@@ -20,15 +20,14 @@
 #include "memory/notification_channel.hpp"
 
 #include <rmm/cuda_device.hpp>
-
-#include <memory>
-#include <string>
-#include <utility>
-
-// RMM includes for memory resource management
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/error.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
+
+#include <concepts>
+#include <memory>
+#include <string>
+#include <utility>
 
 namespace sirius {
 namespace memory {
@@ -39,6 +38,28 @@ class fixed_size_host_memory_resource;
 class disk_access_limiter;
 struct reservation;
 struct reserved_arena;
+class memory_space;
+
+template <Tier TIER>
+struct tier_memory_resource_trait {
+  using upstream_type = rmm::mr::device_memory_resource;
+  using type          = rmm::mr::device_memory_resource;
+  Tier tier           = TIER;
+};
+
+template <>
+struct tier_memory_resource_trait<Tier::HOST> {
+  using upstream_type = rmm::mr::device_memory_resource;
+  using type          = fixed_size_host_memory_resource;
+  Tier tier           = Tier::HOST;
+};
+
+template <>
+struct tier_memory_resource_trait<Tier::GPU> {
+  using upstream_type = rmm::mr::device_memory_resource;
+  using type          = reservation_aware_resource_adaptor;
+  Tier tier           = Tier::GPU;
+};
 
 //===----------------------------------------------------------------------===//
 // Reservation Limit Policy Interface
@@ -187,18 +208,31 @@ struct reservation {
   friend class fixed_size_host_memory_resource;
   friend class disk_access_limiter;
 
-  static std::unique_ptr<reservation> create(memory_space_id id,
-                                             std::unique_ptr<reserved_arena> arena)
+  static std::unique_ptr<reservation> create(memory_space& space,
+                                             std::unique_ptr<reserved_arena> arena);
+
+  size_t size() const noexcept;
+
+  [[nodiscard]] Tier tier() const noexcept;
+
+  [[nodiscard]] int device_id() const noexcept;
+
+  [[nodiscard]] rmm::mr::device_memory_resource* get_memory_resource() const noexcept;
+
+  [[nodiscard]] const memory_space& get_memory_space() const noexcept;
+
+  template <typename T>
+    requires std::derived_from<T, rmm::mr::device_memory_resource>
+  T* get_memory_resource_as() const noexcept
   {
-    assert(slot && "cannot create memory reservation with nullptr");
-    return std::unique_ptr<reservation>(new reservation(id, std::move(arena)));
+    return dynamic_cast<T*>(get_memory_resource());
   }
 
-  [[gnu::always_inline]] size_t size() const noexcept { return arena_->size(); }
-
-  [[nodiscard]] Tier tier() const noexcept { return space_id_.tier; }
-
-  [[nodiscard]] int device_id() const noexcept { return space_id_.device_id; }
+  template <Tier TIER>
+  auto* get_memory_resource_of() const noexcept
+  {
+    return get_memory_resource_as<typename tier_memory_resource_trait<TIER>::type>();
+  }
 
   //===----------------------------------------------------------------------===//
   // Reservation Size Management
@@ -224,12 +258,12 @@ struct reservation {
   reservation(reservation&&)                 = delete;
   reservation& operator=(reservation&&)      = delete;
 
-  ~reservation() = default;
+  ~reservation();
 
  private:
-  explicit reservation(memory_space_id id, std::unique_ptr<reserved_arena> arena);
+  explicit reservation(const memory_space* space, std::unique_ptr<reserved_arena> arena);
 
-  const memory_space_id space_id_;
+  const memory_space* space_;
   std::unique_ptr<reserved_arena> arena_;
 };
 

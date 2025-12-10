@@ -29,11 +29,32 @@ namespace memory {
 // reservation Implementation
 //===----------------------------------------------------------------------===//
 
-reservation::reservation(memory_space_id s_id, std::unique_ptr<reserved_arena> arena)
-  : space_id_(s_id), arena_(std::move(arena))
+std::unique_ptr<reservation> reservation::create(memory_space& space,
+                                                 std::unique_ptr<reserved_arena> arena)
+{
+  return std::unique_ptr<reservation>(new reservation(&space, std::move(arena)));
+}
+
+reservation::reservation(const memory_space* space, std::unique_ptr<reserved_arena> arena)
+  : space_(space), arena_(std::move(arena))
 {
   assert(arena_ != nullptr && "Release callback must be provided");
 }
+
+reservation::~reservation() = default;
+
+rmm::mr::device_memory_resource* reservation::get_memory_resource() const noexcept
+{
+  return space_->get_default_allocator();
+}
+
+const memory_space& reservation::get_memory_space() const noexcept { return *space_; }
+
+size_t reservation::size() const noexcept { return arena_->size(); }
+
+[[nodiscard]] Tier reservation::tier() const noexcept { return space_->get_tier(); }
+
+[[nodiscard]] int reservation::device_id() const noexcept { return space_->get_device_id(); }
 
 bool reservation::grow_by(size_t additional_bytes) { return arena_->grow_by(additional_bytes); }
 

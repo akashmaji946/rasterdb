@@ -94,7 +94,7 @@ std::unique_ptr<reservation> memory_space::make_reservation_or_null(size_t size)
                                     return mr->reserve(size, notification_channel_->get_notifier());
                                   }},
                _reservation_allocator);
-  return reservation::create(_id, std::move(arena));
+  return reservation::create(*this, std::move(arena));
 }
 
 std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
@@ -110,7 +110,7 @@ std::unique_ptr<reservation> memory_space::make_reservation_upto(size_t size)
                          return mr->reserve_upto(size, notification_channel_->get_notifier());
                        }},
     _reservation_allocator);
-  return reservation::create(_id, std::move(arena));
+  return reservation::create(*this, std::move(arena));
 }
 
 std::unique_ptr<reservation> memory_space::make_reservation(size_t size)
