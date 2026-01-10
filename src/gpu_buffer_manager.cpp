@@ -27,6 +27,7 @@
 #include "utils.hpp"
 
 #include <rmm/aligned.hpp>
+#include <rmm/mr/device/managed_memory_resource.hpp>
 
 #define NUM_GPUS 1
 
@@ -143,18 +144,21 @@ template ConstantFilter** GPUBufferManager::customCudaHostAlloc<ConstantFilter*>
 
 GPUBufferManager::GPUBufferManager(size_t cache_size_per_gpu,
                                    size_t processing_size_per_gpu,
-                                   size_t processing_size_per_cpu)
+                                   size_t processing_size_per_cpu,
+                                   bool use_managed_mem)
   : cache_size_per_gpu(cache_size_per_gpu),
     processing_size_per_gpu(processing_size_per_gpu),
-    processing_size_per_cpu(processing_size_per_cpu)
+    processing_size_per_cpu(processing_size_per_cpu),
+    use_managed_memory(use_managed_mem)
 {
   SIRIUS_LOG_INFO(
     "Initializing GPU buffer manager with params: Use Pin - {}, GPU Cache Size - {}, GPU "
-    "Processing Size - {}, CPU Processing Size - {}",
+    "Processing Size - {}, CPU Processing Size - {}, Use Managed Memory - {}",
     Config::USE_PIN_MEM_FOR_CPU_PROCESSING,
     cache_size_per_gpu,
     processing_size_per_gpu,
-    processing_size_per_cpu);
+    processing_size_per_cpu,
+    use_managed_memory);
   gpuCache             = new uint8_t*[NUM_GPUS];
   cpuCache             = new uint8_t*[NUM_GPUS];
   gpuProcessing        = new uint8_t*[NUM_GPUS];
@@ -167,8 +171,16 @@ GPUBufferManager::GPUBufferManager(size_t cache_size_per_gpu,
   cpuProcessingPointer = 0;
   available_gpu_cache_size.resize(NUM_GPUS);
 
-  cuda_mr = new rmm::mr::cuda_memory_resource();
-  mr = new rmm::mr::pool_memory_resource(cuda_mr, processing_size_per_gpu, processing_size_per_cpu);
+  // Create upstream memory resource based on memory type
+  if (use_managed_memory) {
+    upstream_mr = new rmm::mr::managed_memory_resource();
+    SIRIUS_LOG_INFO("Using CUDA managed memory (unified memory)");
+  } else {
+    upstream_mr = new rmm::mr::cuda_memory_resource();
+    SIRIUS_LOG_INFO("Using CUDA device memory");
+  }
+  mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
+    upstream_mr, processing_size_per_gpu, processing_size_per_gpu);
   cudf::set_current_device_resource(mr);
   allocation_table.resize(NUM_GPUS);
   locked_allocation_table.resize(NUM_GPUS);
@@ -176,24 +188,24 @@ GPUBufferManager::GPUBufferManager(size_t cache_size_per_gpu,
 
   for (int gpu = 0; gpu < NUM_GPUS; gpu++) {
     // We cannot allocate exactly all free memory using `cudaMalloc()`
-    size_t free_gpu_mem_size = getFreeGPUMemorySize(gpu) * 0.99;
-    if (free_gpu_mem_size >= cache_size_per_gpu) {
-      gpuCache[gpu]                 = callCudaMalloc<uint8_t>(cache_size_per_gpu, gpu);
+    // size_t free_gpu_mem_size = getFreeGPUMemorySize(gpu) * 0.99;
+    // if (free_gpu_mem_size >= cache_size_per_gpu) {
+      // gpuCache[gpu]                 = callCudaMalloc<uint8_t>(cache_size_per_gpu, gpu);
       cpuCache[gpu]                 = nullptr;
       available_gpu_cache_size[gpu] = cache_size_per_gpu;
-      SIRIUS_LOG_INFO("Allocated cache size {} in GPU 0", cache_size_per_gpu);
-    } else {
-      gpuCache[gpu] = callCudaMalloc<uint8_t>(free_gpu_mem_size, gpu);
-      cpuCache[gpu] = allocatePinnedCPUMemory(cache_size_per_gpu - free_gpu_mem_size);
-      available_gpu_cache_size[gpu] = free_gpu_mem_size;
-      SIRIUS_LOG_INFO("Allocated cache size {} for GPU 0 ({} in GPU, {} in CPU)",
-                      cache_size_per_gpu,
-                      free_gpu_mem_size,
-                      cache_size_per_gpu - free_gpu_mem_size);
-    }
+      // SIRIUS_LOG_INFO("Allocated cache size {} in GPU 0", cache_size_per_gpu);
+    // } else {
+      // gpuCache[gpu] = callCudaMalloc<uint8_t>(free_gpu_mem_size, gpu);
+      // cpuCache[gpu] = allocatePinnedCPUMemory(cache_size_per_gpu - free_gpu_mem_size);
+      // available_gpu_cache_size[gpu] = free_gpu_mem_size;
+      // SIRIUS_LOG_INFO("Allocated cache size {} for GPU 0 ({} in GPU, {} in CPU)",
+      //                 cache_size_per_gpu,
+      //                 free_gpu_mem_size,
+      //                 cache_size_per_gpu - free_gpu_mem_size);
+    // }
 
     // gpuProcessing[gpu] = callCudaMalloc<uint8_t>(processing_size_per_gpu, gpu);
-    // gpuCache[gpu] = callCudaHostAlloc<uint8_t>(cache_size_per_gpu, 1);
+    gpuCache[gpu] = callCudaHostAlloc<uint8_t>(cache_size_per_gpu, 1);
     // gpuProcessing[gpu] = callCudaHostAlloc<uint8_t>(processing_size_per_gpu, 1);
     gpuProcessingPointer[gpu] = 0;
     gpuCachingPointer[gpu]    = 0;
@@ -221,7 +233,7 @@ GPUBufferManager::~GPUBufferManager()
   delete[] cpuCachingPointer;
   rmm_stored_buffers.clear();
   delete mr;
-  delete cuda_mr;
+  delete upstream_mr;
 }
 
 void GPUBufferManager::ResetBuffer()
@@ -295,6 +307,72 @@ void GPUBufferManager::ResetCache()
     table->column_names.clear();
     table->column_names.resize(table->column_count);
   }
+}
+
+void GPUBufferManager::ResizeProcessingRegions(size_t new_gpu_processing_size,
+                                               size_t new_cpu_processing_size,
+                                               bool new_use_managed_memory)
+{
+  SIRIUS_LOG_INFO("Resizing processing regions: GPU {} -> {}, CPU {} -> {}, Managed Memory: {} -> {}",
+                  processing_size_per_gpu,
+                  new_gpu_processing_size,
+                  processing_size_per_cpu,
+                  new_cpu_processing_size,
+                  use_managed_memory,
+                  new_use_managed_memory);
+
+  // First reset all allocations in processing regions
+  ResetBuffer();
+
+  // Free the old CPU processing memory
+  if (cpuProcessing != nullptr) {
+    Config::USE_PIN_MEM_FOR_CPU_PROCESSING ? freePinnedCPUMemory(cpuProcessing)
+                                           : freePageableCPUMemory(cpuProcessing);
+    cpuProcessing = nullptr;
+  }
+
+  // Delete the old RMM pool memory resource
+  if (mr != nullptr) {
+    delete mr;
+    mr = nullptr;
+  }
+  if (upstream_mr != nullptr) {
+    delete upstream_mr;
+    upstream_mr = nullptr;
+  }
+
+  // Update the size and memory type variables
+  processing_size_per_gpu = new_gpu_processing_size;
+  processing_size_per_cpu = new_cpu_processing_size;
+  use_managed_memory      = new_use_managed_memory;
+
+  // Allocate new CPU processing memory
+  cpuProcessing = Config::USE_PIN_MEM_FOR_CPU_PROCESSING
+                    ? allocatePinnedCPUMemory(processing_size_per_cpu)
+                    : allocatePageableCPUMemory(processing_size_per_cpu);
+  cpuProcessingPointer = 0;
+
+  // Create upstream memory resource based on memory type
+  if (use_managed_memory) {
+    upstream_mr = new rmm::mr::managed_memory_resource();
+    SIRIUS_LOG_INFO("Using CUDA managed memory (unified memory)");
+  } else {
+    upstream_mr = new rmm::mr::cuda_memory_resource();
+    SIRIUS_LOG_INFO("Using CUDA device memory");
+  }
+  mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
+    upstream_mr, processing_size_per_gpu, processing_size_per_gpu);
+  cudf::set_current_device_resource(mr);
+
+  // Reset GPU processing pointers
+  for (int gpu = 0; gpu < NUM_GPUS; gpu++) {
+    gpuProcessingPointer[gpu] = 0;
+  }
+
+  SIRIUS_LOG_INFO("Processing regions resized successfully: GPU {}, CPU {}, Managed Memory: {}",
+                  processing_size_per_gpu,
+                  processing_size_per_cpu,
+                  use_managed_memory);
 }
 
 template <typename T>

@@ -86,10 +86,11 @@ class GPUBufferManager {
   // Static method to get the singleton instance
   static GPUBufferManager& GetInstance(size_t cache_size_per_gpu      = 0,
                                        size_t processing_size_per_gpu = 0,
-                                       size_t processing_size_per_cpu = 0)
+                                       size_t processing_size_per_cpu = 0,
+                                       bool use_managed_memory        = false)
   {
     static GPUBufferManager instance(
-      cache_size_per_gpu, processing_size_per_gpu, processing_size_per_cpu);
+      cache_size_per_gpu, processing_size_per_gpu, processing_size_per_cpu, use_managed_memory);
     return instance;
   }
 
@@ -99,6 +100,9 @@ class GPUBufferManager {
 
   void ResetBuffer();
   void ResetCache();
+  void ResizeProcessingRegions(size_t new_gpu_processing_size,
+                               size_t new_cpu_processing_size,
+                               bool use_managed_memory = false);
   uint8_t **gpuCache, **cpuCache;  // each gpu has one, `cpuCache` will be used if `gpuCache` is
                                    // full
   uint8_t **gpuProcessing, *cpuProcessing;
@@ -108,11 +112,12 @@ class GPUBufferManager {
   size_t cache_size_per_gpu;
   size_t processing_size_per_gpu;
   size_t processing_size_per_cpu;
+  bool use_managed_memory = false;  // Track whether using managed memory or cuda memory
 
   vector<size_t> available_gpu_cache_size;
 
-  rmm::mr::cuda_memory_resource* cuda_mr;
-  rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>* mr;
+  rmm::mr::device_memory_resource* upstream_mr;  // Base class pointer (cuda or managed)
+  rmm::mr::device_memory_resource* mr;           // Pool wraps upstream
 
   template <typename T>
   T* customCudaMalloc(size_t size, int gpu, bool caching);
@@ -151,7 +156,8 @@ class GPUBufferManager {
   // Private constructor
   GPUBufferManager(size_t cache_size_per_gpu,
                    size_t processing_size_per_gpu,
-                   size_t processing_size_per_cpu);
+                   size_t processing_size_per_cpu,
+                   bool use_managed_memory);
   ~GPUBufferManager();
 };
 

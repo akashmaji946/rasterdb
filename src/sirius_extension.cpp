@@ -26,7 +26,9 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/assert.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
+#include "duckdb/execution/execution_context.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/connection.hpp"
@@ -34,6 +36,7 @@
 #include "duckdb/main/query_result.hpp"
 #include "duckdb/main/relation.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/parser/statement/relation_statement.hpp"
 #include "duckdb/planner/planner.hpp"
@@ -42,6 +45,7 @@
 #include "gpu_context.hpp"
 #include "gpu_physical_plan_generator.hpp"
 #include "log/logging.hpp"
+#include "operator/gpu_physical_table_scan.hpp"
 #include "substrait_extension.hpp"
 #include "to_substrait.hpp"
 
@@ -49,7 +53,8 @@
 
 namespace duckdb {
 
-const std::string PINNED_MEMORY_PARAM_KEY   = "pinned_memory_size";
+const std::string PINNED_MEMORY_PARAM_KEY = "pinned_memory_size";
+const std::string MEMORY_TYPE_PARAM_KEY   = "memory_type";
 bool SiriusExtension::buffer_is_initialized = false;
 
 struct GPUTableFunctionData : public TableFunctionData {
@@ -65,16 +70,18 @@ struct GPUTableFunctionData : public TableFunctionData {
   bool plan_error = false;
 };
 
-// struct GPUCachingFunctionData : public TableFunctionData {
-// 	GPUCachingFunctionData() = default;
-// 	unique_ptr<Connection> conn;
-// 	GPUBufferManager *gpuBufferManager;
-// 	GPUColumnType type;
-// 	uint8_t *data;
-// 	string column;
-// 	string table;
-// 	bool finished = false;
-// };
+struct GPUCachingFunctionData : public TableFunctionData {
+  GPUCachingFunctionData() = default;
+  string table_name;
+  vector<string> column_names;
+  vector<ColumnIndex> column_ids;
+  vector<idx_t> projection_ids;
+  vector<LogicalType> column_types;
+  vector<LogicalType> returned_types;
+  unique_ptr<FunctionData> scan_bind_data;
+  TableFunction scan_function;
+  bool finished = false;
+};
 
 void do_nothing_context(ClientContext*) {}
 
@@ -421,6 +428,7 @@ struct GPUBufferInitFunctionData : public TableFunctionData {
   size_t cache_size;
   size_t processing_size;
   size_t pinned_memory_size;
+  bool use_managed_memory = false;
 };
 
 unique_ptr<FunctionData> SiriusExtension::GPUBufferInitBind(ClientContext& context,
@@ -436,6 +444,20 @@ unique_ptr<FunctionData> SiriusExtension::GPUBufferInitBind(ClientContext& conte
   if (input.named_parameters.find(PINNED_MEMORY_PARAM_KEY) != input.named_parameters.end()) {
     // If the pinned memory size is specified in the arguments then use that
     pinned_memory_size = input.named_parameters[PINNED_MEMORY_PARAM_KEY].ToString();
+  }
+
+  // Parse memory type parameter (default to "cuda")
+  string memory_type_str = "cuda";
+  if (input.named_parameters.find(MEMORY_TYPE_PARAM_KEY) != input.named_parameters.end()) {
+    memory_type_str = input.named_parameters[MEMORY_TYPE_PARAM_KEY].ToString();
+  }
+  if (memory_type_str == "managed") {
+    result->use_managed_memory = true;
+  } else if (memory_type_str == "cuda") {
+    result->use_managed_memory = false;
+  } else {
+    throw InvalidInputException(
+      "Invalid memory_type: '%s'. Use 'cuda' or 'managed'.", memory_type_str);
   }
 
   // parsing 2GB or 2GiB to size_t
@@ -509,21 +531,288 @@ void SiriusExtension::GPUBufferInitFunction(ClientContext& context,
   size_t cache_size         = data.cache_size;
   size_t processing_size    = data.processing_size;
   size_t pinned_memory_size = data.pinned_memory_size;
+  bool use_managed_memory   = data.use_managed_memory;
   if (pinned_memory_size == 0) { pinned_memory_size = std::max(cache_size, processing_size); }
 
   if (!buffer_is_initialized) {
     SIRIUS_LOG_DEBUG(
       "GPU Buffer Manager initialized with args: Cache Size - {}, Processing Size - {}, Pinned Mem "
-      "Size - {}\n",
+      "Size - {}, Use Managed Memory - {}\n",
       cache_size,
       processing_size,
-      pinned_memory_size);
+      pinned_memory_size,
+      use_managed_memory);
     GPUBufferManager* gpuBufferManager =
-      &(GPUBufferManager::GetInstance(cache_size, processing_size, pinned_memory_size));
+      &(GPUBufferManager::GetInstance(cache_size, processing_size, pinned_memory_size, use_managed_memory));
     buffer_is_initialized = true;
   } else {
     SIRIUS_LOG_WARN("GPUBufferManager already initialized");
   }
+  data.finished = true;
+}
+
+unique_ptr<FunctionData> SiriusExtension::GPUCachingBind(ClientContext& context,
+                                                        TableFunctionBindInput& input,
+                                                        vector<LogicalType>& return_types,
+                                                        vector<string>& names)
+{
+  auto result = make_uniq<GPUCachingFunctionData>();
+
+  // Parse input parameters
+  if (input.inputs[0].IsNull()) {
+    throw BinderException("gpu_caching: table name cannot be NULL");
+  }
+  if (input.inputs[1].IsNull()) {
+    throw BinderException("gpu_caching: column names list cannot be NULL");
+  }
+
+  result->table_name = input.inputs[0].ToString();
+
+  // Parse the list of column names
+  const auto& column_list = ListValue::GetChildren(input.inputs[1]);
+  if (column_list.empty()) {
+    throw BinderException("gpu_caching: column names list cannot be empty");
+  }
+  for (const auto& col : column_list) {
+    printf("Column name: %s\n", col.ToString().c_str());
+    result->column_names.push_back(col.ToString());
+  }
+
+  // Look up the table in the catalog
+  auto& catalog = Catalog::GetCatalog(context, INVALID_CATALOG);
+  CatalogTransaction txn(catalog, context);
+  auto& schema = catalog.GetSchema(txn, DEFAULT_SCHEMA);
+
+  auto table_entry = schema.GetEntry(txn, CatalogType::TABLE_ENTRY, result->table_name);
+  if (!table_entry) {
+    throw BinderException("gpu_caching: table '%s' not found", result->table_name);
+  }
+
+  auto& table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
+
+  // Get all column names from the table for validation
+  auto all_column_names = table_catalog_entry.GetColumns().GetColumnNames();
+
+  // Build column_ids, projection_ids, and types for the specified columns
+  for (size_t i = 0; i < result->column_names.size(); i++) {
+    const auto& col_name = result->column_names[i];
+
+    // Find the column in the table
+    auto it = std::find(all_column_names.begin(), all_column_names.end(), col_name);
+    if (it == all_column_names.end()) {
+      throw BinderException("gpu_caching: column '%s' not found in table '%s'",
+                            col_name,
+                            result->table_name);
+    }
+
+    // Get the column index
+    idx_t col_idx = std::distance(all_column_names.begin(), it);
+    result->column_ids.push_back(ColumnIndex(col_idx));
+    result->projection_ids.push_back(i);
+    result->column_types.push_back(table_catalog_entry.GetColumn(LogicalIndex(col_idx)).GetType());
+  }
+
+  // Store all returned types from the table (needed for GPUPhysicalTableScan)
+  result->returned_types = table_catalog_entry.GetTypes();
+
+  // Create bind data for the table scan
+  result->scan_bind_data = make_uniq<TableScanBindData>(table_catalog_entry);
+
+  // Get the table scan function
+  result->scan_function = TableScanFunction::GetFunction();
+
+  // Set return type for the gpu_caching function itself
+  return_types.emplace_back(LogicalType::VARCHAR);
+  names.emplace_back("Result");
+
+  return std::move(result);
+}
+
+void SiriusExtension::GPUCachingFunction(ClientContext& context,
+                                         TableFunctionInput& data_p,
+                                         DataChunk& output)
+{
+  auto& data = data_p.bind_data->CastNoConst<GPUCachingFunctionData>();
+  if (data.finished) { return; }
+
+  if (!buffer_is_initialized) {
+    throw InvalidInputException(
+      "GPUBufferManager not initialized, please call gpu_buffer_init first");
+  }
+
+  SIRIUS_LOG_DEBUG("GPUCachingFunction: Caching table '{}' with {} columns",
+                   data.table_name,
+                   data.column_names.size());
+
+  // Add row_id column to column_ids (required by GPUPhysicalTableScan)
+  vector<ColumnIndex> column_ids_with_rowid = data.column_ids;
+  column_ids_with_rowid.push_back(ColumnIndex(DConstants::INVALID_INDEX));
+
+  // Create extra operator info
+  ExtraOperatorInfo extra_info;
+
+  // Create GPUPhysicalTableScan with the prepared bind data
+  auto physical_scan = make_uniq<GPUPhysicalTableScan>(
+    data.column_types,                     // types (output types)
+    data.scan_function,                    // function
+    std::move(data.scan_bind_data),        // bind_data
+    data.returned_types,                   // returned_types (all table column types)
+    std::move(column_ids_with_rowid),      // column_ids
+    data.projection_ids,                   // projection_ids
+    data.column_names,                     // names
+    nullptr,                               // table_filters
+    0,                                     // estimated_cardinality
+    extra_info,                            // extra_info
+    vector<Value>()                        // parameters
+  );
+
+  // Create execution context for the table scan
+  Executor executor(context);
+  Pipeline duckdb_pipeline(executor);
+  ThreadContext thread_context(context);
+  ExecutionContext exec_context(context, thread_context, &duckdb_pipeline);
+
+  // Execute the table scan to cache the columns
+  physical_scan->GetDataDuckDB(exec_context);
+
+  // Build result message
+  string cached_columns;
+  for (size_t i = 0; i < data.column_names.size(); i++) {
+    if (i > 0) cached_columns += ", ";
+    cached_columns += data.column_names[i];
+  }
+  string result_msg =
+    "Cached columns [" + cached_columns + "] from table '" + data.table_name + "'";
+
+  output.SetCardinality(1);
+  output.SetValue(0, 0, Value(result_msg));
+
+  data.finished = true;
+}
+
+struct GPUProcessingResizeFunctionData : public TableFunctionData {
+  GPUProcessingResizeFunctionData() {}
+  bool finished = false;
+  size_t new_gpu_processing_size;
+  size_t new_cpu_processing_size;
+  bool use_managed_memory = false;
+};
+
+unique_ptr<FunctionData> SiriusExtension::GPUProcessingResizeBind(ClientContext& context,
+                                                                  TableFunctionBindInput& input,
+                                                                  vector<LogicalType>& return_types,
+                                                                  vector<string>& names)
+{
+  auto result = make_uniq<GPUProcessingResizeFunctionData>();
+
+  if (input.inputs[0].IsNull()) {
+    throw BinderException("gpu_processing_resize: GPU processing size cannot be NULL");
+  }
+  if (input.inputs[1].IsNull()) {
+    throw BinderException("gpu_processing_resize: CPU processing size cannot be NULL");
+  }
+
+  string gpu_processing_size_str = input.inputs[0].ToString();
+  string cpu_processing_size_str = input.inputs[1].ToString();
+
+  // Parse memory_type named parameter (default to "cuda")
+  string memory_type_str = "cuda";
+  if (input.named_parameters.find(MEMORY_TYPE_PARAM_KEY) != input.named_parameters.end()) {
+    memory_type_str = input.named_parameters.at(MEMORY_TYPE_PARAM_KEY).ToString();
+  }
+  if (memory_type_str == "managed") {
+    result->use_managed_memory = true;
+  } else if (memory_type_str == "cuda") {
+    result->use_managed_memory = false;
+  } else {
+    throw InvalidInputException(
+      "Invalid memory_type: '%s'. Use 'cuda' or 'managed'.", memory_type_str);
+  }
+
+  // Function to parse size strings like "2GB" or "2GiB" to size_t
+  auto parse_size = [](const string& size_str) -> size_t {
+    size_t result     = 0;
+    size_t multiplier = 1;
+    string num_part;
+    string unit_part;
+
+    size_t i = 0;
+    // Skip any leading whitespace
+    while (i < size_str.length() && isspace(size_str[i])) {
+      i++;
+    }
+
+    // Find where the number ends and unit begins
+    while (i < size_str.length() && (isdigit(size_str[i]) || size_str[i] == '.')) {
+      num_part += size_str[i];
+      i++;
+    }
+
+    // Skip any whitespace between number and unit
+    while (i < size_str.length() && isspace(size_str[i])) {
+      i++;
+    }
+
+    // Extract unit part
+    unit_part = size_str.substr(i);
+
+    // Convert number part to double
+    double num_value = stod(num_part);
+
+    // Determine multiplier based on unit
+    if (unit_part == "B") {
+      multiplier = 1;
+    } else if (unit_part == "KB" || unit_part == "KiB") {
+      multiplier = 1024;
+    } else if (unit_part == "MB" || unit_part == "MiB") {
+      multiplier = 1024 * 1024;
+    } else if (unit_part == "GB" || unit_part == "GiB") {
+      multiplier = 1024 * 1024 * 1024;
+    } else if (unit_part == "TB" || unit_part == "TiB") {
+      multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+    } else {
+      throw InvalidInputException("Invalid size format: %s", size_str);
+    }
+
+    result = (size_t)(num_value * multiplier);
+    return result;
+  };
+
+  result->new_gpu_processing_size = parse_size(gpu_processing_size_str);
+  result->new_cpu_processing_size = parse_size(cpu_processing_size_str);
+
+  return_types.emplace_back(LogicalType::VARCHAR);
+  names.emplace_back("Result");
+
+  return std::move(result);
+}
+
+void SiriusExtension::GPUProcessingResizeFunction(ClientContext& context,
+                                                  TableFunctionInput& data_p,
+                                                  DataChunk& output)
+{
+  auto& data = data_p.bind_data->CastNoConst<GPUProcessingResizeFunctionData>();
+  if (data.finished) { return; }
+
+  if (!buffer_is_initialized) {
+    throw InvalidInputException(
+      "GPUBufferManager not initialized, please call gpu_buffer_init first");
+  }
+
+  GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
+  gpuBufferManager->ResizeProcessingRegions(data.new_gpu_processing_size,
+                                            data.new_cpu_processing_size,
+                                            data.use_managed_memory);
+
+  string memory_type_str = data.use_managed_memory ? "managed" : "cuda";
+  string result_msg = "Processing regions resized: GPU = " +
+                      std::to_string(data.new_gpu_processing_size) +
+                      " bytes, CPU = " + std::to_string(data.new_cpu_processing_size) +
+                      " bytes, Memory Type = " + memory_type_str;
+
+  output.SetCardinality(1);
+  output.SetValue(0, 0, Value(result_msg));
+
   data.finished = true;
 }
 
@@ -536,12 +825,16 @@ void SiriusExtension::InitializeGPUExtension(Connection& con)
                                 GPUBufferInitFunction,
                                 GPUBufferInitBind);
   gpu_buffer_init.named_parameters[PINNED_MEMORY_PARAM_KEY] = LogicalType::VARCHAR;
+  gpu_buffer_init.named_parameters[MEMORY_TYPE_PARAM_KEY]   = LogicalType::VARCHAR;
   CreateTableFunctionInfo gpu_buffer_init_info(gpu_buffer_init);
   catalog.CreateTableFunction(*con.context, gpu_buffer_init_info);
 
-  // TableFunction gpu_caching("gpu_caching", {LogicalType::VARCHAR}, GPUCachingFunction,
-  // GPUCachingBind); CreateTableFunctionInfo gpu_caching_info(gpu_caching);
-  // catalog.CreateTableFunction(*con.context, gpu_caching_info);
+  TableFunction gpu_caching("gpu_caching",
+                            {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
+                            GPUCachingFunction,
+                            GPUCachingBind);
+  CreateTableFunctionInfo gpu_caching_info(gpu_caching);
+  catalog.CreateTableFunction(*con.context, gpu_caching_info);
 
   TableFunction gpu_processing(
     "gpu_processing", {LogicalType::VARCHAR}, GPUProcessingFunction, GPUProcessingBind);
@@ -556,6 +849,14 @@ void SiriusExtension::InitializeGPUExtension(Connection& con)
   // gpu_processing.named_parameters["enable_optimizer"] = LogicalType::BOOLEAN;
   CreateTableFunctionInfo gpu_processing_substrait_info(gpu_processing_substrait);
   catalog.CreateTableFunction(*con.context, gpu_processing_substrait_info);
+
+  TableFunction gpu_processing_resize("gpu_processing_resize",
+                                      {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                      GPUProcessingResizeFunction,
+                                      GPUProcessingResizeBind);
+  gpu_processing_resize.named_parameters[MEMORY_TYPE_PARAM_KEY] = LogicalType::VARCHAR;
+  CreateTableFunctionInfo gpu_processing_resize_info(gpu_processing_resize);
+  catalog.CreateTableFunction(*con.context, gpu_processing_resize_info);
 }
 
 static void SetUsePinMemory(ClientContext& context, SetScope scope, Value& parameter)

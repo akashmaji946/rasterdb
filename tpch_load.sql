@@ -77,11 +77,11 @@ CREATE TABLE lineitem ( l_orderkey    BIGINT NOT NULL,
                         l_shipmode     CHAR(10) NOT NULL,
                         l_comment      VARCHAR(44) NOT NULL);
 
-COPY lineitem FROM 'test_datasets/tpch-dbgen/s1/lineitem.tbl' WITH (HEADER false, DELIMITER '|');
-COPY orders FROM 'test_datasets/tpch-dbgen/s1/orders.tbl' WITH (HEADER false, DELIMITER '|');
-COPY supplier FROM 'test_datasets/tpch-dbgen/s1/supplier.tbl' WITH (HEADER false, DELIMITER '|');
-COPY part FROM 'test_datasets/tpch-dbgen/s1/part.tbl' WITH (HEADER false, DELIMITER '|');
-COPY customer FROM 'test_datasets/tpch-dbgen/s1/customer.tbl' WITH (HEADER false, DELIMITER '|');
-COPY partsupp FROM 'test_datasets/tpch-dbgen/s1/partsupp.tbl' WITH (HEADER false, DELIMITER '|');
-COPY nation FROM 'test_datasets/tpch-dbgen/s1/nation.tbl' WITH (HEADER false, DELIMITER '|');
-COPY region FROM 'test_datasets/tpch-dbgen/s1/region.tbl' WITH (HEADER false, DELIMITER '|');
+COPY lineitem FROM 'test_datasets/tpch-dbgen/s1000/lineitem.tbl' WITH (HEADER false, DELIMITER '|');
+COPY orders FROM 'test_datasets/tpch-dbgen/s1000/orders.tbl' WITH (HEADER false, DELIMITER '|');
+COPY supplier FROM 'test_datasets/tpch-dbgen/s1000/supplier.tbl' WITH (HEADER false, DELIMITER '|');
+COPY part FROM 'test_datasets/tpch-dbgen/s1000/part.tbl' WITH (HEADER false, DELIMITER '|');
+COPY customer FROM 'test_datasets/tpch-dbgen/s1000/customer.tbl' WITH (HEADER false, DELIMITER '|');
+COPY partsupp FROM 'test_datasets/tpch-dbgen/s1000/partsupp.tbl' WITH (HEADER false, DELIMITER '|');
+COPY nation FROM 'test_datasets/tpch-dbgen/s1000/nation.tbl' WITH (HEADER false, DELIMITER '|');
+COPY region FROM 'test_datasets/tpch-dbgen/s1000/region.tbl' WITH (HEADER false, DELIMITER '|');
