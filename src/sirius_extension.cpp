@@ -74,6 +74,7 @@ struct GPUCachingFunctionData : public TableFunctionData {
   GPUCachingFunctionData() = default;
   string table_name;
   vector<string> column_names;
+  vector<string> all_column_names;
   vector<ColumnIndex> column_ids;
   vector<idx_t> projection_ids;
   vector<LogicalType> column_types;
@@ -573,8 +574,8 @@ unique_ptr<FunctionData> SiriusExtension::GPUCachingBind(ClientContext& context,
   if (column_list.empty()) {
     throw BinderException("gpu_caching: column names list cannot be empty");
   }
+
   for (const auto& col : column_list) {
-    printf("Column name: %s\n", col.ToString().c_str());
     result->column_names.push_back(col.ToString());
   }
 
@@ -621,6 +622,9 @@ unique_ptr<FunctionData> SiriusExtension::GPUCachingBind(ClientContext& context,
   // Get the table scan function
   result->scan_function = TableScanFunction::GetFunction();
 
+  // Store the column names
+  result->all_column_names = std::move(all_column_names);
+
   // Set return type for the gpu_caching function itself
   return_types.emplace_back(LogicalType::VARCHAR);
   names.emplace_back("Result");
@@ -659,7 +663,7 @@ void SiriusExtension::GPUCachingFunction(ClientContext& context,
     data.returned_types,                   // returned_types (all table column types)
     std::move(column_ids_with_rowid),      // column_ids
     data.projection_ids,                   // projection_ids
-    data.column_names,                     // names
+    data.all_column_names,                     // names
     nullptr,                               // table_filters
     0,                                     // estimated_cardinality
     extra_info,                            // extra_info
