@@ -1,12 +1,15 @@
 -- TPC-H Query 9 - GPU Caching and Processing
+call gpu_buffer_init('195 GB', '85 GB', pinned_memory_size = '162 GB');
 
 -- Cache columns for each table
+call gpu_caching("lineitem", ["l_suppkey", "l_partkey", "l_orderkey", "l_extendedprice", "l_discount", "l_quantity"]);
+call gpu_processing_resize('1 GB', '100 GB');
+call gpu_caching("orders", ["o_orderkey", "o_orderdate"]);
+call gpu_caching("partsupp", ["ps_suppkey", "ps_partkey", "ps_supplycost"]);
 call gpu_caching("part", ["p_partkey", "p_name"]);
 call gpu_caching("supplier", ["s_suppkey", "s_nationkey"]);
-call gpu_caching("lineitem", ["l_suppkey", "l_partkey", "l_orderkey", "l_extendedprice", "l_discount", "l_quantity"]);
-call gpu_caching("partsupp", ["ps_suppkey", "ps_partkey", "ps_supplycost"]);
-call gpu_caching("orders", ["o_orderkey", "o_orderdate"]);
 call gpu_caching("nation", ["n_nationkey", "n_name"]);
+call gpu_processing_resize('85 GB', '10 GB', memory_type = 'managed');
 
 -- Execute query on GPU
 call gpu_processing("select

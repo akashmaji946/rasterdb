@@ -28,6 +28,7 @@
 
 #include <rmm/aligned.hpp>
 #include <rmm/mr/device/managed_memory_resource.hpp>
+#include <rmm/mr/pinned_host_memory_resource.hpp>
 
 #define NUM_GPUS 1
 

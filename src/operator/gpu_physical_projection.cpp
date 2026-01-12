@@ -24,6 +24,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "expression_executor/gpu_expression_executor.hpp"
+#include "gpu_expression_executor.hpp"
 #include "log/logging.hpp"
 
 namespace duckdb {
@@ -34,6 +35,7 @@ GPUPhysicalProjection::GPUPhysicalProjection(vector<LogicalType> types,
   : GPUPhysicalOperator(PhysicalOperatorType::PROJECTION, std::move(types), estimated_cardinality),
     select_list(std::move(select_list))
 {
+  gpu_expression_executor = new GPUExpressionExecutor();
 }
 
 OperatorResultType GPUPhysicalProjection::Execute(GPUIntermediateRelation& input_relation,
@@ -42,9 +44,33 @@ OperatorResultType GPUPhysicalProjection::Execute(GPUIntermediateRelation& input
   SIRIUS_LOG_DEBUG("Executing projection");
   auto start = std::chrono::high_resolution_clock::now();
 
+  // check if input_relation has column size larger than INT32 MAX
+
+  bool use_new_executor = true;
+  for (int i = 0; i < input_relation.columns.size(); i++) {
+    if (input_relation.columns[i]->row_ids != nullptr) {
+      if (input_relation.columns[i]->row_id_count > INT32_MAX) {
+        use_new_executor = false;
+        break;
+      }
+    } else {
+      if (input_relation.columns[i]->column_length > INT32_MAX) {
+        use_new_executor = false;
+        break;
+      }
+    }
+  }
+
   // The new executor...
-  sirius::GpuExpressionExecutor gpu_expression_executor(select_list);
-  gpu_expression_executor.Execute(input_relation, output_relation);
+  if (use_new_executor) {
+      sirius::GpuExpressionExecutor new_gpu_expression_executor(select_list);
+      new_gpu_expression_executor.Execute(input_relation, output_relation);
+  } else {
+      for (int idx = 0; idx < select_list.size(); idx++) {
+            SIRIUS_LOG_DEBUG("Executing old executor expression: {}", select_list[idx]->ToString());
+            gpu_expression_executor->ProjectionRecursiveExpression(input_relation, output_relation, *select_list[idx], idx, 0);
+      }
+  }
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

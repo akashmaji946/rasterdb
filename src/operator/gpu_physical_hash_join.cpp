@@ -61,12 +61,14 @@ void ResolveTypeProbeExpression(vector<shared_ptr<GPUColumn>>& probe_keys,
 
   // TODO: Need to handle special case for unique keys for better performance
   if (join_type == JoinType::INNER) {
-    // if (unique_build_keys) {
-    // 	probeHashTableSingleMatch<T>(probe_data, ht, ht_len, row_ids_left, row_ids_right, count,
-    // size, condition_mode, num_keys, 0); } else { 	probeHashTable<T>(probe_data, ht, ht_len,
-    // row_ids_left, row_ids_right, count, size, condition_mode, num_keys, false);
-    // }
-    throw NotImplementedException("Unsupported join type: INNER");
+    if (unique_build_keys) {
+    	probeHashTableSingleMatch<T>(probe_data, ht, ht_len, row_ids_left, row_ids_right, count,
+    size, condition_mode, num_keys, 0); } 
+    else { 	
+      probeHashTable<T>(probe_data, ht, ht_len,
+    row_ids_left, row_ids_right, count, size, condition_mode, num_keys, false);
+    }
+    // throw NotImplementedException("Unsupported join type: INNER");
   } else if (join_type == JoinType::SEMI) {
     probeHashTableSingleMatch<T>(probe_data,
                                  ht,
@@ -471,6 +473,7 @@ SourceResultType GPUPhysicalHashJoin::GetData(GPUIntermediateRelation& output_re
   uint64_t* count                    = nullptr;
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   HandleScanHTExpression(gpu_hash_table, ht_len, row_ids, count, join_type, conditions);
+  printf("Scan HT found %lu rows\n", count[0]);
 
   for (idx_t i = 0; i < rhs_output_columns.col_idxs.size(); i++) {
     const auto rhs_col = rhs_output_columns.col_idxs[i];
@@ -588,7 +591,18 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
       build_key[cond_idx] = materialized_build_key->columns[cond_idx];
     }
     if (build_key[0]->column_length > INT32_MAX || probe_key[0]->column_length > INT32_MAX) {
-      throw NotImplementedException("Column length greater than INT32_MAX is not supported");
+      // throw NotImplementedException("Column length greater than INT32_MAX is not supported");
+      HandleBuildExpression(build_key, gpu_hash_table, ht_len, conditions, join_type, gpuBufferManager);
+      HandleProbeExpression(probe_key,
+                          count,
+                          row_ids_left,
+                          row_ids_right,
+                          gpu_hash_table,
+                          ht_len,
+                          conditions,
+                          join_type,
+                          unique_build_keys,
+                          gpuBufferManager);
     } else {
       bool has_non_equality_condition = false;
       for (idx_t cond_idx = 0; cond_idx < conditions.size(); cond_idx++) {

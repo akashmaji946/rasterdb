@@ -93,6 +93,7 @@ set(EXTENSION_SOURCES
     src/gpu_query_result.cpp
     src/config.cpp
     src/fallback.cpp
+    src/gpu_expression_executor.cpp
     src/parallel/task_executor.cpp)
 # Note: Memory module sources are now provided by cuCascade library
 add_subdirectory(src/operator)
@@ -100,10 +101,12 @@ add_subdirectory(src/plan)
 add_subdirectory(src/data)
 add_subdirectory(src/pipeline)
 add_subdirectory(src/downgrade)
+add_subdirectory(src/query_specific)
 
 set(CUDA_SOURCES src/cuda/communication.cu src/cuda/allocator.cu
                  src/cuda/print.cu src/cuda/utils.cu)
 add_subdirectory(src/cuda/operator)
+add_subdirectory(src/cuda/query_specific)
 add_subdirectory(src/cuda/cudf)
 add_subdirectory(src/cuda/expression_executor)
 add_subdirectory(src/expression_executor)

@@ -1130,9 +1130,9 @@ void GPUPhysicalTableScan::ScanDataDuckDBOpt(ExecutionContext& exec_context,
     // to keep row orders of different columns consistent (e.g., one scan caches col_0 and another
     // scan caches col_1). Now we achieve this by aligning the row order of scanned columns
     // according to duckdb storage row ids.
-    // bool scan_duckdb_storage_row_ids =
-    //   num_rows > 1 && uncached_scan_column_ids.size() < table->column_count;
-    bool scan_duckdb_storage_row_ids = false;
+    bool scan_duckdb_storage_row_ids =
+      num_rows > 1 && uncached_scan_column_ids.size() < table->column_count;
+    // bool scan_duckdb_storage_row_ids = false;
     int64_t* duckdb_storage_row_ids_ptr = nullptr;
     // Need to save the original column info, since we need to modify them to let duckdb produce
     // row_id column, but after the scan finishes we still need to use the original column info.

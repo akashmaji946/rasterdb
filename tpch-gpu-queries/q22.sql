@@ -1,8 +1,9 @@
 -- TPC-H Query 22 - GPU Caching and Processing
+call gpu_buffer_init('150 GB', '85 GB', pinned_memory_size = '150 GB');
 
 -- Cache columns for each table
-call gpu_caching("customer", ["c_custkey", "c_phone", "c_acctbal"]);
 call gpu_caching("orders", ["o_custkey"]);
+call gpu_caching("customer", ["c_custkey", "c_phone", "c_acctbal"]);
 
 -- Execute query on GPU
 call gpu_processing("select

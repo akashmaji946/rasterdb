@@ -1,8 +1,11 @@
 -- TPC-H Query 4 - GPU Caching and Processing
+call gpu_buffer_init('120 GB', '85 GB', pinned_memory_size = '120 GB');
 
 -- Cache columns for each table
 call gpu_caching("orders", ["o_orderkey", "o_orderdate", "o_orderpriority"]);
 call gpu_caching("lineitem", ["l_orderkey", "l_commitdate", "l_receiptdate"]);
+
+call gpu_processing_resize('180 GB', '1 GB', memory_type = 'managed');
 
 -- Execute query on GPU
 call gpu_processing("select

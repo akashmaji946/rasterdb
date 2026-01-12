@@ -27,6 +27,9 @@
 
 namespace duckdb {
 
+template <typename T, typename V>
+void hashGroupedAggregate(uint8_t **keys, uint8_t **aggregate_keys, uint64_t* count, uint64_t N, uint64_t num_keys, uint64_t num_aggregates, int* agg_mode);
+
 uint64_t* createFixedSizeOffsets(size_t record_size, uint64_t num_rows);
 
 void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,

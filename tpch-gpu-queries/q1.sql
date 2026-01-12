@@ -1,7 +1,10 @@
 -- TPC-H Query 1 - GPU Caching and Processing
+call gpu_buffer_init('165 GB', '85 GB', pinned_memory_size = '165 GB');
 
 -- Cache columns for lineitem table
 call gpu_caching("lineitem", ["l_returnflag", "l_linestatus", "l_quantity", "l_extendedprice", "l_discount", "l_tax", "l_shipdate"]);
+
+call gpu_processing_resize('120 GB', '1 GB', memory_type = 'managed');
 
 -- Execute query on GPU
 call gpu_processing("select
@@ -18,7 +21,7 @@ call gpu_processing("select
 from
   lineitem
 where
-  l_shipdate <= 19940902
+  l_shipdate <= 19920902
 group by
   l_returnflag,
   l_linestatus

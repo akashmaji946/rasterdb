@@ -1,8 +1,9 @@
--- TPC-H Query 17 - GPU Caching and Processing
-
+-- TPC-H Query 17 - GPU Caching and Processing)
+call gpu_buffer_init('120 GB', '85 GB', pinned_memory_size = '120 GB');
 -- Cache columns for each table
 call gpu_caching("lineitem", ["l_partkey", "l_extendedprice", "l_quantity"]);
 call gpu_caching("part", ["p_partkey", "p_brand", "p_container"]);
+call gpu_processing_resize("120 GB", "2 GB", memory_type = 'managed');
 
 -- Execute query on GPU
 call gpu_processing("select

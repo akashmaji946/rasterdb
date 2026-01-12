@@ -18,6 +18,7 @@
 
 #include "duckdb/planner/expression.hpp"
 #include "gpu_physical_operator.hpp"
+#include "gpu_expression_executor.hpp"
 
 namespace duckdb {
 
@@ -31,6 +32,7 @@ class GPUPhysicalProjection : public GPUPhysicalOperator {
                         idx_t estimated_cardinality);
 
   vector<unique_ptr<Expression>> select_list;
+  GPUExpressionExecutor* gpu_expression_executor;
 
   OperatorResultType Execute(GPUIntermediateRelation& input_relation,
                              GPUIntermediateRelation& output_relation) const override;

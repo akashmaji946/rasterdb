@@ -17,6 +17,7 @@
 #pragma once
 
 #include "gpu_physical_operator.hpp"
+#include "gpu_expression_executor.hpp"
 
 namespace duckdb {
 
@@ -35,7 +36,7 @@ class GPUPhysicalFilter : public GPUPhysicalOperator {
   //! The filter expression
   unique_ptr<Expression> expression;
 
-  // GPUExpressionExecutor* gpu_expression_executor;
+  GPUExpressionExecutor* gpu_expression_executor;
 
   // public:
   // 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;

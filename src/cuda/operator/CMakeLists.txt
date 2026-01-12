@@ -25,4 +25,6 @@ set(CUDA_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/nested_loop_join.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/strings_matching.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/substring.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/arithmetic_expression.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/hash_grouped_aggregate.cu
     PARENT_SCOPE)

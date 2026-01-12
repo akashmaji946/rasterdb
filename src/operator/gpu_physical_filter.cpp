@@ -26,6 +26,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "expression_executor/gpu_expression_executor.hpp"
+#include "gpu_expression_executor.hpp"
 #include "log/logging.hpp"
 
 namespace duckdb {
@@ -47,6 +48,7 @@ GPUPhysicalFilter::GPUPhysicalFilter(vector<LogicalType> types,
   } else {
     expression = std::move(select_list[0]);
   }
+  gpu_expression_executor = new GPUExpressionExecutor();
 }
 
 OperatorResultType GPUPhysicalFilter::Execute(GPUIntermediateRelation& input_relation,
@@ -55,9 +57,32 @@ OperatorResultType GPUPhysicalFilter::Execute(GPUIntermediateRelation& input_rel
   SIRIUS_LOG_DEBUG("Executing expression {}", expression->ToString());
   auto start = std::chrono::high_resolution_clock::now();
 
-  // The new executor...
-  sirius::GpuExpressionExecutor gpu_expression_executor(*expression.get());
-  gpu_expression_executor.Select(input_relation, output_relation);
+  bool use_new_executor = true;
+  for (int i = 0; i < input_relation.columns.size(); i++) {
+    if (input_relation.columns[i]->row_ids != nullptr) {
+      if (input_relation.columns[i]->row_id_count > INT32_MAX) {
+        use_new_executor = false;
+        break;
+      }
+    } else {
+      if (input_relation.columns[i]->column_length > INT32_MAX) {
+        use_new_executor = false;
+        break;
+      }
+    }
+  }
+
+  if (use_new_executor) {
+    // The new executor...
+    SIRIUS_LOG_DEBUG("Using new executor");
+    sirius::GpuExpressionExecutor new_gpu_expression_executor(*expression.get());
+    new_gpu_expression_executor.Select(input_relation, output_relation);
+  } else {
+    // The old executor...
+    SIRIUS_LOG_DEBUG("Using old executor");
+    gpu_expression_executor->FilterRecursiveExpression(
+      input_relation, output_relation, *expression, 0);
+  }
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

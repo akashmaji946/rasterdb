@@ -1,4 +1,5 @@
 -- TPC-H Query 11 - GPU Caching and Processing
+call gpu_buffer_init('180 GB', '85 GB', pinned_memory_size = '150 GB');
 
 -- Cache columns for each table
 call gpu_caching("partsupp", ["ps_partkey", "ps_suppkey", "ps_supplycost", "ps_availqty"]);
