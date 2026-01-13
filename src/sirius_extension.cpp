@@ -626,7 +626,7 @@ unique_ptr<FunctionData> SiriusExtension::GPUCachingBind(ClientContext& context,
   result->all_column_names = std::move(all_column_names);
 
   // Set return type for the gpu_caching function itself
-  return_types.emplace_back(LogicalType::VARCHAR);
+  return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
   names.emplace_back("Result");
 
   return std::move(result);
@@ -785,7 +785,7 @@ unique_ptr<FunctionData> SiriusExtension::GPUProcessingResizeBind(ClientContext&
   result->new_gpu_processing_size = parse_size(gpu_processing_size_str);
   result->new_cpu_processing_size = parse_size(cpu_processing_size_str);
 
-  return_types.emplace_back(LogicalType::VARCHAR);
+  return_types.emplace_back(LogicalType(LogicalTypeId::VARCHAR));
   names.emplace_back("Result");
 
   return std::move(result);
