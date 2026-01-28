@@ -90,6 +90,22 @@ std::vector<cudf::bitmask_type> copy_null_mask(const cudf::column_view& col)
   return mask;
 }
 
+size_t aligned_mask_bytes(size_t rows)
+{
+  return sirius::utils::align_8(sirius::utils::ceil_div_8(rows));
+}
+
+size_t aligned_fixed_column_bytes(size_t rows, size_t type_size)
+{
+  return sirius::utils::align_8(rows * type_size) + aligned_mask_bytes(rows);
+}
+
+size_t aligned_varchar_column_bytes(size_t rows, size_t default_varchar_size)
+{
+  return (rows + 1) * sizeof(int64_t) + sirius::utils::align_8(rows * default_varchar_size) +
+         aligned_mask_bytes(rows);
+}
+
 void verify_validity_mask(const cudf::column_view& col, const std::vector<bool>& expected_valid)
 {
   size_t expected_nulls = 0;
@@ -370,14 +386,12 @@ TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
   REQUIRE(allocator != nullptr);
 
   size_t num_rows       = 1024;
-  size_t mask_bytes     = 0;
   size_t total_size     = 0;
   auto const block_size = allocator->get_block_size();
   while (true) {
-    mask_bytes = sirius::utils::ceil_div_8(num_rows);
-    total_size = num_rows * sizeof(int32_t) + mask_bytes + (num_rows + 1) * sizeof(int64_t) +
-                 num_rows * kDefaultVarcharSize + mask_bytes + num_rows * sizeof(int64_t) +
-                 mask_bytes;
+    total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t)) +
+                 aligned_varchar_column_bytes(num_rows, kDefaultVarcharSize) +
+                 aligned_fixed_column_bytes(num_rows, sizeof(int64_t));
     if (total_size > block_size) { break; }
     num_rows *= 2;
   }
@@ -396,9 +410,9 @@ TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
 
   size_t byte_offset = 0;
   int_builder.initialize_accessors(num_rows, byte_offset, allocation);
-  byte_offset += num_rows * sizeof(int32_t) + mask_bytes;
+  byte_offset += aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
   str_builder.initialize_accessors(num_rows, byte_offset, allocation);
-  byte_offset += (num_rows + 1) * sizeof(int64_t) + num_rows * kDefaultVarcharSize + mask_bytes;
+  byte_offset += aligned_varchar_column_bytes(num_rows, kDefaultVarcharSize);
   big_builder.initialize_accessors(num_rows, byte_offset, allocation);
 
   duckdb::Vector int_vec(int_type, num_rows);
@@ -505,14 +519,11 @@ TEST_CASE("host_table_utils - underfilled varchar column truncates rows",
 
   constexpr size_t kSmallVarcharSize = 8;
   size_t num_rows_expected           = 256;
-  size_t mask_bytes                  = 0;
   size_t total_size                  = 0;
   auto const block_size              = allocator->get_block_size();
   while (true) {
-    mask_bytes = sirius::utils::ceil_div_8(num_rows_expected);
-    total_size = num_rows_expected * sizeof(int32_t) + mask_bytes +
-                 (num_rows_expected + 1) * sizeof(int64_t) + num_rows_expected * kSmallVarcharSize +
-                 mask_bytes;
+    total_size = aligned_fixed_column_bytes(num_rows_expected, sizeof(int32_t)) +
+                 aligned_varchar_column_bytes(num_rows_expected, kSmallVarcharSize);
     if (total_size > block_size) { break; }
     num_rows_expected *= 2;
   }
@@ -529,7 +540,7 @@ TEST_CASE("host_table_utils - underfilled varchar column truncates rows",
 
   size_t byte_offset = 0;
   int_builder.initialize_accessors(num_rows_expected, byte_offset, allocation);
-  byte_offset += num_rows_expected * sizeof(int32_t) + mask_bytes;
+  byte_offset += aligned_fixed_column_bytes(num_rows_expected, sizeof(int32_t));
   str_builder.initialize_accessors(num_rows_expected, byte_offset, allocation);
 
   duckdb::Vector int_vec(int_type, num_rows_expected);

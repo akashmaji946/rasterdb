@@ -54,7 +54,7 @@ namespace sirius::op::scan {
 /**
  * @brief The global state for a duckdb_scan_task.
  */
-class duckdb_scan_task_global_state : public sirius::parallel::itask_global_state,
+class duckdb_scan_task_global_state : public parallel::itask_global_state,
                                       public duckdb::GlobalSourceState {
   friend class duckdb_scan_task;
   friend class duckdb_scan_task_local_state;
@@ -140,7 +140,7 @@ class duckdb_scan_task_global_state : public sirius::parallel::itask_global_stat
  * chunks into those buffers.
  *
  */
-class duckdb_scan_task_local_state : public sirius::parallel::itask_local_state {
+class duckdb_scan_task_local_state : public parallel::itask_local_state {
   using data_batch = cucascade::data_batch;
 
  public:
@@ -171,7 +171,7 @@ class duckdb_scan_task_local_state : public sirius::parallel::itask_local_state 
 
     // The allocation accessors for the column data, mask, and offsets
     memory::multiple_blocks_allocation_accessor<uint8_t> data_blocks_accessor;
-    memory::multiple_blocks_allocation_accessor<uint8_t> mask_blocks_accessor;
+    memory::multiple_blocks_allocation_accessor<uint64_t> mask_blocks_accessor;
     memory::multiple_blocks_allocation_accessor<int64_t> offset_blocks_accessor;
 
     //===----------Constructors & Destructor----------===//
@@ -285,7 +285,7 @@ class duckdb_scan_task_local_state : public sirius::parallel::itask_local_state 
 
  private:
   //===----------Fields----------===//
-  size_t _approximate_batch_size;                ///< Approximate target batch size in bytes
+  size_t _batch_size;                            ///< Batch size in bytes
   size_t _default_varchar_size;                  ///< Default size for VARCHAR columns in bytes
   size_t _num_columns;                           ///< Number of columns to be scanned
   size_t _estimated_rows_per_batch;              ///< Estimated number of rows per batch
@@ -314,7 +314,7 @@ class duckdb_scan_task_local_state : public sirius::parallel::itask_local_state 
    *
    * @return The byte offset within the allocation where the column data ends.
    */
-  [[nodiscard]] size_t get_tail_byte_offset() const;
+  [[nodiscard]] size_t get_last_byte_offset() const;
 
   /**
    * @brief Estimate the maximum number of rows to process for a batch given the target batch size.
@@ -354,10 +354,8 @@ class duckdb_scan_task_local_state : public sirius::parallel::itask_local_state 
  * the batch to the data repository and notifying the task creator. If the table scan is
  * incomplete upon task completion, the task will push a new scan_task onto the task queue.
  */
-class duckdb_scan_task : public sirius::parallel::itask {
+class duckdb_scan_task : public parallel::itask {
   using shared_data_repository = cucascade::shared_data_repository;
-  // Friend declaration for test access
-  friend class test_scan_task;
 
  public:
   //===----------Constructor----------===//
@@ -373,9 +371,7 @@ class duckdb_scan_task : public sirius::parallel::itask {
                    shared_data_repository* data_repo,
                    std::unique_ptr<duckdb_scan_task_local_state> l_state,
                    std::shared_ptr<duckdb_scan_task_global_state> g_state)
-    : _task_id(task_id),
-      _data_repo(data_repo),
-      sirius::parallel::itask(std::move(l_state), g_state) {};
+    : _task_id(task_id), _data_repo(data_repo), parallel::itask(std::move(l_state), g_state) {};
 
   void execute() override;
 

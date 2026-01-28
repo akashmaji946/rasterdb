@@ -405,8 +405,9 @@ TEST_CASE("scan_executor - single threaded small table", "[scan_executor][single
 TEST_CASE("scan_executor - single threaded with small batches", "[scan_executor][single_thread]")
 {
   // Use a small batch size to force multiple batches
-  // With 4 columns (INT + BIGINT + DOUBLE + VARCHAR(256)) = 4 + 8 + 8 + 256 = 276 bytes per row
-  // So ~600000 bytes should fit about 2175 rows (1 vector)
+  // With 4 columns (INT + BIGINT + DOUBLE + VARCHAR(256)) plus VARCHAR offset + mask bytes
+  // Base estimate = 4 + 8 + 8 + 256 + 8 + 1 = 285 bytes per row
+  // So ~600000 bytes should fit about 2105 rows (1 vector)
   run_scan_test("test_medium", 10000, 1, 600000);
 }
 

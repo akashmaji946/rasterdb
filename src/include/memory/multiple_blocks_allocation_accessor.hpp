@@ -16,6 +16,9 @@
 
 #pragma once
 
+// sirius
+#include <helper/utils.hpp>
+
 // cucascade
 #include <cucascade/memory/fixed_size_host_memory_resource.hpp>
 
@@ -40,8 +43,8 @@ namespace sirius::memory {
  * NOTE: the caller is responsible for ensuring the cursor does not go out of bounds. Otherwise,
  * behavior is undefined.
  *
- * @tparam T The underlying data type to be accessed. It is assumed that T is aligned with the block
- * size of the allocation.
+ * @tparam T The underlying data type to be accessed. It must be aligned with the block size of the
+ * allocation.
  */
 template <typename T>
 struct multiple_blocks_allocation_accessor {
@@ -128,6 +131,7 @@ struct multiple_blocks_allocation_accessor {
    *
    * @tparam S The type to which to cast the value.
    * @param[in] allocation The allocation.
+   * @return The value at the current position cast to type S.
    */
   template <typename S>
   [[nodiscard]] S get_current_as(
@@ -145,6 +149,7 @@ struct multiple_blocks_allocation_accessor {
    * @brief Get the value at the current position in the allocation using the underlying type.
    *
    * @param[in] allocation The allocation.
+   * @return The value at the current position.
    */
   [[nodiscard]] T get_current(std::unique_ptr<multiple_blocks_allocation> const& allocation) const
   {
@@ -153,9 +158,16 @@ struct multiple_blocks_allocation_accessor {
 
   /**
    * @brief Get the value at a specific offset position from the initial offset.
+   *
+   * @param[in] offset The offset position from the initial byte offset.
+   * @param[in] allocation The allocation.
+   * @return The value at the specified offset.
+   *
+   *@note Use of this API is discouraged. It is necessary in arrow->duckdb string conversion to get
+   *the total data size for a bulk copy into a vector.
    */
   [[nodiscard]] T get(size_t offset,
-                      const std::unique_ptr<multiple_blocks_allocation>& allocation) const
+                      std::unique_ptr<multiple_blocks_allocation> const& allocation) const
   {
     size_t global_offset        = initial_byte_offset + sizeof(T) * offset;
     size_t temp_block_index     = global_offset / allocation->block_size();
@@ -252,10 +264,54 @@ struct multiple_blocks_allocation_accessor {
   }
 
   /**
+   * @brief Copy from a given source buffer into the allocation starting at the current position,
+   * returning the popcount of the copied data.
+   *
+   * We need to count the number of bits set to correctly set the null_count metadata for a
+   * host_table_allocation. This method only supports uint64_t underlying_type.
+   *
+   * @param[in] src Pointer to the source buffer.
+   * @param[in] words Number of uint64_t words to copy from the source buffer.
+   * @param[in,out] allocation The allocation.
+   * @return The total popcount of the copied data.
+   *
+   * @note This is used in the copy of duckdb validity masks to host_table_allocation masks to avoid
+   * an extra pass over the duckdb validity mask to count the number of nulls in the data chunk.
+   */
+  size_t memcpy_from_with_popcount(uint64_t const* src,
+                                   size_t words,
+                                   std::unique_ptr<multiple_blocks_allocation>& allocation)
+  {
+    static_assert(std::is_same_v<underlying_type, uint64_t>,
+                  "memcpy_from_popcount only supports uint64_t underlying_type");
+    size_t count        = 0;
+    size_t words_copied = 0;
+    while (words_copied < words) {
+      assert(block_index < allocation->get_blocks().size());
+      auto const words_to_copy =
+        std::min(words - words_copied, utils::div_8(allocation->block_size() - offset_in_block));
+      auto* dst = reinterpret_cast<uint64_t*>(allocation->get_blocks()[block_index]) +
+                  utils::div_8(offset_in_block);
+      for (size_t w = 0; w < words_to_copy; ++w) {
+        auto const val = src[words_copied + w];
+        dst[w]         = val;
+        count += std::popcount(val);
+      }
+      words_copied += words_to_copy;
+      offset_in_block += utils::mul_8(words_to_copy);
+      if (offset_in_block == allocation->block_size()) {
+        ++block_index;
+        offset_in_block = 0;
+      }
+    }
+    return count;
+  }
+
+  /**
    * @brief Copy the data from the allocation to a destination buffer.
    *
    * @param[in] allocation The allocation.
-   * @param[in] dest Pointer to the destination buffer.
+   * @param[in,out] dest Pointer to the destination buffer.
    * @param[in] bytes Number of bytes to copy to the destination buffer.
    */
   void memcpy_to(std::unique_ptr<multiple_blocks_allocation> const& allocation,

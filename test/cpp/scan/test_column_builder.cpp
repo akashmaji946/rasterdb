@@ -28,8 +28,12 @@
 #include <duckdb/common/types/vector.hpp>
 
 // standard library
+#include <chrono>
 #include <climits>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <numbers>
 
 using namespace sirius::op::scan;
@@ -52,6 +56,22 @@ static memory_space* get_host_space(duckdb::SiriusContext& sirius_ctx)
   auto spaces = mem_mgr.get_memory_spaces_for_tier(Tier::HOST);
   if (!spaces.empty()) { return const_cast<memory_space*>(spaces.front()); }
   return nullptr;
+}
+
+static size_t aligned_mask_bytes(size_t rows)
+{
+  return sirius::utils::align_8(sirius::utils::ceil_div_8(rows));
+}
+
+static size_t aligned_fixed_column_bytes(size_t rows, size_t type_size)
+{
+  return sirius::utils::align_8(rows * type_size) + aligned_mask_bytes(rows);
+}
+
+static size_t aligned_varchar_column_bytes(size_t rows, size_t default_varchar_size)
+{
+  return (rows + 1) * sizeof(int64_t) + sirius::utils::align_8(rows * default_varchar_size) +
+         aligned_mask_bytes(rows);
 }
 
 //===----------------------------------------------------------------------===//
@@ -146,7 +166,7 @@ TEST_CASE("column_builder - accessor initialization", "[duckdb_scan_task][column
 
     size_t num_rows = 100;
     // Calculate total size needed: data + mask
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
 
     auto allocation = create_test_allocation(total_size);
 
@@ -158,7 +178,7 @@ TEST_CASE("column_builder - accessor initialization", "[duckdb_scan_task][column
     REQUIRE(builder.data_blocks_accessor.offset_in_block == 0);
     REQUIRE(builder.mask_blocks_accessor.block_index == 0);
     // Mask starts after data
-    size_t expected_mask_offset = sizeof(int32_t) * num_rows;
+    size_t expected_mask_offset = sirius::utils::align_8(sizeof(int32_t) * num_rows);
     REQUIRE(builder.mask_blocks_accessor.offset_in_block ==
             expected_mask_offset % allocator->get_block_size());
   }
@@ -169,10 +189,8 @@ TEST_CASE("column_builder - accessor initialization", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(varchar_type, DEFAULT_VARCHAR_SIZE);
 
     size_t num_rows = 100;
-    // Calculate total size needed: offsets + data + mask
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        DEFAULT_VARCHAR_SIZE * num_rows +     // data
-                        sirius::utils::ceil_div_8(num_rows);  // mask
+    // Calculate total size needed: offsets + aligned data + aligned mask
+    size_t total_size = aligned_varchar_column_bytes(num_rows, DEFAULT_VARCHAR_SIZE);
 
     // Use the helper to create the allocation
     auto allocation = create_test_allocation(total_size);
@@ -183,7 +201,8 @@ TEST_CASE("column_builder - accessor initialization", "[duckdb_scan_task][column
     // Verify accessors were initialized correctly
     REQUIRE(builder.offset_blocks_accessor.block_index == 0);
     REQUIRE(builder.offset_blocks_accessor.offset_in_block == 0);
-    REQUIRE(builder.total_data_bytes_allocated == DEFAULT_VARCHAR_SIZE * num_rows);
+    REQUIRE(builder.total_data_bytes_allocated ==
+            sirius::utils::align_8(DEFAULT_VARCHAR_SIZE * num_rows));
 
     // Verify offset is initialized to zero
     REQUIRE(builder.offset_blocks_accessor.get_current(allocation) == 0);
@@ -210,9 +229,7 @@ TEST_CASE("column_builder - sufficient_space_for_column", "[duckdb_scan_task][co
 
     // Allocate space for 100 rows with default VARCHAR size
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        DEFAULT_VARCHAR_SIZE * num_rows +     // data
-                        sirius::utils::ceil_div_8(num_rows);  // mask
+    size_t total_size = aligned_varchar_column_bytes(num_rows, DEFAULT_VARCHAR_SIZE);
 
     // Use the helper to create the allocation
     auto allocation = create_test_allocation(total_size);
@@ -243,9 +260,7 @@ TEST_CASE("column_builder - sufficient_space_for_column", "[duckdb_scan_task][co
 
     // Allocate space for 10 rows with small VARCHAR size (10 bytes per row)
     size_t num_rows   = 10;
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        10 * num_rows +                       // data (10 bytes per row)
-                        sirius::utils::ceil_div_8(num_rows);  // mask
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 10);
 
     // Use the helper to create the allocation
     auto allocation = create_test_allocation(total_size);
@@ -282,7 +297,7 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -298,10 +313,10 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     builder.process_mask_for_column(validity, 16, 0, allocation);
 
     // Verify the mask was copied correctly
-    builder.mask_blocks_accessor.set_cursor(0);
-    auto mask_byte_0 = builder.mask_blocks_accessor.get_current(allocation);
-    builder.mask_blocks_accessor.advance();
-    auto mask_byte_1 = builder.mask_blocks_accessor.get_current(allocation);
+    builder.mask_blocks_accessor.reset_cursor();
+    auto mask_byte_0 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
+    auto mask_byte_1 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
 
     // Bit 3 and 7 should be 0 (invalid) in first byte
     REQUIRE((mask_byte_0 & (1 << 3)) == 0);
@@ -317,7 +332,7 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -335,11 +350,222 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     builder.process_mask_for_column(validity2, 8, 3, allocation);
 
     // Verify the unaligned write worked
-    builder.mask_blocks_accessor.set_cursor(0);
-    auto mask_byte_0 = builder.mask_blocks_accessor.get_current(allocation);
+    builder.mask_blocks_accessor.reset_cursor();
+    auto mask_byte_0 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
 
     // Bit 5 should be 0 (invalid)
     REQUIRE((mask_byte_0 & (1 << 5)) == 0);
+  }
+
+  SECTION("byte-unaligned all-valid small tail keeps cursor on partial byte")
+  {
+    auto int_type = duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER);
+    duckdb_scan_task_local_state::column_builder builder(int_type, 256);
+
+    size_t num_rows   = 16;
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    auto allocation   = create_test_allocation(total_size);
+    builder.initialize_accessors(num_rows, 0, allocation);
+
+    // Clear mask bytes for deterministic checks
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+    builder.mask_blocks_accessor.memset(0, aligned_mask_bytes(num_rows), allocation);
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+
+    // All-valid mask (GetData() == nullptr), unaligned and does NOT fill the byte
+    duckdb::ValidityMask validity(2);
+    builder.process_mask_for_column(validity, 2, 3, allocation);
+
+    auto const expected_offset = builder.mask_blocks_accessor.initial_byte_offset;
+    REQUIRE(builder.mask_blocks_accessor.block_index == expected_offset / allocation->block_size());
+    REQUIRE(builder.mask_blocks_accessor.offset_in_block ==
+            expected_offset % allocation->block_size());
+
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+    auto const mask_byte = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    REQUIRE((mask_byte & (1 << 3)) != 0);
+    REQUIRE((mask_byte & (1 << 4)) != 0);
+  }
+
+  SECTION("byte-unaligned non-null small tail keeps cursor on partial byte")
+  {
+    auto int_type = duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER);
+    duckdb_scan_task_local_state::column_builder builder(int_type, 256);
+
+    size_t num_rows   = 16;
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    auto allocation   = create_test_allocation(total_size);
+    builder.initialize_accessors(num_rows, 0, allocation);
+
+    // Clear mask bytes for deterministic checks
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+    builder.mask_blocks_accessor.memset(0, aligned_mask_bytes(num_rows), allocation);
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+
+    duckdb::ValidityMask validity(2);
+    validity.Initialize(2);
+    validity.SetAllValid(2);
+    validity.SetInvalid(1);  // Second bit should be 0
+    builder.process_mask_for_column(validity, 2, 3, allocation);
+
+    auto const expected_offset = builder.mask_blocks_accessor.initial_byte_offset;
+    REQUIRE(builder.mask_blocks_accessor.block_index == expected_offset / allocation->block_size());
+    REQUIRE(builder.mask_blocks_accessor.offset_in_block ==
+            expected_offset % allocation->block_size());
+
+    builder.mask_blocks_accessor.set_cursor(builder.mask_blocks_accessor.initial_byte_offset);
+    auto const mask_byte = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    REQUIRE((mask_byte & (1 << 3)) != 0);
+    REQUIRE((mask_byte & (1 << 4)) == 0);
+  }
+
+  SECTION("byte-unaligned mask processing - large tail across 64-bit boundary")
+  {
+    auto int_type = duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER);
+    duckdb_scan_task_local_state::column_builder builder(int_type, 256);
+
+    size_t const row_offset = 63;
+    size_t const num_rows   = 130;
+    size_t const total_rows = row_offset + num_rows;
+    size_t total_size       = aligned_fixed_column_bytes(total_rows, sizeof(int32_t));
+    auto allocation         = create_test_allocation(total_size);
+    builder.initialize_accessors(total_rows, 0, allocation);
+
+    duckdb::ValidityMask prefix_validity(row_offset);
+    prefix_validity.Initialize(row_offset);
+    prefix_validity.SetAllValid(row_offset);
+    builder.process_mask_for_column(prefix_validity, row_offset, 0, allocation);
+
+    duckdb::ValidityMask validity(num_rows);
+    validity.Initialize(num_rows);
+    validity.SetAllValid(num_rows);
+    validity.SetInvalid(0);
+    validity.SetInvalid(1);
+    validity.SetInvalid(63);
+    validity.SetInvalid(64);
+    validity.SetInvalid(129);
+    builder.process_mask_for_column(validity, num_rows, row_offset, allocation);
+
+    size_t const mask_offset = builder.mask_blocks_accessor.initial_byte_offset;
+    auto get_mask_bit        = [&](size_t bit_index) {
+      size_t const byte_index  = bit_index / 8;
+      size_t const bit_in_byte = bit_index % 8;
+      builder.mask_blocks_accessor.set_cursor(mask_offset + byte_index);
+      auto const mask_byte = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+      return (mask_byte >> bit_in_byte) & 0x1;
+    };
+
+    REQUIRE(get_mask_bit(0) == 1);
+    REQUIRE(get_mask_bit(62) == 1);
+    REQUIRE(get_mask_bit(row_offset + 0) == 0);
+    REQUIRE(get_mask_bit(row_offset + 1) == 0);
+    REQUIRE(get_mask_bit(row_offset + 63) == 0);
+    REQUIRE(get_mask_bit(row_offset + 64) == 0);
+    REQUIRE(get_mask_bit(row_offset + 129) == 0);
+    REQUIRE(get_mask_bit(row_offset + 2) == 1);
+    REQUIRE(get_mask_bit(row_offset + 128) == 1);
+  }
+
+  SECTION("byte-unaligned tail writes expected invalid bits")
+  {
+    auto int_type = duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER);
+    duckdb_scan_task_local_state::column_builder builder(int_type, 256);
+
+    size_t const total_rows = 128;
+    size_t const row_offset = 3;
+    size_t const num_rows   = 60;
+    size_t total_size       = aligned_fixed_column_bytes(total_rows, sizeof(int32_t));
+    auto allocation         = create_test_allocation(total_size);
+    builder.initialize_accessors(total_rows, 0, allocation);
+
+    duckdb::ValidityMask prefix_validity(row_offset);
+    prefix_validity.Initialize(row_offset);
+    prefix_validity.SetAllValid(row_offset);
+    builder.process_mask_for_column(prefix_validity, row_offset, 0, allocation);
+
+    duckdb::ValidityMask validity(num_rows);
+    validity.Initialize(num_rows);
+    validity.SetAllValid(num_rows);
+    validity.SetInvalid(10);
+    validity.SetInvalid(59);
+    size_t const mask_offset = builder.mask_blocks_accessor.initial_byte_offset;
+    builder.mask_blocks_accessor.set_cursor(mask_offset + row_offset / 8);
+    builder.process_mask_for_column(validity, num_rows, row_offset, allocation);
+
+    auto get_mask_bit = [&](size_t bit_index) {
+      size_t const byte_index  = bit_index / 8;
+      size_t const bit_in_byte = bit_index % 8;
+      builder.mask_blocks_accessor.set_cursor(mask_offset + byte_index);
+      auto const mask_byte = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+      return (mask_byte >> bit_in_byte) & 0x1;
+    };
+
+    REQUIRE(get_mask_bit(row_offset - 1) == 1);
+    REQUIRE(get_mask_bit(row_offset + 10) == 0);
+    REQUIRE(get_mask_bit(row_offset + 59) == 0);
+  }
+
+  SECTION("byte-unaligned mask processing (perf, manual)")
+  {
+    // sysbench reports Ming's machine as having 6.3 GB/s memory bandwidth
+    if (std::getenv("SIRIUS_BENCH_MASK") == nullptr) {
+      SUCCEED("Set SIRIUS_BENCH_MASK=1 to enable perf loop.");
+      return;
+    }
+
+    auto parse_env_size = [](const char* name, size_t default_value) {
+      if (auto* value = std::getenv(name)) {
+        char* end   = nullptr;
+        auto parsed = std::strtoull(value, &end, 10);
+        if (end != value && parsed > 0) { return static_cast<size_t>(parsed); }
+      }
+      return default_value;
+    };
+
+    auto int_type = duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER);
+    duckdb_scan_task_local_state::column_builder builder(int_type, 256);
+
+    size_t const num_rows = parse_env_size("SIRIUS_BENCH_MASK_ROWS", 1 << 24);
+    size_t const iters    = parse_env_size("SIRIUS_BENCH_MASK_ITERS", 1000);
+    size_t total_size     = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    auto allocation       = create_test_allocation(total_size);
+    builder.initialize_accessors(num_rows, 0, allocation);
+
+    for (auto* block : allocation->get_blocks()) {
+      std::memset(block, 0, allocation->block_size());
+    }
+
+    duckdb::ValidityMask validity(num_rows);
+    validity.Initialize(num_rows);
+    validity.SetAllValid(num_rows);
+
+    size_t const row_offset = 3;
+    builder.mask_blocks_accessor.reset_cursor();
+    builder.mask_blocks_accessor.set_current(
+      static_cast<uint64_t>(sirius::utils::make_mask<uint64_t>(row_offset)), allocation);
+
+    // Warm-up
+    for (size_t i = 0; i < 5; ++i) {
+      builder.mask_blocks_accessor.reset_cursor();
+      builder.process_mask_for_column(validity, num_rows, row_offset, allocation);
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < iters; ++i) {
+      builder.mask_blocks_accessor.reset_cursor();
+      builder.process_mask_for_column(validity, num_rows, row_offset, allocation);
+    }
+    auto end         = std::chrono::steady_clock::now();
+    auto elapsed     = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    auto avg_us      = static_cast<double>(elapsed) / static_cast<double>(iters);
+    auto mask_bytes  = static_cast<double>(sirius::utils::ceil_div_8(num_rows));
+    auto total_bytes = mask_bytes * static_cast<double>(iters);
+    auto seconds     = static_cast<double>(elapsed) / 1'000'000.0;
+    auto mb_per_sec  = seconds > 0.0 ? (2 * total_bytes / (1024.0 * 1024.0)) / seconds : 0.0;
+
+    std::cout << "[bench] process_mask_for_column unaligned rows=" << num_rows << " iters=" << iters
+              << " total_us=" << elapsed << " avg_us=" << avg_us << " MB/s=" << mb_per_sec
+              << std::endl;
   }
 
   SECTION("null_count reflects invalid rows in validity mask")
@@ -348,7 +574,7 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -372,7 +598,7 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -395,7 +621,7 @@ TEST_CASE("column_builder - process_mask_for_column", "[duckdb_scan_task][column
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -424,7 +650,7 @@ TEST_CASE("column_builder - process_column for fixed-width types",
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -463,7 +689,7 @@ TEST_CASE("column_builder - process_column for fixed-width types",
     duckdb_scan_task_local_state::column_builder builder(bigint_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int64_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int64_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -500,7 +726,7 @@ TEST_CASE("column_builder - process_column for fixed-width types",
     duckdb_scan_task_local_state::column_builder builder(double_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(double) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(double));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -538,10 +764,8 @@ TEST_CASE("column_builder - process_column for VARCHAR", "[duckdb_scan_task][col
     duckdb_scan_task_local_state::column_builder builder(varchar_type, DEFAULT_VARCHAR_SIZE);
 
     size_t num_rows   = 10;
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        DEFAULT_VARCHAR_SIZE * num_rows +     // data
-                        sirius::utils::ceil_div_8(num_rows);  // mask
-    auto allocation = create_test_allocation(total_size);
+    size_t total_size = aligned_varchar_column_bytes(num_rows, DEFAULT_VARCHAR_SIZE);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Create a DuckDB vector with string data
@@ -584,10 +808,8 @@ TEST_CASE("column_builder - process_column for VARCHAR", "[duckdb_scan_task][col
     duckdb_scan_task_local_state::column_builder builder(varchar_type, DEFAULT_VARCHAR_SIZE);
 
     size_t num_rows   = 10;
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        DEFAULT_VARCHAR_SIZE * num_rows +     // data
-                        sirius::utils::ceil_div_8(num_rows);  // mask
-    auto allocation = create_test_allocation(total_size);
+    size_t total_size = aligned_varchar_column_bytes(num_rows, DEFAULT_VARCHAR_SIZE);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Create a DuckDB vector with string data
@@ -638,7 +860,7 @@ TEST_CASE("column_builder - multiple batch processing", "[duckdb_scan_task][colu
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -674,10 +896,8 @@ TEST_CASE("column_builder - multiple batch processing", "[duckdb_scan_task][colu
     duckdb_scan_task_local_state::column_builder builder(varchar_type, 256);
 
     size_t num_rows   = 20;
-    size_t total_size = sizeof(int64_t) * (num_rows + 1) +    // offsets
-                        256 * num_rows +                      // data
-                        sirius::utils::ceil_div_8(num_rows);  // mask
-    auto allocation = create_test_allocation(total_size);
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 256);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Process first batch
@@ -719,7 +939,7 @@ TEST_CASE("column_builder - multiple batch processing", "[duckdb_scan_task][colu
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -754,10 +974,10 @@ TEST_CASE("column_builder - multiple batch processing", "[duckdb_scan_task][colu
 
     // Verify mask has correct NULLs (rows 2, 5, and 9 should be NULL)
     // In DuckDB validity masks: 1 = valid, 0 = invalid
-    builder.mask_blocks_accessor.set_cursor(0);
-    auto mask_byte_0 = builder.mask_blocks_accessor.get_current(allocation);
-    builder.mask_blocks_accessor.advance();
-    auto mask_byte_1 = builder.mask_blocks_accessor.get_current(allocation);
+    builder.mask_blocks_accessor.reset_cursor();
+    auto mask_byte_0 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
+    auto mask_byte_1 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
 
     // Row 2 should be NULL (bit 2 in first byte should be 0)
     REQUIRE((mask_byte_0 & (1 << 2)) == 0);
@@ -780,7 +1000,7 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -801,7 +1021,7 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 100;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -821,11 +1041,11 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     // The mask accessor starts at byte offset (sizeof(int32_t) * 100) in the allocation
     // After process_column, it should be at the correct position to read the mask
     // Reset to the mask start position
-    size_t mask_offset = sizeof(int32_t) * num_rows;
+    size_t mask_offset = sirius::utils::align_8(sizeof(int32_t) * num_rows);
     builder.mask_blocks_accessor.set_cursor(mask_offset);
-    auto mask_byte_0 = builder.mask_blocks_accessor.get_current(allocation);
-    builder.mask_blocks_accessor.advance();
-    auto mask_byte_1 = builder.mask_blocks_accessor.get_current(allocation);
+    auto mask_byte_0 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
+    auto mask_byte_1 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
 
     REQUIRE(mask_byte_0 == 0);
     auto const tail_bits = static_cast<uint8_t>(processed_rows % CHAR_BIT);
@@ -842,11 +1062,9 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     auto varchar_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     duckdb_scan_task_local_state::column_builder builder(varchar_type, 256);
 
-    size_t num_rows      = 10;
-    size_t max_data_size = 1024;
-    size_t total_size =
-      max_data_size + (num_rows + 1) * sizeof(int64_t) + sirius::utils::ceil_div_8(num_rows);
-    auto allocation = create_test_allocation(total_size);
+    size_t num_rows   = 10;
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 256);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Create vector with empty strings
@@ -886,11 +1104,9 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     auto varchar_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     duckdb_scan_task_local_state::column_builder builder(varchar_type, 256);
 
-    size_t num_rows      = 10;
-    size_t max_data_size = 1024;
-    size_t total_size =
-      max_data_size + (num_rows + 1) * sizeof(int64_t) + sirius::utils::ceil_div_8(num_rows);
-    auto allocation = create_test_allocation(total_size);
+    size_t num_rows   = 10;
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 256);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Mix of empty and non-empty strings
@@ -936,7 +1152,7 @@ TEST_CASE("column_builder - edge cases", "[duckdb_scan_task][column_builder]")
     duckdb_scan_task_local_state::column_builder builder(int_type, 256);
 
     size_t num_rows   = 10;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -978,12 +1194,10 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     duckdb_scan_task_local_state::column_builder int_builder(int_type, 256);
     duckdb_scan_task_local_state::column_builder bigint_builder(bigint_type, 256);
 
-    size_t num_rows         = 10;
-    size_t int_data_size    = sizeof(int32_t) * num_rows;
-    size_t int_mask_size    = sirius::utils::ceil_div_8(num_rows);
-    size_t bigint_data_size = sizeof(int64_t) * num_rows;
-    size_t bigint_mask_size = sirius::utils::ceil_div_8(num_rows);
-    size_t total_size       = int_data_size + int_mask_size + bigint_data_size + bigint_mask_size;
+    size_t num_rows            = 10;
+    size_t int_column_bytes    = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    size_t bigint_column_bytes = aligned_fixed_column_bytes(num_rows, sizeof(int64_t));
+    size_t total_size          = int_column_bytes + bigint_column_bytes;
 
     auto allocation = create_test_allocation(total_size);
 
@@ -992,7 +1206,7 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     int_builder.initialize_accessors(num_rows, int_byte_offset, allocation);
 
     // Initialize BIGINT column after INT column
-    size_t bigint_byte_offset = int_data_size + int_mask_size;
+    size_t bigint_byte_offset = int_column_bytes;
     bigint_builder.initialize_accessors(num_rows, bigint_byte_offset, allocation);
 
     // Process INT data
@@ -1043,14 +1257,10 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     duckdb_scan_task_local_state::column_builder int_builder(int_type, 256);
     duckdb_scan_task_local_state::column_builder varchar_builder(varchar_type, 256);
 
-    size_t num_rows            = 5;
-    size_t int_data_size       = sizeof(int32_t) * num_rows;
-    size_t int_mask_size       = sirius::utils::ceil_div_8(num_rows);
-    size_t varchar_offset_size = (num_rows + 1) * sizeof(int64_t);
-    size_t varchar_data_size   = 256 * num_rows;  // Max data size
-    size_t varchar_mask_size   = sirius::utils::ceil_div_8(num_rows);
-    size_t total_size =
-      int_data_size + int_mask_size + varchar_offset_size + varchar_data_size + varchar_mask_size;
+    size_t num_rows             = 5;
+    size_t int_column_bytes     = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    size_t varchar_column_bytes = aligned_varchar_column_bytes(num_rows, 256);
+    size_t total_size           = int_column_bytes + varchar_column_bytes;
 
     auto allocation = create_test_allocation(total_size);
 
@@ -1059,7 +1269,7 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     int_builder.initialize_accessors(num_rows, int_byte_offset, allocation);
 
     // Initialize VARCHAR column after INT column
-    size_t varchar_byte_offset = int_data_size + int_mask_size;
+    size_t varchar_byte_offset = int_column_bytes;
     varchar_builder.initialize_accessors(num_rows, varchar_byte_offset, allocation);
 
     // Process INT data
@@ -1124,12 +1334,11 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     duckdb_scan_task_local_state::column_builder double_builder(double_type, 256);
     duckdb_scan_task_local_state::column_builder varchar_builder(varchar_type, 256);
 
-    size_t num_rows    = 8;
-    size_t int_size    = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
-    size_t double_size = sizeof(double) * num_rows + sirius::utils::ceil_div_8(num_rows);
-    size_t varchar_size =
-      (num_rows + 1) * sizeof(int64_t) + 256 * num_rows + sirius::utils::ceil_div_8(num_rows);
-    size_t total_size = int_size + double_size + varchar_size;
+    size_t num_rows     = 8;
+    size_t int_size     = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
+    size_t double_size  = aligned_fixed_column_bytes(num_rows, sizeof(double));
+    size_t varchar_size = aligned_varchar_column_bytes(num_rows, 256);
+    size_t total_size   = int_size + double_size + varchar_size;
 
     auto allocation = create_test_allocation(total_size);
 
@@ -1182,16 +1391,17 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     REQUIRE(varchar_builder.null_count == 2);
 
     // Verify INT NULLs
-    int_builder.mask_blocks_accessor.set_cursor(sizeof(int32_t) * num_rows);
-    uint8_t int_mask = int_builder.mask_blocks_accessor.get_current(allocation);
+    int_builder.mask_blocks_accessor.set_cursor(sirius::utils::align_8(sizeof(int32_t) * num_rows));
+    uint8_t int_mask = int_builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
     REQUIRE((int_mask & (1 << 2)) == 0);  // Row 2 is NULL
     REQUIRE((int_mask & (1 << 5)) == 0);  // Row 5 is NULL
     REQUIRE((int_mask & (1 << 0)) != 0);  // Row 0 is valid
     REQUIRE((int_mask & (1 << 1)) != 0);  // Row 1 is valid
 
     // Verify DOUBLE NULLs
-    double_builder.mask_blocks_accessor.set_cursor(int_size + sizeof(double) * num_rows);
-    uint8_t double_mask = double_builder.mask_blocks_accessor.get_current(allocation);
+    double_builder.mask_blocks_accessor.set_cursor(
+      sirius::utils::align_8(int_size + sizeof(double) * num_rows));
+    uint8_t double_mask = double_builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
     REQUIRE((double_mask & (1 << 1)) == 0);  // Row 1 is NULL
     REQUIRE((double_mask & (1 << 6)) == 0);  // Row 6 is NULL
     REQUIRE((double_mask & (1 << 0)) != 0);  // Row 0 is valid
@@ -1201,9 +1411,9 @@ TEST_CASE("column_builder - packed allocation multiple columns",
     // Where total_data_bytes_allocated = num_rows * default_varchar_size = 8 * 256 = 2048
     size_t varchar_data_offset = int_size + double_size + (num_rows + 1) * sizeof(int64_t);
     size_t varchar_mask_offset =
-      varchar_data_offset + (num_rows * 256);  // 256 is default_varchar_size
+      varchar_data_offset + sirius::utils::align_8(num_rows * 256);  // 256 is default_varchar_size
     varchar_builder.mask_blocks_accessor.set_cursor(varchar_mask_offset);
-    uint8_t varchar_mask = varchar_builder.mask_blocks_accessor.get_current(allocation);
+    uint8_t varchar_mask = varchar_builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
     REQUIRE((varchar_mask & (1 << 0)) == 0);  // Row 0 is NULL
     REQUIRE((varchar_mask & (1 << 7)) == 0);  // Row 7 is NULL
     REQUIRE((varchar_mask & (1 << 1)) != 0);  // Row 1 is valid
@@ -1221,13 +1431,11 @@ TEST_CASE("column_builder - VARCHAR space checking edge cases",
   {
     auto varchar_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     duckdb_scan_task_local_state::column_builder builder(
-      varchar_type, 4);  // Small default size: 5 rows * 4 bytes = 20 bytes allocated
+      varchar_type, 4);  // Small default size: 5 rows * 4 bytes = 20 bytes (aligned to 24)
 
-    size_t num_rows      = 5;
-    size_t max_data_size = 20;  // Only 20 bytes of data space
-    size_t total_size =
-      max_data_size + (num_rows + 1) * sizeof(int64_t) + sirius::utils::ceil_div_8(num_rows);
-    auto allocation = create_test_allocation(total_size);
+    size_t num_rows   = 5;
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 4);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // Create vector with strings that exceed allocated space
@@ -1259,11 +1467,9 @@ TEST_CASE("column_builder - VARCHAR space checking edge cases",
     auto varchar_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     duckdb_scan_task_local_state::column_builder builder(varchar_type, 256);
 
-    size_t num_rows      = 10;
-    size_t max_data_size = 1024;
-    size_t total_size =
-      max_data_size + (num_rows + 1) * sizeof(int64_t) + sirius::utils::ceil_div_8(num_rows);
-    auto allocation = create_test_allocation(total_size);
+    size_t num_rows   = 10;
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 256);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     // All NULLs - strings don't matter
@@ -1296,11 +1502,9 @@ TEST_CASE("column_builder - VARCHAR space checking edge cases",
     auto varchar_type = duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR);
     duckdb_scan_task_local_state::column_builder builder(varchar_type, 256);
 
-    size_t num_rows      = 10;
-    size_t max_data_size = 1024;
-    size_t total_size =
-      max_data_size + (num_rows + 1) * sizeof(int64_t) + sirius::utils::ceil_div_8(num_rows);
-    auto allocation = create_test_allocation(total_size);
+    size_t num_rows   = 10;
+    size_t total_size = aligned_varchar_column_bytes(num_rows, 256);
+    auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
     duckdb::Vector vec(varchar_type, 10);
@@ -1350,7 +1554,7 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
 
     // Test with exactly 16 rows (2 mask bytes)
     size_t num_rows   = 16;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -1372,10 +1576,10 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
     REQUIRE(builder.null_count == 2);
 
     // Check mask bytes
-    builder.mask_blocks_accessor.set_cursor(sizeof(int32_t) * num_rows);
-    uint8_t mask_byte_0 = builder.mask_blocks_accessor.get_current(allocation);
-    builder.mask_blocks_accessor.advance();
-    uint8_t mask_byte_1 = builder.mask_blocks_accessor.get_current(allocation);
+    builder.mask_blocks_accessor.set_cursor(sirius::utils::align_8(sizeof(int32_t) * num_rows));
+    uint8_t mask_byte_0 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
+    uint8_t mask_byte_1 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
 
     // Bit 7 of first byte should be 0
     REQUIRE((mask_byte_0 & (1 << 7)) == 0);
@@ -1395,7 +1599,7 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
 
     // Test with 24 rows (3 mask bytes)
     size_t num_rows   = 24;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -1409,11 +1613,11 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
     REQUIRE(builder.null_count == 24);
 
     // All mask bytes should be 0 (all rows NULL)
-    builder.mask_blocks_accessor.set_cursor(sizeof(int32_t) * num_rows);
+    builder.mask_blocks_accessor.set_cursor(sirius::utils::align_8(sizeof(int32_t) * num_rows));
     for (size_t i = 0; i < 3; ++i) {
-      uint8_t mask_byte = builder.mask_blocks_accessor.get_current(allocation);
+      uint8_t mask_byte = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
       REQUIRE(mask_byte == 0);
-      builder.mask_blocks_accessor.advance();
+      builder.mask_blocks_accessor.advance_as<uint8_t>();
     }
   }
 
@@ -1424,7 +1628,7 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
 
     // Test with 20 rows (3 mask bytes, last one partial)
     size_t num_rows   = 20;
-    size_t total_size = sizeof(int32_t) * num_rows + sirius::utils::ceil_div_8(num_rows);
+    size_t total_size = aligned_fixed_column_bytes(num_rows, sizeof(int32_t));
     auto allocation   = create_test_allocation(total_size);
     builder.initialize_accessors(num_rows, 0, allocation);
 
@@ -1443,13 +1647,13 @@ TEST_CASE("column_builder - NULL handling at boundaries", "[duckdb_scan_task][co
     REQUIRE(builder.null_count == 0);
 
     // First two mask bytes should be 0xFF (all valid)
-    builder.mask_blocks_accessor.set_cursor(sizeof(int32_t) * num_rows);
-    REQUIRE(builder.mask_blocks_accessor.get_current(allocation) == 0xFF);
-    builder.mask_blocks_accessor.advance();
-    REQUIRE(builder.mask_blocks_accessor.get_current(allocation) == 0xFF);
-    builder.mask_blocks_accessor.advance();
+    builder.mask_blocks_accessor.set_cursor(sirius::utils::align_8(sizeof(int32_t) * num_rows));
+    REQUIRE(builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation) == 0xFF);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
+    REQUIRE(builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation) == 0xFF);
+    builder.mask_blocks_accessor.advance_as<uint8_t>();
     // Third mask byte should have first 4 bits set (rows 16-19)
-    uint8_t mask_byte_2 = builder.mask_blocks_accessor.get_current(allocation);
+    uint8_t mask_byte_2 = builder.mask_blocks_accessor.get_current_as<uint8_t>(allocation);
     REQUIRE((mask_byte_2 & 0x0F) == 0x0F);
   }
 }

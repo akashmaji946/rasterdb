@@ -29,6 +29,10 @@
 #include <duckdb/common/types.hpp>
 #include <duckdb/function/table_function.hpp>
 
+// standard library
+#include <limits>
+#include <numeric>
+
 namespace sirius::op::scan {
 
 //===----------------------------------------------------------------------===//
@@ -87,6 +91,7 @@ void duckdb_scan_task_local_state::column_builder::initialize_accessors(
 {
   assert(allocation != nullptr);
   assert(!allocation->get_blocks().empty());
+  assert(utils::mod_8(byte_offset) == 0);  // byte_offset must be 8B-aligned
 
   if (type.InternalType() == duckdb::PhysicalType::VARCHAR) {
     // Initialize offset accessor
@@ -94,33 +99,30 @@ void duckdb_scan_task_local_state::column_builder::initialize_accessors(
     // Write the initial offset value of 0
     offset_blocks_accessor.set_current(0, allocation);
     // Initialize data accessor
-    total_data_bytes_allocated = estimated_num_rows * type_size;
-    size_t data_byte_offset    = byte_offset + (estimated_num_rows + 1) * sizeof(int64_t);
+    auto const data_byte_offset = byte_offset + (estimated_num_rows + 1) * sizeof(int64_t);
     data_blocks_accessor.initialize(data_byte_offset, allocation);
     // Initialize mask accessor
-    size_t mask_byte_offset = data_byte_offset + total_data_bytes_allocated;
+    total_data_bytes_allocated  = utils::align_8(estimated_num_rows * type_size);
+    auto const mask_byte_offset = data_byte_offset + total_data_bytes_allocated;
     mask_blocks_accessor.initialize(mask_byte_offset, allocation);
   } else {
     // Fixed-width column
     data_blocks_accessor.initialize(byte_offset, allocation);
-    size_t mask_byte_offset = byte_offset + estimated_num_rows * type_size;
+    auto const mask_byte_offset = utils::align_8(byte_offset + estimated_num_rows * type_size);
     mask_blocks_accessor.initialize(mask_byte_offset, allocation);
   }
 }
 
-// This method should be called only on variable-length data
 bool duckdb_scan_task_local_state::column_builder::sufficient_space_for_column(
   duckdb::Vector& vec, duckdb::ValidityMask const& validity, size_t num_rows)
 {
-  size_t data_bytes = 0;
-  if (type.InternalType() == duckdb::PhysicalType::VARCHAR) {
-    auto const* str_data = reinterpret_cast<duckdb::string_t const*>(vec.GetData());
-    for (size_t row = 0; row < num_rows; ++row) {
-      if (validity.RowIsValid(row)) { data_bytes += str_data[row].GetSize(); }
-    }
-  } else {
-    // Fixed-width column
-    data_bytes = type_size * num_rows;
+  // This method should be called only on variable-length data
+  assert(type.InternalType() == duckdb::PhysicalType::VARCHAR);
+
+  size_t data_bytes    = 0;
+  auto const* str_data = reinterpret_cast<duckdb::string_t const*>(vec.GetData());
+  for (size_t row = 0; row < num_rows; ++row) {
+    if (validity.RowIsValid(row)) { data_bytes += str_data[row].GetSize(); }
   }
   return data_bytes + total_data_bytes <= total_data_bytes_allocated;
 }
@@ -131,80 +133,116 @@ void duckdb_scan_task_local_state::column_builder::process_mask_for_column(
   size_t row_offset,
   std::unique_ptr<multiple_blocks_allocation>& allocation)
 {
-  auto const* src_valid = reinterpret_cast<uint8_t const*>(validity.GetData());
-  auto const cur_bit    = utils::mod_8(row_offset);  //< bit offset in current byte
+  uint64_t constexpr bit_width = std::numeric_limits<uint64_t>::digits;
+
+  auto const* src_valid = validity.GetData();
+  auto const cur_bit    = utils::mod<bit_width>(row_offset);
   auto const num_bits   = num_rows;
 
+  if (cur_bit == 0) {
+    //===----------Byte Aligned Case----------===//
+    auto const full_words = utils::div<bit_width>(num_rows);
+    auto const tail_bits  = utils::mod<bit_width>(num_rows);
+    if (src_valid == nullptr) {
+      //===----------All Valid----------===//
+      // Set all bits in the mask to valid
+      if (full_words != 0) {
+        mask_blocks_accessor.memset(FULL_MASK, full_words * sizeof(uint64_t), allocation);
+      }
+      if (tail_bits != 0) {
+        auto const tail_mask = utils::make_mask<uint64_t>(tail_bits);
+        mask_blocks_accessor.set_current(tail_mask, allocation);
+      }
+      return;
+    }
+    //===----------Some Invalid----------===//
+    size_t valid_count = 0;
+    if (full_words != 0) {
+      valid_count =
+        mask_blocks_accessor.memcpy_from_with_popcount(src_valid, full_words, allocation);
+    }
+    if (tail_bits != 0) {
+      auto const tail_mask = utils::make_mask<uint64_t>(tail_bits);
+      auto const tail      = src_valid[full_words] & tail_mask;
+      mask_blocks_accessor.set_current(tail, allocation);
+      valid_count += std::popcount(tail);
+    }
+    null_count += num_rows - valid_count;
+    return;
+  }
+
+  //===----------Byte Unaligned Case----------===//
   if (src_valid == nullptr) {
     //===----------All Valid----------===//
-    // Set all bits in the mask to valid
-    size_t full_bytes = 0;
-    size_t tail_bits  = 0;
-    if (cur_bit != 0) {
-      //===----------Byte Unaligned Case----------===//
-      auto const bits_in_current_byte = std::min<uint32_t>(CHAR_BIT - cur_bit, num_bits);
-      auto const remaining_bits =
-        num_bits - bits_in_current_byte;  // Remaining bits after filling current byte
-      full_bytes = utils::div_8(remaining_bits);
-      tail_bits  = utils::mod_8(remaining_bits);
+    auto const bits_in_current_word = std::min(bit_width - cur_bit, num_bits);
+    auto const remaining_bits =
+      num_bits - bits_in_current_word;  // Remaining bits after filling current word
+    auto const full_words = utils::div<bit_width>(remaining_bits);
+    auto const tail_bits  = utils::mod<bit_width>(remaining_bits);
 
-      // Set bits in the current byte
-      auto const current_byte_mask =
-        static_cast<uint8_t>(utils::make_mask<uint8_t>(bits_in_current_byte) << cur_bit);
-      auto const current_byte = mask_blocks_accessor.get_current(allocation);
-      mask_blocks_accessor.set_current(current_byte | current_byte_mask, allocation);
-      if (bits_in_current_byte + cur_bit == CHAR_BIT) { mask_blocks_accessor.advance(); }
-    } else {
-      //===----------Byte Aligned Case----------===//
-      full_bytes = utils::div_8(num_bits);
-      tail_bits  = utils::mod_8(num_bits);
+    // Set bits in the current byte
+    auto const current_word_mask =
+      static_cast<uint64_t>(utils::make_mask<uint64_t>(bits_in_current_word) << cur_bit);
+    auto const current_word = mask_blocks_accessor.get_current(allocation);
+    mask_blocks_accessor.set_current(current_word | current_word_mask, allocation);
+    if (bits_in_current_word + cur_bit == bit_width) { mask_blocks_accessor.advance(); }
+    if (full_words != 0) {
+      // Set full words to all valid
+      mask_blocks_accessor.memset(FULL_MASK, full_words * sizeof(uint64_t), allocation);
     }
-    if (full_bytes != 0) { mask_blocks_accessor.memset(FULL_MASK, full_bytes, allocation); }
     if (tail_bits != 0) {
-      auto const tail_mask = utils::make_mask<uint8_t>(tail_bits);
+      // Set tail bits
+      auto const tail_mask = utils::make_mask<uint64_t>(tail_bits);
       mask_blocks_accessor.set_current(tail_mask, allocation);
     }
     return;
   }
-  // condition: src_valid != nullptr
+  //===----------Some Invalid----------===//
+  // THIS CODE PATH IS PERFORMANCE HOTSPOT
+  auto const full_words = utils::div<bit_width>(num_bits);
+  auto const tail_bits  = utils::mod<bit_width>(num_bits);
+  auto const cur_shift  = static_cast<uint64_t>(cur_bit);
+  auto const upper_mask = utils::make_mask<uint64_t>(cur_shift);
+  auto const next_shift = static_cast<uint64_t>(bit_width - cur_bit);
+  auto const lower_mask = utils::make_mask<uint64_t>(next_shift);
 
-  // Update the null count
-  null_count += num_rows - validity.CountValid(num_rows);
-
-  auto const full_bytes = utils::div_8(num_bits);
-  auto const tail_bits  = utils::mod_8(num_bits);
-  if (cur_bit == 0) {
-    //===----------Byte Aligned Case----------===//
-    mask_blocks_accessor.memcpy_from(src_valid, full_bytes, allocation);
-    if (tail_bits > 0) {
-      auto const tail_mask = utils::make_mask<uint8_t>(tail_bits);
-      auto const tail      = src_valid[full_bytes] & tail_mask;
-      mask_blocks_accessor.set_current(tail, allocation);
+  auto* block_words =
+    reinterpret_cast<uint64_t*>(allocation->get_blocks()[mask_blocks_accessor.block_index] +
+                                mask_blocks_accessor.offset_in_block);
+  uint64_t upper_bits    = block_words[0] & upper_mask;
+  size_t words_processed = 0;
+  while (words_processed < full_words) {
+    auto const words_to_process = std::min(
+      full_words - words_processed,
+      (allocation->block_size() - mask_blocks_accessor.offset_in_block) / sizeof(uint64_t));
+    for (size_t w = 0; w < words_to_process; ++w) {
+      auto const src_word = src_valid[words_processed + w];
+      null_count += bit_width - std::popcount(src_word);
+      auto const lower_bits  = static_cast<uint64_t>((src_word & lower_mask) << cur_shift);
+      auto const word_to_set = upper_bits | lower_bits;
+      block_words[w]         = word_to_set;
+      upper_bits             = static_cast<uint64_t>((src_word >> next_shift) & upper_mask);
     }
-  } else {
-    //===----------Byte Unaligned Case----------===//
-    auto const cur_shift  = static_cast<uint8_t>(cur_bit);
-    auto const upper_mask = utils::make_mask<uint8_t>(cur_shift);
-    auto const next_shift = static_cast<uint8_t>(CHAR_BIT - cur_bit);
-    auto const lower_mask = utils::make_mask<uint8_t>(next_shift);
-    auto current_byte     = mask_blocks_accessor.get_current(allocation);
-    for (size_t b = 0; b < full_bytes; ++b) {
-      auto const src_byte   = src_valid[b];
-      auto const lower_bits = static_cast<uint8_t>((src_byte & lower_mask) << cur_shift);
-      mask_blocks_accessor.set_current(current_byte | lower_bits, allocation);
+    words_processed += words_to_process;
+    mask_blocks_accessor.offset_in_block += words_to_process * sizeof(uint64_t);
+    if (mask_blocks_accessor.offset_in_block == allocation->block_size()) {
+      // Advance to next block
+      mask_blocks_accessor.block_index++;
+      mask_blocks_accessor.offset_in_block = 0;
+      block_words =
+        reinterpret_cast<uint64_t*>(allocation->get_blocks()[mask_blocks_accessor.block_index]);
+    }
+  }
+  if (tail_bits != 0) {
+    auto const src_block = src_valid[full_words] & utils::make_mask<uint64_t>(tail_bits);
+    null_count += tail_bits - std::popcount(src_block);
+    auto const lower_bits  = static_cast<uint64_t>((src_block & lower_mask) << cur_shift);
+    auto const word_to_set = upper_bits | lower_bits;
+    mask_blocks_accessor.set_current(word_to_set, allocation);
+    if (tail_bits >= next_shift) {
+      upper_bits = static_cast<uint64_t>((src_block >> next_shift) & upper_mask);
       mask_blocks_accessor.advance();
-      current_byte = static_cast<uint8_t>((src_byte >> next_shift) & upper_mask);
-    }
-    if (tail_bits != 0) {
-      auto const tail_mask  = utils::make_mask<uint8_t>(tail_bits);
-      auto const src_byte   = src_valid[full_bytes] & tail_mask;
-      auto const lower_bits = static_cast<uint8_t>((src_byte & lower_mask) << cur_shift);
-      mask_blocks_accessor.set_current(current_byte | lower_bits, allocation);
-      if (tail_bits >= next_shift) {
-        mask_blocks_accessor.advance();
-        auto const upper_bits = static_cast<uint8_t>((src_byte >> next_shift) & upper_mask);
-        mask_blocks_accessor.set_current(upper_bits, allocation);
-      }
+      mask_blocks_accessor.set_current(upper_bits, allocation);
     }
   }
 }
@@ -278,22 +316,26 @@ duckdb_scan_task_local_state::duckdb_scan_task_local_state(
   size_t approximate_batch_size,
   size_t default_varchar_size,
   std::unique_ptr<duckdb::LocalTableFunctionState> existing_local_tf_state)
-  : _approximate_batch_size(approximate_batch_size),
+  : _batch_size(approximate_batch_size),
     _default_varchar_size(default_varchar_size),
     _exec_ctx(exec_ctx)
 {
   auto const& op = g_state._op;
   _num_columns   = op.projection_ids.size();
 
+  // Reuse existing local table function state if provided
   if (existing_local_tf_state) {
     _local_tf_state = std::move(existing_local_tf_state);
   } else {
     g_state.increment_local_states();
   }
 
+  // Estimate the number of rows per bach and adjust batch size accordingly
+  estimate_rows_per_batch(op);
+
   // Make the memory reservation request
   auto& mem_res_mgr = g_state._sirius_ctx->get_memory_manager();
-  _reservation      = mem_res_mgr.request_reservation(_res_request, approximate_batch_size);
+  _reservation      = mem_res_mgr.request_reservation(_res_request, _batch_size);
 
   // Make the allocation
   auto& mem_space = _reservation->get_memory_space();
@@ -307,9 +349,6 @@ duckdb_scan_task_local_state::duckdb_scan_task_local_state(
   }
   _allocation = allocator->allocate_multiple_blocks(approximate_batch_size, _reservation.get());
 
-  // Estimate number of rows per batch
-  estimate_rows_per_batch(op);
-
   // Initialize the column builders
   initialize_builders();
 
@@ -317,12 +356,12 @@ duckdb_scan_task_local_state::duckdb_scan_task_local_state(
   initialize_local_table_function_state(op, exec_ctx, g_state._global_tf_state.get());
 }
 
-size_t duckdb_scan_task_local_state::get_tail_byte_offset() const
+size_t duckdb_scan_task_local_state::get_last_byte_offset() const
 {
   auto const& last_builder = _column_builders.back();
   auto last_byte_offset    = last_builder.mask_blocks_accessor.get_current_global_byte_offset();
   if (utils::mod_8(_row_offset) != 0) {
-    last_byte_offset++;  // Round up to next byte if partially filled
+    last_byte_offset++;  // Round up to next byte if mask is partially filled
   }
   return std::min(last_byte_offset, _allocation->size_bytes());
 }
@@ -331,33 +370,42 @@ void duckdb_scan_task_local_state::estimate_rows_per_batch(sirius_physical_table
 {
   assert(num_columns <= op.column_ids.size());
 
-  size_t estimated_row_bytes = 0;
+  // Construct column builders and collect the VARCHAR column indices
+  // Also compute the base row size in bytes to estimate the rows per batch
+  size_t base_row_bytes = 0;
   _column_builders.reserve(_num_columns);
   for (size_t i = 0; i < _num_columns; ++i) {
     auto const col_type = op.returned_types[op.column_ids[i].GetPrimaryIndex()];
     _column_builders.emplace_back(col_type, _default_varchar_size);
+    base_row_bytes += _column_builders.back().type_size;
     if (col_type.InternalType() == duckdb::PhysicalType::VARCHAR) {
       _varchar_indices.push_back(i);
-      estimated_row_bytes += (sizeof(int64_t) + _default_varchar_size);  // offset + data + mask
-    } else {
-      estimated_row_bytes += duckdb::GetTypeIdSize(col_type.InternalType());  // data + mask
+      base_row_bytes += sizeof(int64_t);
     }
   }
+  base_row_bytes += utils::ceil_div_8(_num_columns);  // Mask bytes
+  _estimated_rows_per_batch = std::max<size_t>(
+    _batch_size / base_row_bytes, STANDARD_VECTOR_SIZE);  // Ensure at least 1 vector can fit
 
-  // We must make space for the mask bytes (1 bit per row, rounded up to bytes)
-  // Add mask bytes to the estimated row size
-  size_t mask_bytes_per_row = utils::ceil_div_8(_num_columns);
-  estimated_row_bytes += mask_bytes_per_row;
+  auto bytes_for_rows = [this](size_t rows) {
+    size_t bytes = 0;
+    for (auto const& builder : _column_builders) {
+      if (builder.type.InternalType() == duckdb::PhysicalType::VARCHAR) {
+        auto const offset_bytes = (rows + 1) * sizeof(int64_t);
+        auto const data_bytes   = utils::align_8(rows * _default_varchar_size);
+        auto const mask_bytes   = utils::align_8(utils::ceil_div_8(rows));
+        bytes += offset_bytes + data_bytes + mask_bytes;
+      } else {
+        auto const data_bytes = utils::align_8(rows * builder.type_size);
+        auto const mask_bytes = utils::align_8(utils::ceil_div_8(rows));
+        bytes += data_bytes + mask_bytes;
+      }
+    }
+    return bytes;
+  };
 
-  // For VARCHAR columns, add space for the extra offset at the end
-  size_t extra_varchar_offset_bytes = _varchar_indices.size() * sizeof(int64_t);
-
-  // Calculate rows that fit in the batch
-  _estimated_rows_per_batch =
-    (_approximate_batch_size - extra_varchar_offset_bytes) / estimated_row_bytes;
-
-  // Ensure at least 1 vector can fit, otherwise the task will be a no-op
-  _estimated_rows_per_batch = std::max<size_t>(_estimated_rows_per_batch, STANDARD_VECTOR_SIZE);
+  // Revise the batch size allocation based on the number of estimated rows
+  _batch_size = bytes_for_rows(_estimated_rows_per_batch);
 }
 
 void duckdb_scan_task_local_state::initialize_builders()
@@ -368,13 +416,16 @@ void duckdb_scan_task_local_state::initialize_builders()
     // Update byte_offset for next column
     if (_column_builders[i].type.InternalType() == duckdb::PhysicalType::VARCHAR) {
       // VARCHAR column (offsets + data + mask)
-      byte_offset += (_estimated_rows_per_batch + 1) * sizeof(int64_t) +
-                     _estimated_rows_per_batch * _default_varchar_size +
-                     utils::ceil_div_8(_estimated_rows_per_batch);
+      auto const offset_bytes = (_estimated_rows_per_batch + 1) * sizeof(int64_t);
+      auto const data_bytes   = utils::align_8(_estimated_rows_per_batch * _default_varchar_size);
+      auto const mask_bytes   = utils::align_8(utils::ceil_div_8(_estimated_rows_per_batch));
+      byte_offset += offset_bytes + data_bytes + mask_bytes;
     } else {
       // Fixed-width column (data + mask)
-      byte_offset += _estimated_rows_per_batch * _column_builders[i].type_size +
-                     utils::ceil_div_8(_estimated_rows_per_batch);
+      auto const data_bytes =
+        utils::align_8(_estimated_rows_per_batch * _column_builders[i].type_size);
+      auto const mask_bytes = utils::align_8(utils::ceil_div_8(_estimated_rows_per_batch));
+      byte_offset += data_bytes + mask_bytes;
     }
   }
 }
@@ -408,7 +459,7 @@ std::shared_ptr<cucascade::data_batch> duckdb_scan_task_local_state::make_data_b
   auto metadata = std::make_unique<std::vector<uint8_t>>(pack_metadata_from_nodes(column_metadata));
 
   // Make the host table allocation
-  auto const sz = get_tail_byte_offset();
+  auto const sz = get_last_byte_offset();
   // auto const sz = allocation->size_bytes();
   auto table_allocation =
     std::make_unique<host_table_allocation>(std::move(_allocation), std::move(metadata), sz);
@@ -508,7 +559,7 @@ void duckdb_scan_task::execute()
     auto new_local_state =
       std::make_unique<duckdb_scan_task_local_state>(g_state,
                                                      l_state._exec_ctx,
-                                                     l_state._approximate_batch_size,
+                                                     l_state._batch_size,
                                                      l_state._default_varchar_size,
                                                      std::move(l_state._local_tf_state));
 
