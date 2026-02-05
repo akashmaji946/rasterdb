@@ -18,7 +18,6 @@ PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 EXT_NAME=sirius
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 # EXT_FLAGS=-DBUILD_PYTHON=1
-EXT_FLAGS=-Dlibconfig++_DIR="/home/kevin/cmake-shims/libconfigpp/lib/cmake/libconfig++"
 GEN=ninja
 
 # Include the Makefile from extension-ci-tools
