@@ -18,7 +18,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
 #include "config.hpp"
-#include "data/host_parquet_representation_converters.hpp"
 #include "data/sirius_converter_registry.hpp"
 #include "duckdb.hpp"
 #include "duckdb/catalog/catalog_entry/duck_schema_entry.hpp"
@@ -769,7 +768,6 @@ static void LoadInternal(ExtensionLoader& loader)
   auto& config = DBConfig::GetConfig(db);
   config.extension_callbacks.push_back(make_uniq<duckdb::SiriusContextExtensionCallback>());
   sirius::converter_registry::initialize();
-  sirius::register_parquet_converters(sirius::converter_registry::get());
   SiriusExtension::InitialGPUConfigs(config);
   SiriusExtension::RegisterGPUFunctions(db);
 }

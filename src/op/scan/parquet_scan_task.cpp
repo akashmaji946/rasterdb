@@ -47,16 +47,19 @@ namespace sirius::op::scan {
 
 namespace detail {
 
-bool is_flat_schema(cudf::io::parquet::FileMetaData const& meta)
+bool projected_columns_are_flat(cudf::io::parquet::FileMetaData const& meta,
+                                std::vector<size_t> const& selected_column_indices)
 {
   // Empty files are effectively "flat" for our purposes here.
   if (meta.row_groups.empty()) { return true; }
   auto const& cols = meta.row_groups.front().columns;
 
-  // Flat schema => every leaf column chunk is a top-level column => path length == 1.
-  return std::all_of(cols.begin(), cols.end(), [](auto const& chunk) {
-    return chunk.meta_data.path_in_schema.size() == 1;
-  });
+  // Flat leaf column => path length == 1. For projections, we only need this property to hold for
+  // the projected (selected) leaf columns.
+  return std::all_of(
+    selected_column_indices.begin(), selected_column_indices.end(), [&cols](size_t col_idx) {
+      return col_idx < cols.size() && cols[col_idx].meta_data.path_in_schema.size() == 1;
+    });
 }
 
 std::vector<size_t> make_selected_column_indices(sirius_physical_table_scan const& scan_op)
@@ -179,10 +182,10 @@ parquet_scan_task_global_state::parquet_scan_task_global_state(
     }
 
     // We currently only support flat schemas for parquet scans with projections
-    if (!detail::is_flat_schema(file_metadata)) {
+    if (!detail::projected_columns_are_flat(file_metadata, _selected_column_indices)) {
       throw std::runtime_error(
         "[parquet_scan_task_global_state] Parquet scans with projections currently only support "
-        "flat schemas");
+        "flat projected columns");
     }
 
     std::vector<std::string> projected_columns;
