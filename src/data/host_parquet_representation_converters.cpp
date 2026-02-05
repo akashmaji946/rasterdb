@@ -175,7 +175,7 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_host_pa
 
 }  // namespace detail
 
-void register_host_parquet_converters(cucascade::representation_converter_registry& registry)
+void register_parquet_converters(cucascade::representation_converter_registry& registry)
 {
   // HOST Parquet -> GPU
   if (!registry.has_converter<host_parquet_representation, cucascade::gpu_table_representation>()) {
