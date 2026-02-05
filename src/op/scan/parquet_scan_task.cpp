@@ -233,7 +233,7 @@ void parquet_scan_task_global_state::accumulate_row_group_byte_sizes(
   std::for_each(file_metadata.row_groups.begin(), file_metadata.row_groups.end(), add_rg_bytes);
 }
 
-/// NOTE: This paritioning scheme only supports flat schemas for now (no LIST, STRUCT, etc.)
+/// NOTE: This partitioning scheme only supports flat schemas for now (no LIST, STRUCT, etc.)
 void parquet_scan_task_global_state::partition_row_groups(
   cudf::io::parquet::FileMetaData const& file_metadata)
 {
