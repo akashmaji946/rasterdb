@@ -26,10 +26,10 @@
 #include <data/data_batch_utils.hpp>
 
 // cucascade
-#include <cucascade/memory/reservation_manager_configurator.hpp>
 #include <cucascade/data/data_batch.hpp>
 #include <cucascade/data/data_repository.hpp>
 #include <cucascade/data/gpu_data_representation.hpp>
+#include <cucascade/memory/reservation_manager_configurator.hpp>
 #include <data/sirius_converter_registry.hpp>
 #include <helper/helper.hpp>
 
@@ -183,9 +183,10 @@ inline std::vector<int64_t> copy_string_offsets(const cudf::column_view& offsets
   return offsets;
 }
 
-inline void validate_scanned_batches(const std::vector<std::shared_ptr<cucascade::data_batch>>& batches,
-                                     size_t expected_rows,
-                                     cucascade::memory::memory_reservation_manager& mem_mgr)
+inline void validate_scanned_batches(
+  const std::vector<std::shared_ptr<cucascade::data_batch>>& batches,
+  size_t expected_rows,
+  cucascade::memory::memory_reservation_manager& mem_mgr)
 {
   auto* gpu_space = get_space(mem_mgr, cucascade::memory::Tier::GPU);
   REQUIRE(gpu_space != nullptr);

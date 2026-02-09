@@ -48,8 +48,9 @@ using namespace sirius;
 using namespace sirius::scan_test_utils;
 using namespace cucascade::memory;
 
-using table_creator_t =
-  void (*)(duckdb::Connection&, std::string const& table_name, size_t num_rows);
+using table_creator_t = void (*)(duckdb::Connection&,
+                                 std::string const& table_name,
+                                 size_t num_rows);
 
 using batch_validator_t = void (*)(const std::vector<std::shared_ptr<cucascade::data_batch>>&,
                                    size_t,
@@ -188,8 +189,8 @@ static void create_synthetic_table_with_nested_list(duckdb::Connection& con,
       auto price       = static_cast<double>(i) * 1.5;
       std::string name = "item_" + std::to_string(i);
       insert_sql += "(" + std::to_string(id) + ", " + std::to_string(value) + ", " +
-                    std::to_string(price) + ", " + "'" + name + "', " + "[" +
-                    std::to_string(id) + ", " + std::to_string(id + 1) + "])";
+                    std::to_string(price) + ", " + "'" + name + "', " + "[" + std::to_string(id) +
+                    ", " + std::to_string(id + 1) + "])";
     }
 
     result = con.Query(insert_sql);
@@ -204,7 +205,7 @@ static void run_parquet_scan_test(std::string const& table_name,
                                   size_t batch_size,
                                   size_t row_group_size                        = 0,
                                   duckdb::vector<duckdb::idx_t> projection_ids = {},
-                                  batch_validator_t validator = validate_scanned_batches,
+                                  batch_validator_t validator   = validate_scanned_batches,
                                   table_creator_t table_creator = create_synthetic_table)
 {
   duckdb::DuckDB db(nullptr);
