@@ -68,9 +68,8 @@ static std::vector<memory_space_config> create_test_configs()
   reservation_manager_configurator builder;
   builder.set_number_of_gpus(1)
     .set_gpu_usage_limit(2048ull * 1024 * 1024)
-    .set_gpu_memory_resource_factory([](int, size_t) {
-      return std::make_unique<rmm::mr::cuda_memory_resource>();
-    })
+    .set_gpu_memory_resource_factory(
+      [](int, size_t) { return std::make_unique<rmm::mr::cuda_memory_resource>(); })
     .use_host_per_gpu()
     .set_per_host_capacity(4096ull * 1024 * 1024);
   return builder.build();
@@ -79,8 +78,7 @@ static std::vector<memory_space_config> create_test_configs()
 /**
  * @brief Read the Parquet footer from a datasource.
  */
-static std::unique_ptr<cudf::io::datasource::buffer> read_parquet_footer(
-  cudf::io::datasource& src)
+static std::unique_ptr<cudf::io::datasource::buffer> read_parquet_footer(cudf::io::datasource& src)
 {
   auto constexpr file_tail_size    = sizeof(cudf::io::parquet::file_ender_s);
   auto constexpr footer_magic_size = sizeof(cudf::io::parquet::file_header_s);
@@ -110,7 +108,7 @@ struct parquet_test_fixture {
   cudf::io::parquet_reader_options reader_options;
   std::vector<cudf::size_type> row_group_indices;
   std::vector<cudf::io::text::byte_range_info> column_chunk_byte_ranges;
-  std::size_t size_in_bytes             = 0;
+  std::size_t size_in_bytes              = 0;
   std::size_t uncompressed_size_in_bytes = 0;
 
   /**
@@ -125,8 +123,8 @@ struct parquet_test_fixture {
     duckdb::DuckDB db(nullptr);
     duckdb::Connection con(db);
 
-    std::string create_sql = "CREATE TABLE " + table_name +
-                             " (id INTEGER, value BIGINT, price DOUBLE)";
+    std::string create_sql =
+      "CREATE TABLE " + table_name + " (id INTEGER, value BIGINT, price DOUBLE)";
     auto result = con.Query(create_sql);
     REQUIRE(result);
     REQUIRE(!result->HasError());
@@ -140,8 +138,7 @@ struct parquet_test_fixture {
       REQUIRE(!result->HasError());
     }
 
-    parquet_path = std::filesystem::temp_directory_path() /
-                   (table_name + "_repr_test.parquet");
+    parquet_path = std::filesystem::temp_directory_path() / (table_name + "_repr_test.parquet");
     std::string copy_sql = "COPY " + table_name + " TO '" + parquet_path.string() +
                            "' (FORMAT PARQUET, COMPRESSION snappy)";
     result = con.Query(copy_sql);
@@ -156,9 +153,8 @@ struct parquet_test_fixture {
     reader_options = cudf::io::parquet_reader_options::builder().build();
 
     // Create a reader to get the metadata
-    auto reader         = std::make_unique<hybrid_scan_reader>(
-      cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()),
-      reader_options);
+    auto reader = std::make_unique<hybrid_scan_reader>(
+      cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()), reader_options);
     auto const& metadata = reader->parquet_metadata();
 
     // Populate the row group indices (all row groups)
@@ -167,8 +163,8 @@ struct parquet_test_fixture {
     std::iota(row_group_indices.begin(), row_group_indices.end(), 0);
 
     // Get byte ranges for all column chunks across all row groups
-    auto rg_span    = cudf::host_span<cudf::size_type const>(
-      row_group_indices.data(), row_group_indices.size());
+    auto rg_span =
+      cudf::host_span<cudf::size_type const>(row_group_indices.data(), row_group_indices.size());
     auto byte_ranges = reader->all_column_chunks_byte_ranges(rg_span, reader_options);
 
     // Compute total size and create rebased byte ranges
@@ -176,12 +172,11 @@ struct parquet_test_fixture {
     column_chunk_byte_ranges.reserve(byte_ranges.size());
     size_in_bytes = 0;
     for (auto const& range : byte_ranges) {
-      column_chunk_byte_ranges.emplace_back(
-        static_cast<int64_t>(size_in_bytes), range.size());
+      column_chunk_byte_ranges.emplace_back(static_cast<int64_t>(size_in_bytes), range.size());
       size_in_bytes += range.size();
     }
 
-    uncompressed_size_in_bytes = size_in_bytes * 2; // Doesn't matter
+    uncompressed_size_in_bytes = size_in_bytes * 2;  // Doesn't matter
 
     // Store the original byte ranges for reading data
     _original_byte_ranges = std::move(byte_ranges);
@@ -193,8 +188,7 @@ struct parquet_test_fixture {
    */
   std::unique_ptr<host_parquet_representation> build_representation(memory_space* mem_space)
   {
-    auto* host_mr =
-      mem_space->get_memory_resource_as<fixed_size_host_memory_resource>();
+    auto* host_mr = mem_space->get_memory_resource_as<fixed_size_host_memory_resource>();
     REQUIRE(host_mr != nullptr);
 
     auto allocation = host_mr->allocate_multiple_blocks(size_in_bytes);
@@ -205,18 +199,16 @@ struct parquet_test_fixture {
     auto block_size     = allocation->block_size();
 
     for (auto const& range : _original_byte_ranges) {
-      auto file_data = _datasource->host_read(range.offset(), range.size());
-      size_t remaining       = range.size();
-      size_t data_offset     = 0;
+      auto file_data     = _datasource->host_read(range.offset(), range.size());
+      size_t remaining   = range.size();
+      size_t data_offset = 0;
 
       while (remaining > 0) {
-        size_t bytes_to_copy =
-          std::min(remaining, block_size - block_offset);
-        auto* dst =
-          allocation->get_blocks()[block_index] + block_offset;
+        size_t bytes_to_copy = std::min(remaining, block_size - block_offset);
+        auto* dst            = allocation->get_blocks()[block_index] + block_offset;
         std::memcpy(dst, file_data->data() + data_offset, bytes_to_copy);
-        data_offset  += bytes_to_copy;
-        remaining    -= bytes_to_copy;
+        data_offset += bytes_to_copy;
+        remaining -= bytes_to_copy;
         block_offset += bytes_to_copy;
         if (block_offset == block_size) {
           ++block_index;
@@ -227,18 +219,16 @@ struct parquet_test_fixture {
 
     // Create a new reader for this representation
     auto reader = std::make_unique<hybrid_scan_reader>(
-      cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()),
-      reader_options);
+      cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()), reader_options);
 
-    return std::make_unique<host_parquet_representation>(
-      mem_space,
-      std::move(allocation),
-      std::move(reader),
-      reader_options,
-      row_group_indices,
-      column_chunk_byte_ranges,
-      size_in_bytes,
-      uncompressed_size_in_bytes);
+    return std::make_unique<host_parquet_representation>(mem_space,
+                                                         std::move(allocation),
+                                                         std::move(reader),
+                                                         reader_options,
+                                                         row_group_indices,
+                                                         column_chunk_byte_ranges,
+                                                         size_in_bytes,
+                                                         uncompressed_size_in_bytes);
   }
 
   ~parquet_test_fixture()
@@ -257,12 +247,10 @@ struct parquet_test_fixture {
 // host_parquet_representation Construction Tests
 //===----------------------------------------------------------------------===//
 
-TEST_CASE("host_parquet_representation construction",
-          "[host_parquet_representation]")
+TEST_CASE("host_parquet_representation construction", "[host_parquet_representation]")
 {
   memory_reservation_manager mgr(create_test_configs());
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
   REQUIRE(host_space != nullptr);
 
   parquet_test_fixture fixture;
@@ -271,10 +259,7 @@ TEST_CASE("host_parquet_representation construction",
   auto repr = fixture.build_representation(host_space);
   REQUIRE(repr != nullptr);
 
-  SECTION("has correct tier")
-  {
-    REQUIRE(repr->get_current_tier() == Tier::HOST);
-  }
+  SECTION("has correct tier") { REQUIRE(repr->get_current_tier() == Tier::HOST); }
 
   SECTION("has correct size")
   {
@@ -314,8 +299,7 @@ TEST_CASE("host_parquet_representation clone creates independent copy",
           "[host_parquet_representation][clone]")
 {
   memory_reservation_manager mgr(create_test_configs());
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
   REQUIRE(host_space != nullptr);
 
   parquet_test_fixture fixture;
@@ -347,8 +331,7 @@ TEST_CASE("host_parquet_representation clone creates independent copy",
 
   SECTION("cloned representation has same uncompressed size")
   {
-    REQUIRE(cloned->get_uncompressed_size_in_bytes() ==
-            repr->get_uncompressed_size_in_bytes());
+    REQUIRE(cloned->get_uncompressed_size_in_bytes() == repr->get_uncompressed_size_in_bytes());
   }
 
   SECTION("cloned representation has same row group indices")
@@ -385,10 +368,10 @@ TEST_CASE("host_parquet_representation clone creates independent copy",
   {
     auto const& orig_chunks   = repr->get_column_chunks();
     auto const& cloned_chunks = cloned->get_column_chunks();
-    auto orig_blocks           = orig_chunks->get_blocks();
-    auto cloned_blocks         = cloned_chunks->get_blocks();
-    auto block_size            = orig_chunks->block_size();
-    auto remaining             = repr->get_size_in_bytes();
+    auto orig_blocks          = orig_chunks->get_blocks();
+    auto cloned_blocks        = cloned_chunks->get_blocks();
+    auto block_size           = orig_chunks->block_size();
+    auto remaining            = repr->get_size_in_bytes();
 
     for (size_t i = 0; i < orig_blocks.size() && remaining > 0; ++i) {
       auto cmp_size = std::min(remaining, block_size);
@@ -402,8 +385,7 @@ TEST_CASE("host_parquet_representation clone with small data",
           "[host_parquet_representation][clone]")
 {
   memory_reservation_manager mgr(create_test_configs());
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
   REQUIRE(host_space != nullptr);
 
   parquet_test_fixture fixture;
@@ -422,10 +404,10 @@ TEST_CASE("host_parquet_representation clone with small data",
   // Verify data content matches
   auto const& orig_chunks   = repr->get_column_chunks();
   auto const& cloned_chunks = cloned->get_column_chunks();
-  auto orig_blocks           = orig_chunks->get_blocks();
-  auto cloned_blocks         = cloned_chunks->get_blocks();
-  auto block_size            = orig_chunks->block_size();
-  auto remaining             = repr->get_size_in_bytes();
+  auto orig_blocks          = orig_chunks->get_blocks();
+  auto cloned_blocks        = cloned_chunks->get_blocks();
+  auto block_size           = orig_chunks->block_size();
+  auto remaining            = repr->get_size_in_bytes();
 
   for (size_t i = 0; i < orig_blocks.size() && remaining > 0; ++i) {
     auto cmp_size = std::min(remaining, block_size);
@@ -447,19 +429,17 @@ TEST_CASE("register_parquet_converters registers expected converters",
 
   SECTION("HOST Parquet -> GPU converter is registered")
   {
-    REQUIRE(registry.has_converter<host_parquet_representation,
-                                   cucascade::gpu_table_representation>());
+    REQUIRE(
+      registry.has_converter<host_parquet_representation, cucascade::gpu_table_representation>());
   }
 
   SECTION("HOST Parquet -> HOST Parquet converter is registered")
   {
-    REQUIRE(registry.has_converter<host_parquet_representation,
-                                   host_parquet_representation>());
+    REQUIRE(registry.has_converter<host_parquet_representation, host_parquet_representation>());
   }
 }
 
-TEST_CASE("register_parquet_converters is idempotent",
-          "[host_parquet_representation][converters]")
+TEST_CASE("register_parquet_converters is idempotent", "[host_parquet_representation][converters]")
 {
   cucascade::representation_converter_registry registry;
 
@@ -470,10 +450,9 @@ TEST_CASE("register_parquet_converters is idempotent",
   REQUIRE_NOTHROW(register_parquet_converters(registry));
 
   // Both converters should still be registered
-  REQUIRE(registry.has_converter<host_parquet_representation,
-                                 cucascade::gpu_table_representation>());
-  REQUIRE(registry.has_converter<host_parquet_representation,
-                                 host_parquet_representation>());
+  REQUIRE(
+    registry.has_converter<host_parquet_representation, cucascade::gpu_table_representation>());
+  REQUIRE(registry.has_converter<host_parquet_representation, host_parquet_representation>());
 }
 
 //===----------------------------------------------------------------------===//
@@ -488,10 +467,8 @@ TEST_CASE("host_parquet_representation converts to gpu_table_representation",
   cucascade::register_builtin_converters(registry);
   register_parquet_converters(registry);
 
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
-  auto* gpu_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* gpu_space  = const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
   REQUIRE(host_space != nullptr);
   REQUIRE(gpu_space != nullptr);
 
@@ -503,9 +480,8 @@ TEST_CASE("host_parquet_representation converts to gpu_table_representation",
 
   // Use a stream from the GPU memory space's pool so it outlives the reader
   // (the hybrid_scan_reader destructor frees internal device memory that needs a valid stream)
-  auto stream = gpu_space->acquire_stream();
-  auto gpu_result = registry.convert<cucascade::gpu_table_representation>(
-    *repr, gpu_space, stream);
+  auto stream     = gpu_space->acquire_stream();
+  auto gpu_result = registry.convert<cucascade::gpu_table_representation>(*repr, gpu_space, stream);
   stream.synchronize();
 
   REQUIRE(gpu_result != nullptr);
@@ -528,10 +504,8 @@ TEST_CASE("host_parquet_representation converts to GPU with projected columns",
   cucascade::register_builtin_converters(registry);
   register_parquet_converters(registry);
 
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
-  auto* gpu_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* gpu_space  = const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
   REQUIRE(host_space != nullptr);
   REQUIRE(gpu_space != nullptr);
 
@@ -552,8 +526,7 @@ TEST_CASE("host_parquet_representation converts to GPU with projected columns",
   reader_options.set_column_names({"id", "price"});
 
   auto reader = std::make_unique<hybrid_scan_reader>(
-    cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()),
-    reader_options);
+    cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()), reader_options);
   auto const& metadata = reader->parquet_metadata();
 
   std::vector<cudf::size_type> rg_indices(metadata.row_groups.size());
@@ -570,37 +543,43 @@ TEST_CASE("host_parquet_representation converts to GPU with projected columns",
     total_size += range.size();
   }
 
-  auto* host_mr =
-    host_space->get_memory_resource_as<fixed_size_host_memory_resource>();
+  auto* host_mr   = host_space->get_memory_resource_as<fixed_size_host_memory_resource>();
   auto allocation = host_mr->allocate_multiple_blocks(total_size);
 
   size_t block_index = 0, block_offset = 0;
   auto block_size = allocation->block_size();
   for (auto const& range : byte_ranges) {
-    auto file_data = datasource->host_read(range.offset(), range.size());
+    auto file_data   = datasource->host_read(range.offset(), range.size());
     size_t remaining = range.size(), data_offset = 0;
     while (remaining > 0) {
       size_t bytes_to_copy = std::min(remaining, block_size - block_offset);
       std::memcpy(allocation->get_blocks()[block_index] + block_offset,
-                  file_data->data() + data_offset, bytes_to_copy);
+                  file_data->data() + data_offset,
+                  bytes_to_copy);
       data_offset += bytes_to_copy;
       remaining -= bytes_to_copy;
       block_offset += bytes_to_copy;
-      if (block_offset == block_size) { ++block_index; block_offset = 0; }
+      if (block_offset == block_size) {
+        ++block_index;
+        block_offset = 0;
+      }
     }
   }
 
   auto proj_reader = std::make_unique<hybrid_scan_reader>(
-    cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()),
-    reader_options);
+    cudf::host_span<uint8_t const>(footer_buffer->data(), footer_buffer->size()), reader_options);
 
-  auto repr = std::make_unique<host_parquet_representation>(
-    host_space, std::move(allocation), std::move(proj_reader),
-    reader_options, rg_indices, rebased_ranges, total_size, total_size * 2);
+  auto repr = std::make_unique<host_parquet_representation>(host_space,
+                                                            std::move(allocation),
+                                                            std::move(proj_reader),
+                                                            reader_options,
+                                                            rg_indices,
+                                                            rebased_ranges,
+                                                            total_size,
+                                                            total_size * 2);
 
-  auto stream = gpu_space->acquire_stream();
-  auto gpu_result = registry.convert<cucascade::gpu_table_representation>(
-    *repr, gpu_space, stream);
+  auto stream     = gpu_space->acquire_stream();
+  auto gpu_result = registry.convert<cucascade::gpu_table_representation>(*repr, gpu_space, stream);
   stream.synchronize();
 
   REQUIRE(gpu_result != nullptr);
@@ -623,10 +602,8 @@ TEST_CASE("host_parquet_representation clone then convert to GPU",
   cucascade::register_builtin_converters(registry);
   register_parquet_converters(registry);
 
-  auto* host_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
-  auto* gpu_space =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
+  auto* host_space = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* gpu_space  = const_cast<memory_space*>(mgr.get_memory_space(Tier::GPU, 0));
   REQUIRE(host_space != nullptr);
   REQUIRE(gpu_space != nullptr);
 
@@ -643,11 +620,10 @@ TEST_CASE("host_parquet_representation clone then convert to GPU",
   REQUIRE(cloned != nullptr);
 
   // Convert both original and clone to GPU
-  auto stream = gpu_space->acquire_stream();
-  auto gpu_orig = registry.convert<cucascade::gpu_table_representation>(
-    *repr, gpu_space, stream);
-  auto gpu_cloned = registry.convert<cucascade::gpu_table_representation>(
-    *cloned, gpu_space, stream);
+  auto stream   = gpu_space->acquire_stream();
+  auto gpu_orig = registry.convert<cucascade::gpu_table_representation>(*repr, gpu_space, stream);
+  auto gpu_cloned =
+    registry.convert<cucascade::gpu_table_representation>(*cloned, gpu_space, stream);
   stream.synchronize();
 
   REQUIRE(gpu_orig != nullptr);
@@ -676,9 +652,8 @@ TEST_CASE("host_parquet_representation cross-host copy converter",
   reservation_manager_configurator builder;
   builder.set_number_of_gpus(2)
     .set_gpu_usage_limit(2048ull * 1024 * 1024)
-    .set_gpu_memory_resource_factory([](int, size_t) {
-      return std::make_unique<rmm::mr::cuda_memory_resource>();
-    })
+    .set_gpu_memory_resource_factory(
+      [](int, size_t) { return std::make_unique<rmm::mr::cuda_memory_resource>(); })
     .use_host_per_gpu()
     .set_per_host_capacity(4096ull * 1024 * 1024);
 
@@ -693,10 +668,8 @@ TEST_CASE("host_parquet_representation cross-host copy converter",
   cucascade::register_builtin_converters(registry);
   register_parquet_converters(registry);
 
-  auto* host_space_0 =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
-  auto* host_space_1 =
-    const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 1));
+  auto* host_space_0 = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 0));
+  auto* host_space_1 = const_cast<memory_space*>(mgr.get_memory_space(Tier::HOST, 1));
   REQUIRE(host_space_0 != nullptr);
   REQUIRE(host_space_1 != nullptr);
   REQUIRE(host_space_0->get_device_id() != host_space_1->get_device_id());
@@ -710,12 +683,10 @@ TEST_CASE("host_parquet_representation cross-host copy converter",
 
   // Convert from host_space_0 -> host_space_1
   rmm::cuda_stream stream;
-  auto result = registry.convert<host_parquet_representation>(
-    *repr, host_space_1, stream);
+  auto result = registry.convert<host_parquet_representation>(*repr, host_space_1, stream);
 
   REQUIRE(result != nullptr);
   REQUIRE(result->get_current_tier() == Tier::HOST);
   REQUIRE(result->get_device_id() == host_space_1->get_device_id());
   REQUIRE(result->get_size_in_bytes() == repr->get_size_in_bytes());
 }
-
