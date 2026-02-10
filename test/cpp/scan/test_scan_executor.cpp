@@ -168,7 +168,7 @@ static void run_scan_test(std::string const& table_name,
     pipeline_executor.schedule(std::move(task));
   }
   while (!global_state->is_source_drained()) {
-    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   pipeline_executor.stop();
