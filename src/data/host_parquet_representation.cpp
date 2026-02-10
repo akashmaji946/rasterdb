@@ -19,7 +19,8 @@
 
 namespace sirius {
 
-std::unique_ptr<cucascade::idata_representation> host_parquet_representation::clone()
+std::unique_ptr<cucascade::idata_representation> host_parquet_representation::clone(
+  rmm::cuda_stream_view /*stream */)
 {
   // Get the host memory resource from the memory space
   auto* host_mr = get_memory_space().get_memory_resource_of<cucascade::memory::Tier::HOST>();
