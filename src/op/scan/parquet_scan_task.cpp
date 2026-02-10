@@ -338,7 +338,7 @@ void parquet_scan_task_local_state::read_range_into_allocation(size_t file_offse
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task
 //===----------------------------------------------------------------------===//
-void parquet_scan_task::execute()
+void parquet_scan_task::execute(rmm::cuda_stream_view /* stream */)
 {
   auto& l_state = this->_local_state->cast<parquet_scan_task_local_state>();
   auto& g_state = this->_global_state->cast<parquet_scan_task_global_state>();

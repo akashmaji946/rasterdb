@@ -321,8 +321,10 @@ class parquet_scan_task : public sirius::parallel::itask {
    * @brief Execute the parquet scan task: read the assigned row group + column chunk byte ranges
    * into memory, and create a data batch with a host_parquet_representation that references the
    * read data, which is then pushed to the shared data repository.
+   *
+   * @param[in] stream The CUDA stream on which to perform memory operations.
    */
-  void execute() override;
+  void execute(rmm::cuda_stream_view stream) override;
 
   /**
    * @brief Get the unique ID of this task.
