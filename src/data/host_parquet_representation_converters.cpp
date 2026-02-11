@@ -37,6 +37,7 @@
 // standard library
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <numeric>
@@ -97,6 +98,8 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
   attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
   attr.flags          = cudaMemcpyFlagDefault;
+  size_t attrs_idxs   = 0;  // This and the following are needed for CUDA < 13
+  size_t num_attrs    = 1;
   while (bytes_copied < host_src.get_size_in_bytes()) {
     auto const& block        = allocation->at(bytes_copied / allocation->block_size());
     auto const block_offset  = bytes_copied % allocation->block_size();
@@ -111,12 +114,24 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
     // cudaMemcpyBatchAsync requires a non-null stream, so create a dedicated stream for the copy
     // and synchronize it before proceeding.
     rmm::cuda_stream batch_stream;
-    RMM_CUDA_TRY(cudaMemcpyBatchAsync(
-      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, batch_stream.value()));
+    RMM_CUDA_TRY(cudaMemcpyBatchAsync(dst_ptrs.data(),
+                                      src_ptrs.data(),
+                                      counts.data(),
+                                      counts.size(),
+                                      &attr,
+                                      &attrs_idxs,
+                                      1,
+                                      batch_stream.value()));
     batch_stream.synchronize();
   } else {
-    RMM_CUDA_TRY(cudaMemcpyBatchAsync(
-      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream.value()));
+    RMM_CUDA_TRY(cudaMemcpyBatchAsync(dst_ptrs.data(),
+                                      src_ptrs.data(),
+                                      counts.data(),
+                                      counts.size(),
+                                      &attr,
+                                      &attrs_idxs,
+                                      1,
+                                      stream.value()));
   }
 
   // Invoke the Parquet reader to materialize the table on GPU
