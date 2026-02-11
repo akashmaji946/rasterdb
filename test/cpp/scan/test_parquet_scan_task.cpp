@@ -22,7 +22,7 @@
 // sirius
 #include <op/scan/duckdb_scan_task_queue.hpp>
 #include <op/scan/parquet_scan_task.hpp>
-#include <op/sirius_physical_table_scan.hpp>
+#include <op/sirius_physical_parquet_scan.hpp>
 #include <parallel/task_executor.hpp>
 #include <pipeline/sirius_pipeline_itask_local_state.hpp>
 
@@ -60,7 +60,7 @@ using batch_validator_t = void (*)(const std::vector<std::shared_ptr<cucascade::
                                    size_t,
                                    cucascade::memory::memory_reservation_manager&);
 
-static std::unique_ptr<sirius::op::sirius_physical_table_scan> make_parquet_scan(
+static std::unique_ptr<sirius::op::sirius_physical_parquet_scan> make_parquet_scan(
   duckdb::ClientContext& ctx,
   std::string const& parquet_path,
   duckdb::vector<duckdb::idx_t> projection_ids = {})
@@ -120,18 +120,18 @@ static std::unique_ptr<sirius::op::sirius_physical_table_scan> make_parquet_scan
     }
   }
 
-  return std::make_unique<sirius::op::sirius_physical_table_scan>(output_types,
-                                                                  table_function,
-                                                                  std::move(bind_data),
-                                                                  return_types,
-                                                                  std::move(column_ids),
-                                                                  std::move(projection_ids),
-                                                                  std::move(names),
-                                                                  nullptr,
-                                                                  0,
-                                                                  std::move(extra_info),
-                                                                  duckdb::vector<duckdb::Value>(),
-                                                                  std::move(virtual_columns));
+  return std::make_unique<sirius::op::sirius_physical_parquet_scan>(output_types,
+                                                                     table_function,
+                                                                     std::move(bind_data),
+                                                                     return_types,
+                                                                     std::move(column_ids),
+                                                                     std::move(projection_ids),
+                                                                     std::move(names),
+                                                                     nullptr,
+                                                                     0,
+                                                                     std::move(extra_info),
+                                                                     duckdb::vector<duckdb::Value>(),
+                                                                     std::move(virtual_columns));
 }
 
 static std::filesystem::path write_parquet_from_table(duckdb::Connection& con,

@@ -44,6 +44,8 @@
 #include <stdexcept>
 
 // cuda runtime
+#include <cuda_runtime_api.h>
+
 #include <driver_types.h>
 
 namespace sirius {
@@ -58,8 +60,6 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   cucascade::memory::memory_space const* target_memory_space,
   rmm::cuda_stream_view stream)
 {
-  bool null_stream = (stream.value() == nullptr);
-
   // Source stuff
   auto& host_src          = source.cast<host_parquet_representation>();
   auto const& byte_ranges = host_src.get_column_chunk_byte_ranges();
@@ -90,48 +90,52 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
 
   // Copy HOST data to GPU with a single async batch copy.
   size_t bytes_copied = 0;
-  std::vector<uint8_t*> dst_ptrs;
-  std::vector<uint8_t const*> src_ptrs;
+  std::vector<void*> dst_ptrs;
+  std::vector<void*> src_ptrs;
   std::vector<size_t> counts;
   cudaMemcpyAttributes attr{};
   attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
   attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
   attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
   attr.flags          = cudaMemcpyFlagDefault;
-  size_t attrs_idxs   = 0;  // This and the following are needed for CUDA < 13
-  size_t num_attrs    = 1;
   while (bytes_copied < host_src.get_size_in_bytes()) {
     auto const& block        = allocation->at(bytes_copied / allocation->block_size());
     auto const block_offset  = bytes_copied % allocation->block_size();
     auto const bytes_to_copy = std::min(allocation->block_size() - block_offset,
                                         host_src.get_size_in_bytes() - bytes_copied);
-    dst_ptrs.push_back(buffer_data + bytes_copied);
-    src_ptrs.push_back(reinterpret_cast<uint8_t const*>(block.data() + block_offset));
+    dst_ptrs.push_back(static_cast<void*>(buffer_data + bytes_copied));
+    src_ptrs.push_back(const_cast<void*>(
+      static_cast<void const*>(reinterpret_cast<uint8_t const*>(block.data() + block_offset))));
     counts.push_back(bytes_to_copy);
     bytes_copied += bytes_to_copy;
   }
+  auto enqueue_batch_copy = [&](cudaStream_t copy_stream) {
+#if CUDART_VERSION >= 13000
+    RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
+      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, copy_stream));
+#else 
+    size_t attrs_idxs = 0;
+    size_t num_attrs  = 1;
+    size_t fail_idx   = 0;
+    RMM_CUDA_TRY(::cudaMemcpyBatchAsync(reinterpret_cast<void**>(dst_ptrs.data()),
+                                        reinterpret_cast<void**>(src_ptrs.data()),
+                                        counts.data(),
+                                        counts.size(),
+                                        &attr,
+                                        &attrs_idxs,
+                                        num_attrs,
+                                        &fail_idx,
+                                        copy_stream));
+#endif
+  };
   if (stream.value() == nullptr) {
     // cudaMemcpyBatchAsync requires a non-null stream, so create a dedicated stream for the copy
     // and synchronize it before proceeding.
     rmm::cuda_stream batch_stream;
-    RMM_CUDA_TRY(cudaMemcpyBatchAsync(dst_ptrs.data(),
-                                      src_ptrs.data(),
-                                      counts.data(),
-                                      counts.size(),
-                                      &attr,
-                                      &attrs_idxs,
-                                      1,
-                                      batch_stream.value()));
+    enqueue_batch_copy(batch_stream.value());
     batch_stream.synchronize();
   } else {
-    RMM_CUDA_TRY(cudaMemcpyBatchAsync(dst_ptrs.data(),
-                                      src_ptrs.data(),
-                                      counts.data(),
-                                      counts.size(),
-                                      &attr,
-                                      &attrs_idxs,
-                                      1,
-                                      stream.value()));
+    enqueue_batch_copy(stream.value());
   }
 
   // Invoke the Parquet reader to materialize the table on GPU

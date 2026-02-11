@@ -20,6 +20,7 @@
 #include <config.hpp>
 #include <memory/multiple_blocks_allocation_accessor.hpp>
 #include <op/sirius_physical_table_scan.hpp>
+#include <op/sirius_physical_parquet_scan.hpp>
 #include <pipeline/sirius_pipeline_itask.hpp>
 #include <pipeline/sirius_pipeline_itask_local_state.hpp>
 #include <sirius_context.hpp>
@@ -71,7 +72,7 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    * @param[in] approximate_batch_size The target approximate batch size for the scan tasks
    */
   parquet_scan_task_global_state(
-    sirius_physical_table_scan const* scan_op,
+    sirius_physical_parquet_scan const* scan_op,
     size_t approximate_batch_size = duckdb::Config::DEFAULT_SCAN_TASK_BATCH_SIZE);
 
   //===----------Methods----------===//
@@ -134,36 +135,33 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    */
   [[nodiscard]] std::unique_ptr<hybrid_scan_reader> make_reader() const
   {
-    return std::make_unique<hybrid_scan_reader>(
-      cudf::host_span<uint8_t const>(_footer_buffer->data(), _footer_buffer->size()),
-      _reader_options);
+    return std::make_unique<hybrid_scan_reader>(_file_metadata, _reader_options);
   }
 
  private:
   /**
    * @brief Fill the vector of column indices for this scan after projection.
    */
-  void make_selected_column_indices(sirius_physical_table_scan const& scan_op);
+  void make_selected_column_indices(sirius_physical_parquet_scan const& scan_op);
 
   /**
    * @brief Accumulate the compressed and uncompressed byte sizes for each row group in the file
    * metadata, which are needed for partitioning the row groups into scan tasks.
    */
-  void accumulate_row_group_byte_sizes(cudf::io::parquet::FileMetaData const& file_metadata);
+  void accumulate_row_group_byte_sizes();
 
   /**
    * @brief Partition the row groups into scan tasks based on the accumulated byte sizes and the
    * target approximate batch size.
    */
-  void partition_row_groups(cudf::io::parquet::FileMetaData const& file_metadata);
+  void partition_row_groups();
 
   //===----------Fields----------===//
   size_t _approximate_batch_size;  ///< Target approximate batch size for scan tasks
   bool _is_projected;              ///< Whether projection is applied
 
-  std::string _file_path;  ///< The parquet file path
-  std::unique_ptr<cudf::io::datasource::buffer>
-    _footer_buffer;                                  ///< The parquet file footer metadata
+  std::string _file_path;                            ///< The parquet file path
+  cudf::io::parquet::FileMetaData _file_metadata;    ///< The parquet file metadata
   cudf::io::parquet_reader_options _reader_options;  ///< Parquet reader options
 
   std::vector<size_t> _row_group_uncompressed_bytes;   ///< Per-row-group uncompressed bytes
