@@ -93,11 +93,6 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   std::vector<void*> dst_ptrs;
   std::vector<void*> src_ptrs;
   std::vector<size_t> counts;
-  cudaMemcpyAttributes attr{};
-  attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-  attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
-  attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
-  attr.flags          = cudaMemcpyFlagDefault;
   while (bytes_copied < host_src.get_size_in_bytes()) {
     auto const& block        = allocation->at(bytes_copied / allocation->block_size());
     auto const block_offset  = bytes_copied % allocation->block_size();
@@ -109,42 +104,30 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
     counts.push_back(bytes_to_copy);
     bytes_copied += bytes_to_copy;
   }
-  auto enqueue_batch_copy = [&](cudaStream_t copy_stream) {
 
-  // cudaMemcpyBatchAsync is only supported in cuda 12.8 and greater.
+  // Try to do batch copy if cudaMemcpyBatchAsync is possible, otherwise fall back to individual
+  // async copies
 #if CUDART_VERSION >= 13000
+  if (stream.value() != nullptr && stream.value() != cudaStreamLegacy) {
+    cudaMemcpyAttributes attr{};
+    attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+    attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
+    attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
+    attr.flags          = cudaMemcpyFlagDefault;
     RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
-      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, copy_stream));
-#elif CUDART_VERSION >= 12080
-    size_t attrs_idxs = 0;
-    size_t num_attrs  = 1;
-    size_t fail_idx   = 0;
-    RMM_CUDA_TRY(::cudaMemcpyBatchAsync(dst_ptrs.data(),
-                                        src_ptrs.data(),
-                                        counts.data(),
-                                        counts.size(),
-                                        &attr,
-                                        &attrs_idxs,
-                                        num_attrs,
-                                        &fail_idx,
-                                        copy_stream));
-#else
-    // Fall back to individual async copies if cudaMemcpyBatchAsync is not available.
+      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream.value()));
+  } else {
     for (size_t i = 0; i < dst_ptrs.size(); ++i) {
       RMM_CUDA_TRY(::cudaMemcpyAsync(
-        dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, copy_stream));
+        dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, cudaStreamPerThread));
     }
-#endif
-  };
-  if (stream.value() == nullptr) {
-    // cudaMemcpyBatchAsync requires a non-null stream, so create a dedicated stream for the copy
-    // and synchronize it before proceeding.
-    rmm::cuda_stream batch_stream;
-    enqueue_batch_copy(batch_stream.value());
-    batch_stream.synchronize();
-  } else {
-    enqueue_batch_copy(stream.value());
   }
+#else
+  for (size_t i = 0; i < dst_ptrs.size(); ++i) {
+    RMM_CUDA_TRY(::cudaMemcpyAsync(
+      dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, stream.value()));
+  }
+#endif
 
   // Invoke the Parquet reader to materialize the table on GPU
   auto column_chunk_spans_h = cudf::host_span<const cudf::device_span<uint8_t const>>(

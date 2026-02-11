@@ -57,6 +57,18 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    * @brief Struct representing a range of row groups assigned to a scan task.
    */
   struct row_group_range {
+    row_group_range() = delete;
+    row_group_range(size_t start_row_group_p,
+                    size_t row_group_count_p,
+                    size_t reserved_uncompressed_bytes_p,
+                    size_t reserved_compressed_bytes_p)
+      : start_row_group(start_row_group_p),
+        row_group_count(row_group_count_p),
+        reserved_uncompressed_bytes(reserved_uncompressed_bytes_p),
+        reserved_compressed_bytes(reserved_compressed_bytes_p)
+    {
+    }
+
     size_t start_row_group;
     size_t row_group_count;
     size_t reserved_uncompressed_bytes;

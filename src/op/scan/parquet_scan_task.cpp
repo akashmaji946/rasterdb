@@ -253,8 +253,8 @@ void parquet_scan_task_global_state::partition_row_groups()
     ++rg_count;
 
     if (partition_uncompressed_bytes >= _approximate_batch_size) {
-      _row_group_partitions.push_back(
-        {rg_start, rg_count, partition_uncompressed_bytes, partition_compressed_bytes});
+      _row_group_partitions.emplace_back(
+        rg_start, rg_count, partition_uncompressed_bytes, partition_compressed_bytes);
       partition_uncompressed_bytes = 0;
       partition_compressed_bytes   = 0;
       rg_start                     = rg_idx + 1;
@@ -263,8 +263,8 @@ void parquet_scan_task_global_state::partition_row_groups()
   }
   // We may have a final partition that doesn't amount to the target batch size
   if (rg_count > 0) {
-    _row_group_partitions.push_back(
-      {rg_start, rg_count, partition_uncompressed_bytes, partition_compressed_bytes});
+    _row_group_partitions.emplace_back(
+      rg_start, rg_count, partition_uncompressed_bytes, partition_compressed_bytes);
   }
 }
 
