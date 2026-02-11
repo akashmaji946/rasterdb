@@ -16,6 +16,7 @@
 
 // sirius
 #include "op/sirius_physical_parquet_scan.hpp"
+
 #include <data/data_batch_utils.hpp>
 #include <data/host_parquet_representation.hpp>
 #include <op/scan/parquet_scan_task.hpp>

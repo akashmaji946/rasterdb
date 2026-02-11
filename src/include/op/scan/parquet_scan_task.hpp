@@ -19,8 +19,8 @@
 // sirius
 #include <config.hpp>
 #include <memory/multiple_blocks_allocation_accessor.hpp>
-#include <op/sirius_physical_table_scan.hpp>
 #include <op/sirius_physical_parquet_scan.hpp>
+#include <op/sirius_physical_table_scan.hpp>
 #include <pipeline/sirius_pipeline_itask.hpp>
 #include <pipeline/sirius_pipeline_itask_local_state.hpp>
 #include <sirius_context.hpp>

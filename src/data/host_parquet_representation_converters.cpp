@@ -113,7 +113,7 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
 #if CUDART_VERSION >= 13000
     RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
       dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, copy_stream));
-#else 
+#else
     size_t attrs_idxs = 0;
     size_t num_attrs  = 1;
     size_t fail_idx   = 0;
