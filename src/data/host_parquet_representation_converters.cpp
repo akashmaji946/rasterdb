@@ -109,18 +109,18 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   // async copies
 #if CUDART_VERSION >= 13000
   if (stream.value() != nullptr && stream.value() != cudaStreamLegacy) {
+    cudaStream_t stream_handle = (stream.value() != nullptr && stream.value() != cudaStreamLegacy)
+                                   ? stream.value()
+                                   : cudaStreamPerThread;
     cudaMemcpyAttributes attr{};
     attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-    attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
+    attr.srcLocHint     = {cudaMemLocationTypeHost,
+                           host_src.get_device_id()};  // this is numa node id for pinned host memory
     attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
     attr.flags          = cudaMemcpyFlagDefault;
     RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
-      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream.value()));
-  } else {
-    for (size_t i = 0; i < dst_ptrs.size(); ++i) {
-      RMM_CUDA_TRY(::cudaMemcpyAsync(
-        dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, cudaStreamPerThread));
-    }
+      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream_handle));
+    RMM_CUDA_TRY(::cudaStreamSynchronize(stream_handle));
   }
 #else
   for (size_t i = 0; i < dst_ptrs.size(); ++i) {
