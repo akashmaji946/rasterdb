@@ -110,15 +110,17 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
     bytes_copied += bytes_to_copy;
   }
   auto enqueue_batch_copy = [&](cudaStream_t copy_stream) {
+
+  // cudaMemcpyBatchAsync is only supported in cuda 12.8 and greater.
 #if CUDART_VERSION >= 13000
     RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
       dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, copy_stream));
-#else
+#elif CUDART_VERSION >= 12080
     size_t attrs_idxs = 0;
     size_t num_attrs  = 1;
     size_t fail_idx   = 0;
-    RMM_CUDA_TRY(::cudaMemcpyBatchAsync(reinterpret_cast<void**>(dst_ptrs.data()),
-                                        reinterpret_cast<void**>(src_ptrs.data()),
+    RMM_CUDA_TRY(::cudaMemcpyBatchAsync(dst_ptrs.data(),
+                                        src_ptrs.data(),
                                         counts.data(),
                                         counts.size(),
                                         &attr,
@@ -126,6 +128,12 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
                                         num_attrs,
                                         &fail_idx,
                                         copy_stream));
+#else
+    // Fall back to individual async copies if cudaMemcpyBatchAsync is not available.
+    for (size_t i = 0; i < dst_ptrs.size(); ++i) {
+      RMM_CUDA_TRY(::cudaMemcpyAsync(
+        dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, copy_stream));
+    }
 #endif
   };
   if (stream.value() == nullptr) {

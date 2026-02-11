@@ -72,10 +72,17 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    * @param[in] approximate_batch_size The target approximate batch size for the scan tasks
    */
   parquet_scan_task_global_state(
-    sirius_physical_parquet_scan const* scan_op,
+    sirius_physical_parquet_scan* scan_op,
     size_t approximate_batch_size = duckdb::Config::DEFAULT_SCAN_TASK_BATCH_SIZE);
 
   //===----------Methods----------===//
+  /**
+   * @brief Get the physical parquet scan operator associated with this global state.
+   *
+   * @return A reference to the physical parquet scan operator.
+   */
+  [[nodiscard]] sirius_physical_parquet_scan& get_operator() { return *_scan_op; }
+
   /**
    * @brief Get the file path of the Parquet file to scan.
    *
@@ -157,8 +164,9 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
   void partition_row_groups();
 
   //===----------Fields----------===//
-  size_t _approximate_batch_size;  ///< Target approximate batch size for scan tasks
-  bool _is_projected;              ///< Whether projection is applied
+  size_t _approximate_batch_size;          ///< Target approximate batch size for scan tasks
+  sirius_physical_parquet_scan* _scan_op;  ///< The physical parquet scan operator being executed
+  bool _is_projected;                      ///< Whether projection is applied
 
   std::string _file_path;                            ///< The parquet file path
   cudf::io::parquet::FileMetaData _file_metadata;    ///< The parquet file metadata
@@ -321,11 +329,20 @@ class parquet_scan_task : public pipeline::sirius_pipeline_itask {
   }
 
   /**
-   * @brief Get the output consumers of this task. This task does not have any output consumers.
+   * @brief Get the output consumers operators for this task.
    *
-   * @return An empty vector.
+   * @return A vector of pointers to the output consumer operators.
    */
-  std::vector<op::sirius_physical_operator*> get_output_consumers() override { return {}; }
+  std::vector<op::sirius_physical_operator*> get_output_consumers() override
+  {
+    auto& g_state = this->_global_state->cast<parquet_scan_task_global_state>();
+    std::vector<sirius_physical_operator*> output_consumers;
+    auto ports = g_state.get_operator().get_next_port_after_sink();
+    for (auto& [child, port_id] : ports) {
+      output_consumers.push_back(child);
+    }
+    return output_consumers;
+  }
 
   /**
    * @brief Get the unique ID of this task.

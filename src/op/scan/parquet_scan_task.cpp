@@ -136,8 +136,9 @@ static std::unique_ptr<cudf::io::datasource::buffer> read_parquet_footer(cudf::i
 // Parquet Scan Task Global State
 //===----------------------------------------------------------------------===//
 parquet_scan_task_global_state::parquet_scan_task_global_state(
-  sirius_physical_parquet_scan const* scan_op, size_t approximate_batch_size)
-  : _approximate_batch_size(approximate_batch_size),
+  sirius_physical_parquet_scan* scan_op, size_t approximate_batch_size)
+  : _scan_op(scan_op),
+    _approximate_batch_size(approximate_batch_size),
     _is_projected(!scan_op->projection_ids.empty()),
     _selected_column_indices(detail::make_selected_column_indices(*scan_op))
 {
