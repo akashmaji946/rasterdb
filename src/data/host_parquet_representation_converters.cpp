@@ -28,6 +28,8 @@
 #include <cudf/utilities/span.hpp>
 
 // rmm
+#include <rmm/cuda_device.hpp>
+#include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/error.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
@@ -39,6 +41,9 @@
 #include <memory>
 #include <numeric>
 #include <stdexcept>
+
+// cuda runtime
+#include <driver_types.h>
 
 namespace sirius {
 
@@ -52,14 +57,17 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   cucascade::memory::memory_space const* target_memory_space,
   rmm::cuda_stream_view stream)
 {
+  bool null_stream = (stream.value() == nullptr);
+
+  // Source stuff
   auto& host_src          = source.cast<host_parquet_representation>();
   auto const& byte_ranges = host_src.get_column_chunk_byte_ranges();
   auto& reader            = host_src.get_parquet_reader();
 
+  // Target stuff
   rmm::device_async_resource_ref mr_ref(target_memory_space->get_default_allocator());
-  int previous_device = -1;
-  RMM_CUDA_TRY(cudaGetDevice(&previous_device));
-  RMM_CUDA_TRY(cudaSetDevice(target_memory_space->get_device_id()));
+  rmm::cuda_device_id target_device_id(target_memory_space->get_device_id());
+  rmm::cuda_set_device_raii target_device_raii(target_device_id);
 
   auto const& allocation = host_src.get_column_chunks();
 
@@ -79,19 +87,36 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
                       return sum + byte_range.size();
                     });
 
-  // Copy HOST data to GPU
+  // Copy HOST data to GPU with a single async batch copy.
   size_t bytes_copied = 0;
+  std::vector<uint8_t*> dst_ptrs;
+  std::vector<uint8_t const*> src_ptrs;
+  std::vector<size_t> counts;
+  cudaMemcpyAttributes attr{};
+  attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+  attr.srcLocHint     = {cudaMemLocationTypeHost, host_src.get_device_id()};
+  attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
+  attr.flags          = cudaMemcpyFlagDefault;
   while (bytes_copied < host_src.get_size_in_bytes()) {
     auto const& block        = allocation->at(bytes_copied / allocation->block_size());
     auto const block_offset  = bytes_copied % allocation->block_size();
     auto const bytes_to_copy = std::min(allocation->block_size() - block_offset,
                                         host_src.get_size_in_bytes() - bytes_copied);
-    RMM_CUDA_TRY(cudaMemcpyAsync(buffer_data + bytes_copied,
-                                 reinterpret_cast<const uint8_t*>(block.data()) + block_offset,
-                                 bytes_to_copy,
-                                 cudaMemcpyHostToDevice,
-                                 stream.value()));
+    dst_ptrs.push_back(buffer_data + bytes_copied);
+    src_ptrs.push_back(reinterpret_cast<uint8_t const*>(block.data() + block_offset));
+    counts.push_back(bytes_to_copy);
     bytes_copied += bytes_to_copy;
+  }
+  if (stream.value() == nullptr) {
+    // cudaMemcpyBatchAsync requires a non-null stream, so create a dedicated stream for the copy
+    // and synchronize it before proceeding.
+    rmm::cuda_stream batch_stream;
+    RMM_CUDA_TRY(cudaMemcpyBatchAsync(
+      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, batch_stream.value()));
+    batch_stream.synchronize();
+  } else {
+    RMM_CUDA_TRY(cudaMemcpyBatchAsync(
+      dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream.value()));
   }
 
   // Invoke the Parquet reader to materialize the table on GPU
@@ -102,7 +127,6 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   auto new_table = std::move(result.tbl);  // Discard metadata
   stream.synchronize();
 
-  RMM_CUDA_TRY(cudaSetDevice(previous_device));
   return std::make_unique<cucascade::gpu_table_representation>(
     std::move(new_table), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
 }

@@ -24,6 +24,10 @@
 #include <op/scan/parquet_scan_task.hpp>
 #include <op/sirius_physical_table_scan.hpp>
 #include <parallel/task_executor.hpp>
+#include <pipeline/sirius_pipeline_itask_local_state.hpp>
+
+// cucascade
+#include <cucascade/memory/memory_reservation_manager.hpp>
 
 // cudf
 #include <cudf/logger.hpp>
@@ -230,7 +234,7 @@ static void run_parquet_scan_test(std::string const& table_name,
   REQUIRE(physical_scan);
 
   auto global_state = std::make_shared<op::scan::parquet_scan_task_global_state>(
-    physical_scan.get(), client_ctx, batch_size);
+    physical_scan.get(), batch_size);
 
   cucascade::shared_data_repository data_repo;
 
@@ -245,7 +249,11 @@ static void run_parquet_scan_test(std::string const& table_name,
     auto const num_partitions = global_state->get_num_row_group_partitions();
     for (size_t i = 0; i < num_partitions; ++i) {
       auto local_state = std::make_unique<op::scan::parquet_scan_task_local_state>(*global_state);
-      auto task        = std::make_unique<op::scan::parquet_scan_task>(
+      auto reservation = mem_mgr.request_reservation(
+        cucascade::memory::any_memory_space_in_tier{cucascade::memory::Tier::HOST},
+        local_state->get_reserved_compressed_bytes());
+      local_state->set_reservation(std::move(reservation));
+      auto task = std::make_unique<op::scan::parquet_scan_task>(
         task_id++, &data_repo, std::move(local_state), global_state);
       executor.schedule(std::move(task));
     }

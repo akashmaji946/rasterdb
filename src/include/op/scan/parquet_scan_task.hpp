@@ -20,7 +20,8 @@
 #include <config.hpp>
 #include <memory/multiple_blocks_allocation_accessor.hpp>
 #include <op/sirius_physical_table_scan.hpp>
-#include <parallel/task.hpp>
+#include <pipeline/sirius_pipeline_itask.hpp>
+#include <pipeline/sirius_pipeline_itask_local_state.hpp>
 #include <sirius_context.hpp>
 
 // cucascade
@@ -71,17 +72,9 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    */
   parquet_scan_task_global_state(
     sirius_physical_table_scan const* scan_op,
-    duckdb::ClientContext const& client_ctx,
     size_t approximate_batch_size = duckdb::Config::DEFAULT_SCAN_TASK_BATCH_SIZE);
 
   //===----------Methods----------===//
-  /**
-   * @brief Get the Sirius context.
-   *
-   * @return A reference to the Sirius context.
-   */
-  [[nodiscard]] duckdb::SiriusContext& get_sirius_context() { return *_sirius_ctx; }
-
   /**
    * @brief Get the file path of the Parquet file to scan.
    *
@@ -91,6 +84,9 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
 
   /**
    * @brief Get the Parquet reader options, e.g., projections, filters, etc.
+   *
+   * This is used for fetching byte ranges for the assigned row groups in the scan task local state,
+   * and for constructing the hybrid scan reader in the scan task local state.
    *
    * @return A const reference to the Parquet reader options.
    */
@@ -136,10 +132,9 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
    *
    * @return A unique pointer to the hybrid scan Parquet reader.
    */
-  [[nodiscard]] std::unique_ptr<cudf::io::parquet::experimental::hybrid_scan_reader> make_reader()
-    const
+  [[nodiscard]] std::unique_ptr<hybrid_scan_reader> make_reader() const
   {
-    return std::make_unique<cudf::io::parquet::experimental::hybrid_scan_reader>(
+    return std::make_unique<hybrid_scan_reader>(
       cudf::host_span<uint8_t const>(_footer_buffer->data(), _footer_buffer->size()),
       _reader_options);
   }
@@ -159,12 +154,10 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
   /**
    * @brief Partition the row groups into scan tasks based on the accumulated byte sizes and the
    * target approximate batch size.
-   *
    */
   void partition_row_groups(cudf::io::parquet::FileMetaData const& file_metadata);
 
   //===----------Fields----------===//
-  duckdb::shared_ptr<duckdb::SiriusContext> _sirius_ctx;  ///< The Sirius context
   size_t _approximate_batch_size;  ///< Target approximate batch size for scan tasks
   bool _is_projected;              ///< Whether projection is applied
 
@@ -184,15 +177,14 @@ class parquet_scan_task_global_state : public parallel::itask_global_state {
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task Local State
 //===----------------------------------------------------------------------===//
-
 /**
- * @brief Local state for parquet_scan_task, which holds the memory allocation for the assigned row
- * group + column chunk byte ranges, as well as the cudf datasource for reading the file.
+ * @brief Local state for parquet_scan_task, which manages the row group indices assigned to this
+ * task and makes the memory allocation for the task.
  */
-class parquet_scan_task_local_state : public parallel::itask_local_state {
+class parquet_scan_task_local_state : public pipeline::sirius_pipeline_itask_local_state {
   using multiple_blocks_allocation =
     cucascade::memory::fixed_size_host_memory_resource::multiple_blocks_allocation;
-  using multiple_blocks_allocation_accessor = memory::multiple_blocks_allocation_accessor<uint8_t>;
+  using memory_space = cucascade::memory::memory_space;
 
  public:
   //===----------Constructor----------===//
@@ -205,32 +197,22 @@ class parquet_scan_task_local_state : public parallel::itask_local_state {
 
   //===----------Methods----------===//
   /**
-   * @brief Read the given byte range from the parquet file into this local state's allocation.
+   * @brief Make a memory allocation for this local state corresponding to the compressed bytes
+   * assigned to this local state.
    *
-   * @param[in] file_offset The offset in the file from which to start reading.
-   * @param[in] n_bytes The number of bytes to read.
+   * @return A unique pointer to the multiple blocks memory allocation.
    */
-  void read_range_into_allocation(size_t file_offset, size_t n_bytes);
+  std::unique_ptr<multiple_blocks_allocation> make_allocation();
 
   /**
-   * @brief Get the memory reservation for this local state.
+   * @brief Get a pointer to the memory space associated with this local state's reservation.
    *
-   * @return A const reference to the memory reservation.
+   * @return A pointer to the memory space.
    */
-  [[nodiscard]] cucascade::memory::reservation const& get_reservation() const
+  memory_space* get_memory_space()
   {
-    return *_reservation;
-  };
-
-  /**
-   * @brief Move the memory allocation out of this local state.
-   *
-   * @return A unique pointer to the memory allocation.
-   */
-  [[nodiscard]] std::unique_ptr<multiple_blocks_allocation> move_allocation()
-  {
-    return std::move(_allocation);
-  };
+    return const_cast<memory_space*>(&_reservation->get_memory_space());
+  }
 
   /**
    * @brief Get the host span corresponding to the row group indices assigned to this local state.
@@ -260,32 +242,16 @@ class parquet_scan_task_local_state : public parallel::itask_local_state {
   [[nodiscard]] std::vector<cudf::size_type> move_rg_indices() { return std::move(_rg_indices); }
 
  private:
-  /**
-   * @brief Reserve the next row-group range for this local state.
-   *
-   * @return true if row groups were reserved, false otherwise.
-   * @note False is only returned if superfluous tasks were scheduled.
-   */
-  bool reserve_row_groups(parquet_scan_task_global_state& g_state);
-
-  std::unique_ptr<cudf::io::datasource> _datasource;  ///< The cudf datasource for the input file
-  std::unique_ptr<cucascade::memory::reservation>
-    _reservation;  ///< Memory reservation for this local state's allocation
-  std::unique_ptr<multiple_blocks_allocation>
-    _allocation;  ///< The memory allocation into which parquet data is read
-  multiple_blocks_allocation_accessor _data_blocks_accessor;  ///< Accessor for the allocation
   size_t _reserved_uncompressed_bytes =
     0;  ///< Number of uncompressed bytes reserved by the row group range
   size_t _reserved_compressed_bytes =
     0;  ///< Number of compressed bytes reserved by the row group range
-
   std::vector<cudf::size_type> _rg_indices;  ///< The row group indices assigned to this local state
 };
 
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task
 //===----------------------------------------------------------------------===//
-
 /**
  * @brief A scan task for reading compressed slices of parquet files into memory, which will then be
  * converted to table representations by representation converters.
@@ -294,8 +260,11 @@ class parquet_scan_task_local_state : public parallel::itask_local_state {
  * https://arxiv.org/html/2508.05029v1#S3.SS4
  *
  */
-class parquet_scan_task : public sirius::parallel::itask {
+class parquet_scan_task : public pipeline::sirius_pipeline_itask {
   using shared_data_repository = cucascade::shared_data_repository;
+  using multiple_blocks_allocation =
+    cucascade::memory::fixed_size_host_memory_resource::multiple_blocks_allocation;
+  using multiple_blocks_allocation_accessor = memory::multiple_blocks_allocation_accessor<uint8_t>;
 
  public:
   //===----------Constructor----------===//
@@ -312,19 +281,53 @@ class parquet_scan_task : public sirius::parallel::itask {
                     shared_data_repository* data_repo,
                     std::unique_ptr<parquet_scan_task_local_state> l_state,
                     std::shared_ptr<parquet_scan_task_global_state> g_state)
-    : _task_id(task_id), _data_repo(data_repo), sirius::parallel::itask(std::move(l_state), g_state)
+    : pipeline::sirius_pipeline_itask(std::move(l_state), g_state),
+      _task_id(task_id),
+      _data_repo(data_repo),
+      _datasource(cudf::io::datasource::create(g_state->get_file_path()))
   {
   }
 
   //===----------Methods----------===//
   /**
-   * @brief Execute the parquet scan task: read the assigned row group + column chunk byte ranges
-   * into memory, and create a data batch with a host_parquet_representation that references the
-   * read data, which is then pushed to the shared data repository.
+   * @brief Compute the parquet scan task and produce a host_parquet_representation.
+   *
+   * This involves reading the assigned row groups and column chunks into a memory allocation, and
+   * constructing the host_parquet_representation from the allocated memory.
    *
    * @param[in] stream The CUDA stream on which to perform memory operations.
+   * @return A vector of shared pointers to data batches produced by this task.
    */
-  void execute(rmm::cuda_stream_view stream) override;
+  std::vector<std::shared_ptr<cucascade::data_batch>> compute_task(
+    rmm::cuda_stream_view stream) override;
+
+  /**
+   * @brief Publish the output data batches produced by this task to the shared data repository.
+   *
+   * @param[in] output_batches The data batches produced by this task to be published.
+   * @param[in] stream The CUDA stream on which to perform memory operations (ignored in this task).
+   */
+  void publish_output(std::vector<std::shared_ptr<cucascade::data_batch>> output_batches,
+                      rmm::cuda_stream_view stream) override;
+
+  /**
+   * @brief Get the estimated reservation size for this task, which is the number of compressed
+   * bytes reserved by this task's local state.
+   *
+   * @return The estimated reservation size in bytes.
+   */
+  [[nodiscard]] size_t get_estimated_reservation_size() const override
+  {
+    auto& l_state = this->_local_state->cast<parquet_scan_task_local_state>();
+    return l_state.get_reserved_compressed_bytes();
+  }
+
+  /**
+   * @brief Get the output consumers of this task. This task does not have any output consumers.
+   *
+   * @return An empty vector.
+   */
+  std::vector<op::sirius_physical_operator*> get_output_consumers() override { return {}; }
 
   /**
    * @brief Get the unique ID of this task.
@@ -334,8 +337,20 @@ class parquet_scan_task : public sirius::parallel::itask {
   [[nodiscard]] uint64_t get_task_id() const { return _task_id; }
 
  private:
-  shared_data_repository* _data_repo;  ///< The shared data repository to which to push batches
+  /**
+   * @brief Read the given byte range from the parquet file into the memory allocation for this
+   * task.
+   */
+  void read_range_into_allocation(size_t file_offset,
+                                  size_t n_bytes,
+                                  multiple_blocks_allocation_accessor& data_blocks_accessor,
+                                  std::unique_ptr<multiple_blocks_allocation>& allocation,
+                                  std::vector<std::future<std::size_t>>& read_futures);
+
+  //===----------Fields----------===//
   uint64_t _task_id;                   ///< The unique ID of this task
+  shared_data_repository* _data_repo;  ///< The shared data repository to which to push batches
+  std::unique_ptr<cudf::io::datasource> _datasource;  ///< The cudf datasource for the input file
 };
 
 }  // namespace sirius::op::scan

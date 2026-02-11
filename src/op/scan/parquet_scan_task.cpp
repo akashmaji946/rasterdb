@@ -40,6 +40,7 @@
 
 // standard library
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <unordered_set>
 #include <vector>
@@ -133,11 +134,8 @@ static std::unique_ptr<cudf::io::datasource::buffer> read_parquet_footer(cudf::i
 // Parquet Scan Task Global State
 //===----------------------------------------------------------------------===//
 parquet_scan_task_global_state::parquet_scan_task_global_state(
-  sirius_physical_table_scan const* scan_op,
-  duckdb::ClientContext const& client_ctx,
-  size_t approximate_batch_size)
-  : _sirius_ctx(client_ctx.registered_state->Get<duckdb::SiriusContext>("sirius_state")),
-    _approximate_batch_size(approximate_batch_size),
+  sirius_physical_table_scan const* scan_op, size_t approximate_batch_size)
+  : _approximate_batch_size(approximate_batch_size),
     _is_projected(!scan_op->projection_ids.empty()),
     _selected_column_indices(detail::make_selected_column_indices(*scan_op))
 {
@@ -272,20 +270,27 @@ void parquet_scan_task_global_state::partition_row_groups(
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task Local State
 //===----------------------------------------------------------------------===//
-
 parquet_scan_task_local_state::parquet_scan_task_local_state(
   parquet_scan_task_global_state& g_state)
-  : _datasource(cudf::io::datasource::create(g_state.get_file_path()))
 {
-  // If there are no more row groups to reserve, return immediately
-  if (!reserve_row_groups(g_state)) { return; }
+  // Get the next row-group partition
+  auto const partition_idx = g_state.get_next_rg_partition_idx();
+  if (partition_idx >= g_state.get_num_row_group_partitions()) {
+    // Too many tasks have been created for this table scan!
+    throw std::runtime_error(
+      "[parquet_scan_task_local_state] No more row group partitions available for reservation.");
+  }
+  auto const& partition = g_state.get_row_group_partition(partition_idx);
 
-  // Make the memory reservation request
-  cucascade::memory::any_memory_space_in_tier res_request_strategy(cucascade::memory::Tier::HOST);
-  auto& mem_res_mgr = g_state.get_sirius_context().get_memory_manager();
-  _reservation = mem_res_mgr.request_reservation(res_request_strategy, _reserved_compressed_bytes);
+  _rg_indices.resize(partition.row_group_count);
+  std::iota(_rg_indices.begin(), _rg_indices.end(), partition.start_row_group);
+  _reserved_uncompressed_bytes = partition.reserved_uncompressed_bytes;
+  _reserved_compressed_bytes   = partition.reserved_compressed_bytes;
+}
 
-  // Make the allocation
+std::unique_ptr<parquet_scan_task_local_state::multiple_blocks_allocation>
+parquet_scan_task_local_state::make_allocation()
+{
   auto& mem_space = _reservation->get_memory_space();
   auto* allocator =
     mem_space.get_memory_resource_as<cucascade::memory::fixed_size_host_memory_resource>();
@@ -294,77 +299,48 @@ parquet_scan_task_local_state::parquet_scan_task_local_state(
       "[parquet_scan_task_local_state] Failed to get fixed_size_host_memory_resource allocator "
       "for HOST memory space");
   }
-  _allocation = allocator->allocate_multiple_blocks(_reserved_compressed_bytes, _reservation.get());
-  _data_blocks_accessor.initialize(0, _allocation);
-}
-
-bool parquet_scan_task_local_state::reserve_row_groups(parquet_scan_task_global_state& g_state)
-{
-  // Get the next row-group partition
-  auto const partition_idx = g_state.get_next_rg_partition_idx();
-  if (partition_idx >= g_state.get_num_row_group_partitions()) { return false; }
-  auto const& partition = g_state.get_row_group_partition(partition_idx);
-
-  _rg_indices.resize(partition.row_group_count);
-  std::iota(_rg_indices.begin(), _rg_indices.end(), partition.start_row_group);
-  _reserved_uncompressed_bytes = partition.reserved_uncompressed_bytes;
-  _reserved_compressed_bytes   = partition.reserved_compressed_bytes;
-  return true;
-}
-
-void parquet_scan_task_local_state::read_range_into_allocation(size_t file_offset, size_t n_bytes)
-{
-  auto remaining_bytes = n_bytes;
-  auto current_offset  = file_offset;
-
-  while (remaining_bytes > 0) {
-    auto const bytes_to_read = std::min(
-      remaining_bytes, _data_blocks_accessor.block_size - _data_blocks_accessor.offset_in_block);
-    auto buffer_ptr =
-      reinterpret_cast<uint8_t*>(_allocation->get_blocks()[_data_blocks_accessor.block_index]) +
-      _data_blocks_accessor.offset_in_block;
-    _datasource->host_read(current_offset, bytes_to_read, buffer_ptr);
-    remaining_bytes -= bytes_to_read;
-    current_offset += bytes_to_read;
-    _data_blocks_accessor.offset_in_block += bytes_to_read;
-    // Do we need to advance to the next block?
-    if (_data_blocks_accessor.offset_in_block == _data_blocks_accessor.block_size) {
-      ++_data_blocks_accessor.block_index;
-      _data_blocks_accessor.offset_in_block = 0;
-    }
-  }
+  return allocator->allocate_multiple_blocks(_reserved_compressed_bytes, _reservation.get());
 }
 
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task
 //===----------------------------------------------------------------------===//
-void parquet_scan_task::execute(rmm::cuda_stream_view /* stream */)
+std::vector<std::shared_ptr<cucascade::data_batch>> parquet_scan_task::compute_task(
+  rmm::cuda_stream_view /* stream */)
 {
   auto& l_state = this->_local_state->cast<parquet_scan_task_local_state>();
   auto& g_state = this->_global_state->cast<parquet_scan_task_global_state>();
   auto reader   = g_state.make_reader();
 
+  // Make the allocation and accessor
+  auto allocation = l_state.make_allocation();
+  memory::multiple_blocks_allocation_accessor<uint8_t> data_accessor;
+  data_accessor.initialize(0, allocation);
+
   // Get the byte ranges for the range of row groups assigned to this task
   auto byte_ranges =
     reader->all_column_chunks_byte_ranges(l_state.get_rg_span(), g_state.get_options());
 
-  // Read each byte range into the local state's allocation
+  // Read each byte range into the allocation asynchronously
   std::vector<cudf::io::text::byte_range_info> new_byte_ranges;
   new_byte_ranges.reserve(byte_ranges.size());
   int64_t new_offset = 0;
+  std::vector<std::future<std::size_t>> read_futures;
   for (auto const& range : byte_ranges) {
-    l_state.read_range_into_allocation(range.offset(), range.size());
+    read_range_into_allocation(
+      range.offset(), range.size(), data_accessor, allocation, read_futures);
     new_byte_ranges.emplace_back(new_offset, range.size());
     new_offset += range.size();
+  }
+  for (auto& future : read_futures) {
+    future.get();  // Ensure all reads are complete
   }
   assert(new_offset == l_state.get_reserved_compressed_bytes());
 
   // Create a data batch with the column chunks
-  auto* mem_space =
-    const_cast<cucascade::memory::memory_space*>(&l_state.get_reservation().get_memory_space());
   auto parquet_representation =
-    std::make_unique<host_parquet_representation>(mem_space,
-                                                  std::move(l_state.move_allocation()),
+    std::make_unique<host_parquet_representation>(l_state.get_memory_space(),
+                                                  std::move(allocation),
                                                   std::move(g_state.make_reader()),
                                                   g_state.get_options(),
                                                   std::move(l_state.move_rg_indices()),
@@ -373,7 +349,44 @@ void parquet_scan_task::execute(rmm::cuda_stream_view /* stream */)
                                                   l_state.get_reserved_uncompressed_bytes());
   auto data_batch =
     std::make_shared<cucascade::data_batch>(get_next_batch_id(), std::move(parquet_representation));
-  _data_repo->add_data_batch(std::move(data_batch));
+  return {data_batch};
+}
+
+void parquet_scan_task::publish_output(
+  std::vector<std::shared_ptr<cucascade::data_batch>> output_batches,
+  rmm::cuda_stream_view /* stream */)
+{
+  for (auto& batch : output_batches) {
+    _data_repo->add_data_batch(std::move(batch));
+  }
+}
+
+void parquet_scan_task::read_range_into_allocation(
+  size_t file_offset,
+  size_t n_bytes,
+  multiple_blocks_allocation_accessor& data_blocks_accessor,
+  std::unique_ptr<multiple_blocks_allocation>& allocation,
+  std::vector<std::future<std::size_t>>& read_futures)
+{
+  auto remaining_bytes = n_bytes;
+  auto current_offset  = file_offset;
+
+  while (remaining_bytes > 0) {
+    auto const bytes_to_read = std::min(
+      remaining_bytes, data_blocks_accessor.block_size - data_blocks_accessor.offset_in_block);
+    auto buffer_ptr =
+      reinterpret_cast<uint8_t*>(allocation->get_blocks()[data_blocks_accessor.block_index]) +
+      data_blocks_accessor.offset_in_block;
+    read_futures.push_back(_datasource->host_read_async(current_offset, bytes_to_read, buffer_ptr));
+    remaining_bytes -= bytes_to_read;
+    current_offset += bytes_to_read;
+    data_blocks_accessor.offset_in_block += bytes_to_read;
+    // Do we need to advance to the next block?
+    if (data_blocks_accessor.offset_in_block == data_blocks_accessor.block_size) {
+      ++data_blocks_accessor.block_index;
+      data_blocks_accessor.offset_in_block = 0;
+    }
+  }
 }
 
 }  // namespace sirius::op::scan
