@@ -471,7 +471,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
   // measure time
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Result collector time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_INFO("Result collector time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 

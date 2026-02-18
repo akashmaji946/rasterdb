@@ -21,9 +21,15 @@
 #include "gpu_physical_order.hpp"
 #include "log/logging.hpp"
 
+#include <cudf/copying.hpp>
+#include <cudf/sorting.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
+
 #include <cub/cub.cuh>
 
 #include <stdio.h>
+#include <chrono>
 
 #include <algorithm>
 
@@ -948,50 +954,7 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
                   OrderByType* order_by_type,
                   idx_t num_results)
 {
-  // 1. Try using custom optimization engine
-  if (Config::USE_CUSTOM_TOP_N && num_results > 0) {
-    bool type_supported = true;
-    // Check if all column types are supported
-    for (size_t col = 0; col < num_keys; col++) {
-      if (MapSiriusTypeToKernelType(keys[col]->data_wrapper.type.id()) == KernelColType::UNKNOWN) {
-        type_supported = false;
-        break;
-      }
-    }
-    for (size_t col = 0; col < num_projections; col++) {
-      if (MapSiriusTypeToKernelType(projection[col]->data_wrapper.type.id()) ==
-          KernelColType::UNKNOWN) {
-        type_supported = false;
-        break;
-      }
-    }
-
-    if (type_supported) {
-      // [Routing Strategy Optimization]
-
-      // Strategy A: For small limits (<= 32), prefer Heap Sort (Engine A).
-      // Rationale: Even for single column, Heap Sort only needs one-pass scan, lower latency than
-      // Radix Sort (Multi-Pass). This significantly speeds up queries like Q25, Q11 with LIMIT 10.
-      if (num_results <= MAX_THREAD_TOP_K) {
-        SIRIUS_LOG_DEBUG("Using Heap Sort Engine (Small Limit)");
-        CustomMultiColumnTopN(
-          keys, projection, num_keys, num_projections, order_by_type, num_results);
-        return;
-      }
-
-      // Strategy B: For large limit but single column, use Radix Sort (Engine B).
-      // Rationale: As limit grows, heap maintenance cost increases, Radix Sort's high throughput
-      // advantage shows.
-      else if (num_keys == 1) {
-        SIRIUS_LOG_DEBUG("Using Radix Sort Engine (Single Column Large Limit)");
-        CustomSingleColumnRadixTopN(
-          keys, projection, num_keys, num_projections, order_by_type, num_results);
-        return;
-      }
-    }
-  }
-
-  // 2. Handle empty data
+  // Handle empty data
   if (keys[0]->column_length == 0) {
     for (idx_t col = 0; col < num_projections; col++) {
       bool old_unique = projection[col]->is_unique;
@@ -1011,22 +974,22 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
     }
     return;
   }
-  SIRIUS_LOG_DEBUG("Cudf order using custom top n of {} has val {}", num_results, false);
 
-  // 3. Fallback: libcudf full sorting
-  // Applicable for: multi-column with Limit > 32, or unsupported types, or complex Offset handling
-  // (though currently logic doesn't pass Offset)
-  SIRIUS_LOG_DEBUG("CUDF Order By (Fallback)");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   cudf::set_current_device_resource(gpuBufferManager->mr);
 
-  std::vector<cudf::column_view> columns_cudf;
-  for (int key = 0; key < num_keys; key++)
-    columns_cudf.push_back(keys[key]->convertToCudfColumn());
+  // Build cudf column views
+  std::vector<cudf::column_view> key_views;
+  for (idx_t i = 0; i < num_keys; i++)
+    key_views.push_back(keys[i]->convertToCudfColumn());
+
+  std::vector<cudf::column_view> proj_views;
+  for (idx_t i = 0; i < num_projections; i++)
+    proj_views.push_back(projection[i]->convertToCudfColumn());
 
   std::vector<cudf::order> orders;
   std::vector<cudf::null_order> null_orders;
-  for (int i = 0; i < num_keys; i++) {
+  for (idx_t i = 0; i < num_keys; i++) {
     if (order_by_type[i] == OrderByType::ASCENDING) {
       orders.push_back(cudf::order::ASCENDING);
       null_orders.push_back(cudf::null_order::AFTER);
@@ -1036,20 +999,31 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
     }
   }
 
-  auto keys_table        = cudf::table_view(columns_cudf);
-  auto sorted_order      = cudf::sorted_order(keys_table, orders, null_orders);
-  auto sorted_order_view = sorted_order->view();
+  auto keys_table = cudf::table_view(key_views);
+  auto proj_table = cudf::table_view(proj_views);
+  uint32_t num_records = keys[0]->column_length;
+  uint32_t keep_rows =
+    (num_results > 0) ? std::min(static_cast<uint32_t>(num_results), num_records) : num_records;
 
-  std::vector<cudf::column_view> projection_cudf;
-  for (int col = 0; col < num_projections; col++)
-    projection_cudf.push_back(projection[col]->convertToCudfColumn());
+  SIRIUS_LOG_INFO("[cudf sort_by_key] rows={}, keep={}", num_records, keep_rows);
+  auto sort_start = std::chrono::high_resolution_clock::now();
+  auto sorted = cudf::sort_by_key(proj_table, keys_table, orders, null_orders);
+  cudaDeviceSynchronize();
+  auto sort_end = std::chrono::high_resolution_clock::now();
+  auto sort_dur = std::chrono::duration_cast<std::chrono::microseconds>(sort_end - sort_start);
+  SIRIUS_LOG_INFO("[cudf sort_by_key] sort time: {:.2f} ms", sort_dur.count() / 1000.0);
 
-  auto projection_table = cudf::table_view(projection_cudf);
-  auto gathered_table   = cudf::gather(projection_table, sorted_order_view);
+  std::unique_ptr<cudf::table> result_table;
+  if (keep_rows < num_records) {
+    auto slices  = cudf::slice(sorted->view(), {0, static_cast<cudf::size_type>(keep_rows)});
+    result_table = std::make_unique<cudf::table>(slices.front());
+  } else {
+    result_table = std::move(sorted);
+  }
 
-  for (int col = 0; col < num_projections; col++) {
+  for (idx_t col = 0; col < num_projections; col++) {
     projection[col]->setFromCudfColumn(
-      gathered_table->get_column(col), projection[col]->is_unique, nullptr, 0, gpuBufferManager);
+      result_table->get_column(col), projection[col]->is_unique, nullptr, 0, gpuBufferManager);
   }
 }
 

@@ -134,7 +134,7 @@ SinkResultType GPUPhysicalTopN::Sink(GPUIntermediateRelation& input_relation) co
   // return SinkResultType::NEED_MORE_INPUT;
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Top N Sink time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_INFO("Top N Sink time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 
@@ -203,7 +203,7 @@ SourceResultType GPUPhysicalTopN::GetData(GPUIntermediateRelation& output_relati
   // return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Top N GetData time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_INFO("Top N GetData time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 

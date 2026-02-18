@@ -61,7 +61,7 @@ OperatorResultType GPUPhysicalFilter::Execute(GPUIntermediateRelation& input_rel
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Filter time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_INFO("Filter time: {:.2f} ms", duration.count() / 1000.0);
   return OperatorResultType::FINISHED;
 }
 
