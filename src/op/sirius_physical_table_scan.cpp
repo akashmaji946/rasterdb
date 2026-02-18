@@ -181,22 +181,22 @@ std::unique_ptr<operator_data> sirius_physical_table_scan::execute(const operato
     for (auto& batch : output_batches) {
       if (!batch) { continue; }
 
-      // Release the table from the batch (zero-copy: we're the sole consumer)
+      // Project columns from the batch table
       auto& gpu_rep = batch->get_data()->cast<cucascade::gpu_table_representation>();
-      auto table    = gpu_rep.release_table();
-      auto columns  = table->release();
+      auto& table   = gpu_rep.get_table();
 
-      // Select only the output columns by moving ownership
-      std::vector<std::unique_ptr<cudf::column>> selected;
-      selected.reserve(expected_output_columns);
+      // Build a table_view with only the projected columns
+      std::vector<cudf::column_view> selected_views;
+      selected_views.reserve(expected_output_columns);
       for (duckdb::idx_t i = 0; i < expected_output_columns; i++) {
-        selected.push_back(std::move(columns[projection_ids[i]]));
+        selected_views.push_back(table.view().column(projection_ids[i]));
       }
+      cudf::table_view projected_view(selected_views);
 
-      auto projected_table = std::make_unique<cudf::table>(std::move(selected));
-      auto* space          = batch->get_memory_space();
+      auto* space = batch->get_memory_space();
       auto projected_rep =
-        std::make_unique<cucascade::gpu_table_representation>(std::move(projected_table), *space);
+        std::make_unique<cucascade::gpu_table_representation>(
+          cudf::table(projected_view, cudf::get_default_stream(), space->get_default_allocator()), *space);
       auto projected_batch =
         std::make_shared<cucascade::data_batch>(batch->get_batch_id(), std::move(projected_rep));
 

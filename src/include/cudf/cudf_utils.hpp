@@ -23,6 +23,7 @@
 #if CUDF_VERSION_NUM > 2504
 #include <cudf/detail/aggregation/aggregation.hpp>
 #include <cudf/detail/stream_compaction.hpp>
+#include <cudf/reduction/detail/distinct_count.hpp>
 #include <cudf/join/conditional_join.hpp>
 #include <cudf/join/distinct_hash_join.hpp>
 #include <cudf/join/hash_join.hpp>

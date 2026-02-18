@@ -276,7 +276,7 @@ void sirius_config::load_from_file(const std::filesystem::path& config_path)
       builder.set_number_of_gpus(std::get<size_t>(topology_instance.num_gpus_or_gpu_ids));
     } else {
       const auto& gpu_ids = std::get<std::vector<int>>(topology_instance.num_gpus_or_gpu_ids);
-      builder.set_gpu_ids(gpu_ids);
+      builder.set_number_of_gpus(gpu_ids.size());
     }
     gpu_memory_config_instance.setup_configurator(builder);
     host_memory_config_instance.setup_configurator(builder);

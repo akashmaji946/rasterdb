@@ -27,6 +27,7 @@
 
 #include <cudf/utilities/default_stream.hpp>
 
+#include <cucascade/data/gpu_data_representation.hpp>
 #include <cucascade/memory/common.hpp>
 
 #include <iostream>
@@ -167,7 +168,12 @@ std::unique_ptr<op::operator_data> duckdb_scan_executor::get_scan_output(
       std::vector<std::shared_ptr<cucascade::data_batch>> cloned_batches;
       cloned_batches.reserve(batches.size());
       for (auto& b : batches) {
-        cloned_batches.push_back(b->clone(::sirius::get_next_batch_id(), stream));
+        auto& src_rep = b->get_data()->cast<cucascade::gpu_table_representation>();
+        auto cloned_table = cudf::table(src_rep.get_table().view(), stream, b->get_memory_space()->get_default_allocator());
+        auto cloned_rep = std::make_unique<cucascade::gpu_table_representation>(
+          std::move(cloned_table), *b->get_memory_space());
+        cloned_batches.push_back(
+          std::make_shared<cucascade::data_batch>(::sirius::get_next_batch_id(), std::move(cloned_rep)));
       }
       return std::make_unique<op::operator_data>(std::move(cloned_batches));
     } else {
@@ -175,7 +181,12 @@ std::unique_ptr<op::operator_data> duckdb_scan_executor::get_scan_output(
       std::vector<std::shared_ptr<cucascade::data_batch>> cloned_batches;
       cloned_batches.reserve(scan_output->get_data_batches().size());
       for (auto& b : scan_output->get_data_batches()) {
-        cloned_batches.push_back(b->clone(::sirius::get_next_batch_id(), stream));
+        auto& src_rep = b->get_data()->cast<cucascade::gpu_table_representation>();
+        auto cloned_table = cudf::table(src_rep.get_table().view(), stream, b->get_memory_space()->get_default_allocator());
+        auto cloned_rep = std::make_unique<cucascade::gpu_table_representation>(
+          std::move(cloned_table), *b->get_memory_space());
+        cloned_batches.push_back(
+          std::make_shared<cucascade::data_batch>(::sirius::get_next_batch_id(), std::move(cloned_rep)));
       }
       entry->batches.push_back(std::move(cloned_batches));
       return scan_output;

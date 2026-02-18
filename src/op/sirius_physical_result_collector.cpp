@@ -26,6 +26,7 @@
 // cucascade
 #include <cucascade/data/cpu_data_representation.hpp>
 #include <cucascade/data/data_batch.hpp>
+#include <cucascade/data/gpu_data_representation.hpp>
 #include <cucascade/memory/common.hpp>
 #include <cucascade/memory/memory_reservation_manager.hpp>
 
@@ -147,7 +148,14 @@ void sirius_physical_materialized_collector::sink(const operator_data& input_dat
       auto& mem_space     = reservation->get_memory_space();
       auto& data_repo_mgr = sirius_ctx->get_data_repository_manager();
       auto next_batch_id  = data_repo_mgr.get_next_data_batch_id();
-      clone_batch         = input_batch->clone(next_batch_id, stream);
+      // Manual clone: deep-copy the underlying gpu_table_representation
+      {
+        auto& src_rep = input_batch->get_data()->cast<cucascade::gpu_table_representation>();
+        auto cloned_table = cudf::table(src_rep.get_table().view(), stream, mem_space.get_default_allocator());
+        auto cloned_rep = std::make_unique<cucascade::gpu_table_representation>(
+          std::move(cloned_table), *input_batch->get_memory_space());
+        clone_batch = std::make_shared<cucascade::data_batch>(next_batch_id, std::move(cloned_rep));
+      }
       // todo (bobbi) pass stream to sink
       clone_batch->convert_to<cucascade::host_table_representation>(registry, &mem_space, stream);
       data = clone_batch->get_data();

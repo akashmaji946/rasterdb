@@ -210,18 +210,17 @@ std::unique_ptr<operator_data> sirius_physical_grouped_aggregate_merge::execute(
   }
 
   // Post-merge AVG projection: compute SUM/COUNT for each AVG aggregate.
-  // Release ownership of the merged table's columns so we can move (not copy) them.
   auto* space        = merged->get_memory_space();
   auto mr            = space->get_default_allocator();
   auto& gpu_rep      = merged->get_data()->cast<cucascade::gpu_table_representation>();
-  auto merged_cols   = gpu_rep.release_table()->release();
+  auto merged_view   = gpu_rep.get_table().view();
   int num_group_cols = static_cast<int>(group_idx.size());
 
   std::vector<std::unique_ptr<cudf::column>> output_cols;
 
-  // Move group key columns (zero-copy)
+  // Copy group key columns
   for (int i = 0; i < num_group_cols; ++i) {
-    output_cols.push_back(std::move(merged_cols[i]));
+    output_cols.push_back(std::make_unique<cudf::column>(merged_view.column(i), stream, mr));
   }
 
   // Process each original aggregate
@@ -230,8 +229,8 @@ std::unique_ptr<operator_data> sirius_physical_grouped_aggregate_merge::execute(
       int sum_col_idx   = num_group_cols + static_cast<int>(slot.cudf_idx);
       int count_col_idx = num_group_cols + static_cast<int>(slot.cudf_idx) + 1;
 
-      auto sum_view   = merged_cols[sum_col_idx]->view();
-      auto count_view = merged_cols[count_col_idx]->view();
+      auto sum_view   = merged_view.column(sum_col_idx);
+      auto count_view = merged_view.column(count_col_idx);
 
       std::unique_ptr<cudf::column> avg_col;
       bool is_decimal = (slot.output_type.id() == cudf::type_id::DECIMAL32 ||
@@ -256,9 +255,9 @@ std::unique_ptr<operator_data> sirius_physical_grouped_aggregate_merge::execute(
 
       output_cols.push_back(std::move(avg_col));
     } else {
-      // Move non-AVG aggregate columns directly (zero-copy)
+      // Copy non-AVG aggregate columns
       int col_idx = num_group_cols + static_cast<int>(slot.cudf_idx);
-      output_cols.push_back(std::move(merged_cols[col_idx]));
+      output_cols.push_back(std::make_unique<cudf::column>(merged_view.column(col_idx), stream, mr));
     }
   }
 

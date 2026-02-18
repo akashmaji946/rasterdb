@@ -136,7 +136,7 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu(
   stream.synchronize();
 
   return std::make_unique<cucascade::gpu_table_representation>(
-    std::move(new_table), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
+    std::move(*new_table), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
 }
 
 /**

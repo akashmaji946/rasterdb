@@ -280,8 +280,7 @@ std::shared_ptr<cucascade::data_batch> GpuExpressionExecutor::execute(
   // Create the data representation
   std::unique_ptr<cucascade::idata_representation> output_data_rep =
     std::make_unique<cucascade::gpu_table_representation>(
-      std::move(
-        std::make_unique<cudf::table>(std::move(output_columns), execution_stream, resource_ref)),
+      cudf::table(std::move(output_columns), execution_stream, resource_ref),
       *input_batch->get_memory_space());
 
   // Create the data batch and return
@@ -347,7 +346,7 @@ std::shared_ptr<cucascade::data_batch> GpuExpressionExecutor::select(
   auto output_table =
     cudf::apply_boolean_mask(input_table, bitmap->view(), execution_stream, resource_ref);
   std::unique_ptr<cucascade::idata_representation> output_data_rep =
-    std::make_unique<cucascade::gpu_table_representation>(std::move(output_table),
+    std::make_unique<cucascade::gpu_table_representation>(std::move(*output_table),
                                                           *input_batch->get_memory_space());
 
   // Create the data batch and return

@@ -74,5 +74,5 @@ add_subdirectory("${CUCASCADE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/cucascade"
 
 # Set include directory for use in main CMakeLists.txt
 set(CUCASCADE_INCLUDE_DIR
-    "${CUCASCADE_SOURCE_DIR}/include"
+    "${CUCASCADE_SOURCE_DIR}/include/cucascade"
     CACHE PATH "cuCascade include directory")

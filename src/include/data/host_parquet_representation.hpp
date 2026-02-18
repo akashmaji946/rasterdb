@@ -86,7 +86,7 @@ class host_parquet_representation : public cucascade::idata_representation {
    * @param[in] stream CUDA stream for memory operations
    * @return A unique pointer to the cloned host_parquet_representation.
    */
-  std::unique_ptr<idata_representation> clone(rmm::cuda_stream_view stream) override;
+  std::unique_ptr<idata_representation> clone(rmm::cuda_stream_view stream);
 
   /**
    * @brief Gets the fixed multiple blocks allocation containing the Parquet column chunks.
