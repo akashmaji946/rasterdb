@@ -2,6 +2,7 @@
 
 // sirius
 #include <cudf_utils.hpp>
+#include <log/logging.hpp>
 
 // duckdb
 #include <duckdb/common/types.hpp>
@@ -22,7 +23,7 @@
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/types.hpp>
 
-// rmmI
+// rmm
 #include <rmm/cuda_stream_view.hpp>
 
 // standard library
@@ -30,16 +31,47 @@
 
 namespace sirius {
 
-struct expression_translator {
+class expression_translator {
+ public:
   // std::optional cannot wrap a real reference, so we use reference_wrapper instead
   using expr_ref = std::reference_wrapper<cudf::ast::expression const>;
 
-  std::optional<cudf::ast::tree> translate_expression(duckdb::Expression const& expr) {}
-  std::optional<cudf::ast::tree> translate_join_condition(duckdb::JoinCondition const& condition) {}
+  expression_translator(rmm::cuda_stream_view stream, rmm::device_async_resource_ref resource_ref)
+    : stream(stream), resource_ref(resource_ref)
+  {
+  }
 
-  std::optional<expr_ref> add_expression(
+  void reset_tree() { ast_tree = cudf::ast::tree{}; }
+
+  std::optional<cudf::ast::tree> translate_expression(
     duckdb::Expression const& expr,
     cudf::ast::table_reference const table_src = cudf::ast::table_reference::LEFT)
+  {
+    reset_tree();
+    auto expr_ref = add_expression(expr, table_src);
+    if (!expr_ref) { return std::nullopt; }
+    return std::move(ast_tree);
+  }
+
+  std::optional<cudf::ast::tree> translate_join_condition(duckdb::JoinCondition const& condition)
+  {
+    reset_tree();
+    auto left_tree = translate_expression(*condition.left, cudf::ast::table_reference::LEFT);
+    if (!left_tree) { return std::nullopt; }
+
+    reset_tree();
+    auto right_tree = translate_expression(*condition.right, cudf::ast::table_reference::RIGHT);
+    if (!right_tree) { return std::nullopt; }
+
+    // Combine the left and right trees with the appropriate comparison operator
+    cudf::ast::tree combined_tree;
+    /// TODO: Combine left and right tree
+    return std::move(combined_tree);
+  }
+
+ private:
+  std::optional<expr_ref> add_expression(duckdb::Expression const& expr,
+                                         cudf::ast::table_reference const table_src)
   {
     switch (expr.GetExpressionClass()) {
       case duckdb::ExpressionClass::BOUND_BETWEEN:
@@ -233,15 +265,106 @@ struct expression_translator {
   std::optional<expr_ref> add_expression(duckdb::BoundFunctionExpression const& expr,
                                          cudf::ast::table_reference const table_src)
   {
-    /// Can do numeric binary ops
-    return std::nullopt;
+    // cuDF AST only supports numeric binary operations
+    auto const& func_str = expr.function.name;
+    if (func_str == "+") {
+      // Translate children
+      auto left_expr  = add_expression(*expr.children[0], table_src);
+      auto right_expr = add_expression(*expr.children[1], table_src);
+
+      // Check for failure in translating children
+      if (!left_expr || !right_expr) { return std::nullopt; }
+
+      // Construct the addition expression
+      return ast_tree.emplace<cudf::ast::operation>(
+        cudf::ast::ast_operator::ADD, *left_expr, *right_expr);
+
+    } else if (func_str == "-") {
+      // Translate children
+      auto left_expr  = add_expression(*expr.children[0], table_src);
+      auto right_expr = add_expression(*expr.children[1], table_src);
+
+      // Check for failure in translating children
+      if (!left_expr || !right_expr) { return std::nullopt; }
+
+      // Construct the subtraction expression
+      return ast_tree.emplace<cudf::ast::operation>(
+        cudf::ast::ast_operator::SUB, *left_expr, *right_expr);
+    } else if (func_str == "*") {
+      // Translate children
+      auto left_expr  = add_expression(*expr.children[0], table_src);
+      auto right_expr = add_expression(*expr.children[1], table_src);
+
+      // Check for failure in translating children
+      if (!left_expr || !right_expr) { return std::nullopt; }
+
+      // Construct the multiplication expression
+      return ast_tree.emplace<cudf::ast::operation>(
+        cudf::ast::ast_operator::MUL, *left_expr, *right_expr);
+    } else if (func_str == "/" || func_str == "//") {
+      // Translate children
+      auto left_expr  = add_expression(*expr.children[0], table_src);
+      auto right_expr = add_expression(*expr.children[1], table_src);
+
+      // Check for failure in translating children
+      if (!left_expr || !right_expr) { return std::nullopt; }
+
+      // Construct the division expression
+      return ast_tree.emplace<cudf::ast::operation>(
+        cudf::ast::ast_operator::DIV, *left_expr, *right_expr);
+    } else if (func_str == "%") {
+      // Translate children
+      auto left_expr  = add_expression(*expr.children[0], table_src);
+      auto right_expr = add_expression(*expr.children[1], table_src);
+
+      // Check for failure in translating children
+      if (!left_expr || !right_expr) { return std::nullopt; }
+
+      // Construct the modulo expression
+      return ast_tree.emplace<cudf::ast::operation>(
+        cudf::ast::ast_operator::MOD, *left_expr, *right_expr);
+    }
+    return std::nullopt;  // Unsupported/unexpected function type
   }
   std::optional<expr_ref> add_expression(duckdb::BoundOperatorExpression const& expr,
                                          cudf::ast::table_reference const table_src)
   {
-    switch (expr.type) {                            // COALESCE is not supported
-      case duckdb::ExpressionType::COMPARE_IN:      /// TODO
-      case duckdb::ExpressionType::COMPARE_NOT_IN:  /// TODO (use fallthrough)
+    switch (expr.type) {
+      case duckdb::ExpressionType::COMPARE_IN:  // Fallthrough
+      case duckdb::ExpressionType::COMPARE_NOT_IN: {
+        // [KEVIN]: It may be wise to limit the number of children for IN expressions that we
+        // attempt to translate, as a large number of children could lead to a very large/complex
+        // AST that causes issues for cuDF. For now, we will optimistically attempt to translate all
+        // IN expressions regardless of number of children, but we can revisit this if it becomes an
+        // issue.
+        assert(expr.children.size() > 1);  // IN expressions must have at least 2 children (test
+                                           // expression and at least 1 comparator expression)
+
+        // Translate the test expression
+        auto test_expr = add_expression(*expr.children[0], table_src);
+        if (!test_expr) { return std::nullopt; }
+
+        // Translate the first comparison expression
+        auto comparator_expr = add_expression(*expr.children[1], table_src);
+        if (!comparator_expr) { return std::nullopt; }
+        auto comparison_expr = ast_tree.emplace<cudf::ast::operation>(
+          cudf::ast::ast_operator::EQUAL, *test_expr, *comparator_expr);
+
+        // Loop over children, building an OR tree of comparisons
+        for (size_t child = 2; child < expr.children.size(); ++child) {
+          auto comparator_expr = add_expression(*expr.children[child], table_src);
+          if (!comparator_expr) { return std::nullopt; }
+
+          auto next_comparison_expr = ast_tree.emplace<cudf::ast::operation>(
+            cudf::ast::ast_operator::EQUAL, *test_expr, *comparator_expr);
+          comparison_expr = ast_tree.emplace<cudf::ast::operation>(
+            cudf::ast::ast_operator::LOGICAL_OR, comparison_expr, next_comparison_expr);
+        }
+
+        if (expr.type == duckdb::ExpressionType::COMPARE_IN) { return comparison_expr; }
+        return ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::NOT,
+                                                      comparison_expr);
+      }
       case duckdb::ExpressionType::OPERATOR_NOT: {
         // Add the child
         auto child_expr = add_expression(*expr.children[0], table_src);
@@ -252,17 +375,7 @@ struct expression_translator {
         // Add the operator expression
         return ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::NOT, *child_expr);
       }
-      case duckdb::ExpressionType::OPERATOR_IS_NULL: {
-        // Add the child
-        auto child_expr = add_expression(*expr.children[0], table_src);
-
-        // Check for failure in translating child
-        if (!child_expr) { return std::nullopt; }
-
-        // Add the operator expression
-        return ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::IS_NULL,
-                                                      *child_expr);
-      }
+      case duckdb::ExpressionType::OPERATOR_IS_NULL:  // Fallthrough
       case duckdb::ExpressionType::OPERATOR_IS_NOT_NULL: {
         // Add the child
         auto child_expr = add_expression(*expr.children[0], table_src);
@@ -273,6 +386,7 @@ struct expression_translator {
         // Add IS_NULL followed by NOT to represent IS_NOT_NULL
         auto is_null_op =
           ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::IS_NULL, *child_expr);
+        if (expr.type == duckdb::ExpressionType::OPERATOR_IS_NULL) { return is_null_op; }
         return ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::NOT, is_null_op);
       }
       default: return std::nullopt;  // Unsupported/unexpected operator type
