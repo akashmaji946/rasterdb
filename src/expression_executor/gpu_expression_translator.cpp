@@ -23,8 +23,8 @@ namespace sirius {
 using expr_ref = std::reference_wrapper<cudf::ast::expression const>;
 
 std::optional<gpu_expression_translator::translated_expression>
-gpu_expression_translator::translate_expression(
-  duckdb::Expression const& expr, cudf::ast::table_reference const table_src)
+gpu_expression_translator::translate_expression(duckdb::Expression const& expr,
+                                                cudf::ast::table_reference const table_src)
 {
   reset_tree();
   auto expr_ref = add_expression(expr, table_src);
@@ -36,8 +36,7 @@ gpu_expression_translator::translate_expression(
 }
 
 std::optional<gpu_expression_translator::translated_expression>
-gpu_expression_translator::translate_join_condition(
-  duckdb::JoinCondition const& condition)
+gpu_expression_translator::translate_join_condition(duckdb::JoinCondition const& condition)
 {
   reset_tree();
   auto left_expr = add_expression(*condition.left, cudf::ast::table_reference::LEFT);
@@ -122,9 +121,7 @@ std::optional<expr_ref> gpu_expression_translator::add_expression(
   auto upper_expr = add_expression(*expr.upper, table_src);
 
   // Check for failure in translating children
-  if (!input_expr || !lower_expr || !upper_expr) {
-    return std::nullopt;
-  }
+  if (!input_expr || !lower_expr || !upper_expr) { return std::nullopt; }
 
   // Construct the BETWEEN expression
   auto const& lower_cmp_op = _ast_tree.emplace<cudf::ast::operation>(

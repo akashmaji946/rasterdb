@@ -175,14 +175,14 @@ class gpu_expression_translator {
   template <typename SCALAR_T, typename... ARGS>
   std::optional<expr_ref> add_literal_expression(ARGS&&... args)
   {
-    auto scalar = std::make_unique<SCALAR_T>(std::forward<ARGS>(args)...);
+    auto scalar      = std::make_unique<SCALAR_T>(std::forward<ARGS>(args)...);
     auto& scalar_ref = *scalar;
     _literal_scalars.push_back(std::move(scalar));
     return _ast_tree.emplace<cudf::ast::literal>(scalar_ref);
   }
 
-  cudf::ast::tree _ast_tree{};    ///< The cuDF AST being constructed by the translator. The final
-                                  ///< expression will be the back of the tree.
+  cudf::ast::tree _ast_tree{};  ///< The cuDF AST being constructed by the translator. The final
+                                ///< expression will be the back of the tree.
   std::vector<std::unique_ptr<cudf::scalar>>
     _literal_scalars{};           ///< Owning storage for scalar literals referenced by AST nodes.
   rmm::cuda_stream_view _stream;  ///< The CUDA stream to use for any operations performed by the
