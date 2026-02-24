@@ -55,14 +55,13 @@ mark_join_fixture create_mark_join()
 {
   mark_join_fixture f;
 
-  f.logical_join = duckdb::make_uniq<duckdb::LogicalComparisonJoin>(duckdb::JoinType::MARK);
+  f.logical_join        = duckdb::make_uniq<duckdb::LogicalComparisonJoin>(duckdb::JoinType::MARK);
   f.logical_join->types = {
     duckdb::LogicalType::INTEGER, duckdb::LogicalType::INTEGER, duckdb::LogicalType::BOOLEAN};
 
   auto left_child = duckdb::make_uniq<sirius_physical_operator>(
     SiriusPhysicalOperatorType::PROJECTION,
-    duckdb::vector<duckdb::LogicalType>{duckdb::LogicalType::INTEGER,
-                                        duckdb::LogicalType::INTEGER},
+    duckdb::vector<duckdb::LogicalType>{duckdb::LogicalType::INTEGER, duckdb::LogicalType::INTEGER},
     0);
   auto right_child = duckdb::make_uniq<sirius_physical_operator>(
     SiriusPhysicalOperatorType::PROJECTION,
@@ -110,7 +109,7 @@ TEST_CASE("sirius_physical_hash_join mark join - partial match", "[physical_mark
 
   std::vector<int32_t> left_ids     = {10, 20, 30, 40, 50};
   std::vector<int32_t> left_payload = {1, 2, 3, 4, 5};
-  auto left_batch = make_two_column_batch<int32_t, int32_t>(
+  auto left_batch                   = make_two_column_batch<int32_t, int32_t>(
     *space, left_ids, left_payload, cudf::type_id::INT32, std::nullopt, cudf::type_id::INT32);
 
   // Only {20, 40} exist on the right — rows 1 and 3 should be marked
@@ -140,7 +139,7 @@ TEST_CASE("sirius_physical_hash_join mark join - all rows match", "[physical_mar
 
   std::vector<int32_t> left_ids     = {10, 20, 30};
   std::vector<int32_t> left_payload = {1, 2, 3};
-  auto left_batch = make_two_column_batch<int32_t, int32_t>(
+  auto left_batch                   = make_two_column_batch<int32_t, int32_t>(
     *space, left_ids, left_payload, cudf::type_id::INT32, std::nullopt, cudf::type_id::INT32);
 
   // Right contains every left key — all marks should be true
@@ -168,7 +167,7 @@ TEST_CASE("sirius_physical_hash_join mark join - no rows match", "[physical_mark
 
   std::vector<int32_t> left_ids     = {10, 20, 30};
   std::vector<int32_t> left_payload = {1, 2, 3};
-  auto left_batch = make_two_column_batch<int32_t, int32_t>(
+  auto left_batch                   = make_two_column_batch<int32_t, int32_t>(
     *space, left_ids, left_payload, cudf::type_id::INT32, std::nullopt, cudf::type_id::INT32);
 
   // Right has completely disjoint keys — all marks should be false
@@ -186,8 +185,7 @@ TEST_CASE("sirius_physical_hash_join mark join - no rows match", "[physical_mark
 
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(0)) == left_ids);
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(1)) == left_payload);
-  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) ==
-          std::vector<bool>{false, false, false});
+  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) == std::vector<bool>{false, false, false});
 }
 
 TEST_CASE("sirius_physical_hash_join mark join - empty right side", "[physical_mark_join]")
@@ -197,7 +195,7 @@ TEST_CASE("sirius_physical_hash_join mark join - empty right side", "[physical_m
 
   std::vector<int32_t> left_ids     = {10, 20, 30};
   std::vector<int32_t> left_payload = {1, 2, 3};
-  auto left_batch = make_two_column_batch<int32_t, int32_t>(
+  auto left_batch                   = make_two_column_batch<int32_t, int32_t>(
     *space, left_ids, left_payload, cudf::type_id::INT32, std::nullopt, cudf::type_id::INT32);
 
   // Empty right table — semi_indices will be empty, all marks should be false
@@ -215,8 +213,7 @@ TEST_CASE("sirius_physical_hash_join mark join - empty right side", "[physical_m
 
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(0)) == left_ids);
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(1)) == left_payload);
-  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) ==
-          std::vector<bool>{false, false, false});
+  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) == std::vector<bool>{false, false, false});
 }
 
 TEST_CASE("sirius_physical_hash_join mark join - duplicate keys on right side",
@@ -227,7 +224,7 @@ TEST_CASE("sirius_physical_hash_join mark join - duplicate keys on right side",
 
   std::vector<int32_t> left_ids     = {10, 20, 30};
   std::vector<int32_t> left_payload = {1, 2, 3};
-  auto left_batch = make_two_column_batch<int32_t, int32_t>(
+  auto left_batch                   = make_two_column_batch<int32_t, int32_t>(
     *space, left_ids, left_payload, cudf::type_id::INT32, std::nullopt, cudf::type_id::INT32);
 
   // Right has key 20 repeated three times — left row 1 should still get mark=true exactly once
@@ -245,6 +242,5 @@ TEST_CASE("sirius_physical_hash_join mark join - duplicate keys on right side",
 
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(0)) == left_ids);
   REQUIRE(copy_column_to_host<int32_t>(out_view.column(1)) == left_payload);
-  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) ==
-          std::vector<bool>{false, true, false});
+  REQUIRE(copy_column_to_host<bool>(out_view.column(2)) == std::vector<bool>{false, true, false});
 }
