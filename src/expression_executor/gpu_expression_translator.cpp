@@ -47,24 +47,36 @@ gpu_expression_translator::translate_join_condition(duckdb::JoinCondition const&
 
   // Combine the left and right expressions with the appropriate comparison operator
   switch (condition.comparison) {
-    case duckdb::ExpressionType::COMPARE_EQUAL:
+    case duckdb::ExpressionType::COMPARE_EQUAL: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::EQUAL, *left_expr, *right_expr);
-    case duckdb::ExpressionType::COMPARE_NOTEQUAL:
+      break;
+    }
+    case duckdb::ExpressionType::COMPARE_NOTEQUAL: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::NOT_EQUAL, *left_expr, *right_expr);
-    case duckdb::ExpressionType::COMPARE_LESSTHAN:
+      break;
+    }
+    case duckdb::ExpressionType::COMPARE_LESSTHAN: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::LESS, *left_expr, *right_expr);
-    case duckdb::ExpressionType::COMPARE_GREATERTHAN:
+      break;
+    }
+    case duckdb::ExpressionType::COMPARE_GREATERTHAN: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::GREATER, *left_expr, *right_expr);
-    case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:
+      break;
+    }
+    case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::LESS_EQUAL, *left_expr, *right_expr);
-    case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+      break;
+    }
+    case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
       _ast_tree.emplace<cudf::ast::operation>(
         cudf::ast::ast_operator::GREATER_EQUAL, *left_expr, *right_expr);
+      break;
+    }
     default: {
       SIRIUS_LOG_DEBUG("[expression_translator] Unsupported join condition comparison type: {}",
                        condition.comparison);
@@ -368,21 +380,14 @@ std::optional<expr_ref> gpu_expression_translator::add_expression(
       return std::nullopt;
     }
     case duckdb::ExpressionType::OPERATOR_NOT: {
-      // Add the child
       auto child_expr = add_expression(*expr.children[0], table_src);
-
-      // Check for failure in translating child
       if (!child_expr) { return std::nullopt; }
 
-      // Add the operator expression
       return _ast_tree.emplace<cudf::ast::operation>(cudf::ast::ast_operator::NOT, *child_expr);
     }
     case duckdb::ExpressionType::OPERATOR_IS_NULL:  // Fallthrough
     case duckdb::ExpressionType::OPERATOR_IS_NOT_NULL: {
-      // Add the child
       auto child_expr = add_expression(*expr.children[0], table_src);
-
-      // Check for failure in translating child
       if (!child_expr) { return std::nullopt; }
 
       // Add IS_NULL followed by NOT to represent IS_NOT_NULL

@@ -200,6 +200,17 @@ std::unique_ptr<cudf::table> make_float32_table(std::vector<float> const& values
   return ::sirius::gpu_expression_translator(stream, mr);
 }
 
+duckdb::JoinCondition make_reference_join_condition(duckdb::ExpressionType comparison)
+{
+  duckdb::JoinCondition condition;
+  condition.left =
+    duckdb::make_uniq<BoundReferenceExpression>(LogicalType{LogicalTypeId::INTEGER}, 0);
+  condition.right =
+    duckdb::make_uniq<BoundReferenceExpression>(LogicalType{LogicalTypeId::INTEGER}, 0);
+  condition.comparison = comparison;
+  return condition;
+}
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
@@ -514,6 +525,65 @@ TEST_CASE("translator: DISTINCT FROM returns nullopt", "[expression_translator]"
   auto translator = make_translator();
   auto ast_tree   = translator.translate_expression(*expr);
   REQUIRE_FALSE(ast_tree.has_value());
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Join condition translation
+//===----------------------------------------------------------------------===//
+
+TEST_CASE("translator: join condition uses requested comparison operator",
+          "[expression_translator]")
+{
+  struct join_test_case {
+    duckdb::ExpressionType comparison;
+    cudf::ast::ast_operator expected_operator;
+  };
+
+  std::vector<join_test_case> const test_cases = {
+    {duckdb::ExpressionType::COMPARE_EQUAL, cudf::ast::ast_operator::EQUAL},
+    {duckdb::ExpressionType::COMPARE_NOTEQUAL, cudf::ast::ast_operator::NOT_EQUAL},
+    {duckdb::ExpressionType::COMPARE_LESSTHAN, cudf::ast::ast_operator::LESS},
+    {duckdb::ExpressionType::COMPARE_GREATERTHAN, cudf::ast::ast_operator::GREATER},
+    {duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO, cudf::ast::ast_operator::LESS_EQUAL},
+    {duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO, cudf::ast::ast_operator::GREATER_EQUAL},
+  };
+
+  for (auto const& test_case : test_cases) {
+    CAPTURE(test_case.comparison);
+    auto condition  = make_reference_join_condition(test_case.comparison);
+    auto translator = make_translator();
+    auto translated = translator.translate_join_condition(condition);
+
+    REQUIRE(translated.has_value());
+    REQUIRE(translated->size() == 3);
+
+    auto const* root_operation = dynamic_cast<cudf::ast::operation const*>(&translated->back());
+    REQUIRE(root_operation != nullptr);
+    REQUIRE(root_operation->get_operator() == test_case.expected_operator);
+
+    auto const& operands = root_operation->get_operands();
+    REQUIRE(operands.size() == 2);
+
+    auto const* left_ref = dynamic_cast<cudf::ast::column_reference const*>(&operands[0].get());
+    REQUIRE(left_ref != nullptr);
+    REQUIRE(left_ref->get_table_source() == cudf::ast::table_reference::LEFT);
+    REQUIRE(left_ref->get_column_index() == 0);
+
+    auto const* right_ref = dynamic_cast<cudf::ast::column_reference const*>(&operands[1].get());
+    REQUIRE(right_ref != nullptr);
+    REQUIRE(right_ref->get_table_source() == cudf::ast::table_reference::RIGHT);
+    REQUIRE(right_ref->get_column_index() == 0);
+  }
+}
+
+TEST_CASE("translator: join condition unsupported comparison returns nullopt",
+          "[expression_translator]")
+{
+  auto condition  = make_reference_join_condition(duckdb::ExpressionType::COMPARE_DISTINCT_FROM);
+  auto translator = make_translator();
+  auto translated = translator.translate_join_condition(condition);
+
+  REQUIRE_FALSE(translated.has_value());
 }
 
 //===----------------------------------------------------------------------===//
