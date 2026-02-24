@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "op/sirius_physical_hash_join.hpp"
+
 #include "cudf/copying.hpp"
 #include "cudf/join/filtered_join.hpp"
 #include "cudf/join/join.hpp"
@@ -25,7 +27,6 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "log/logging.hpp"
-#include "op/sirius_physical_hash_join.hpp"
 #include "pipeline/sirius_meta_pipeline.hpp"
 #include "pipeline/sirius_pipeline.hpp"
 
@@ -479,8 +480,6 @@ std::unique_ptr<operator_data> sirius_physical_hash_join::execute(const operator
 
       if (semi_indices->size() > 0) {
         cudf::numeric_scalar<bool> true_scalar(true, true, stream);
-        auto true_col = cudf::make_column_from_scalar(
-          true_scalar, static_cast<cudf::size_type>(semi_indices->size()), stream);
 
         cudf::column_view scatter_map(cudf::data_type(cudf::type_id::INT32),
                                       static_cast<cudf::size_type>(semi_indices->size()),
@@ -490,7 +489,12 @@ std::unique_ptr<operator_data> sirius_physical_hash_join::execute(const operator
                                       0,
                                       {});
 
-        auto scattered = cudf::scatter(cudf::table_view({true_col->view()}),
+        // The scatter API is a bit confusing when it says: the number of elements in first arg i.e.
+        // the vector should have same number of columns in the target table. It is essentially a
+        // row-scatter operation. For our use case, we have only column i.e. target mark column;
+        // therefore we are good. The scalar is broadcasted to respective positions provided by the
+        // scatter map.
+        auto scattered = cudf::scatter({std::ref(static_cast<cudf::scalar const&>(true_scalar))},
                                        scatter_map,
                                        cudf::table_view({mark_column->view()}),
                                        stream);
