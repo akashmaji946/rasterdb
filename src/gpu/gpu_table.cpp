@@ -137,6 +137,29 @@ void gpu_table::append_chunk(gpu_context& ctx, const duckdb::DataChunk& chunk,
   throw duckdb::NotImplementedException("gpu_table::append_chunk not yet implemented");
 }
 
+gpu_column gpu_column_from_rdf(rasterdf::column&& col)
+{
+  gpu_column result;
+  result.type = col.type();
+  result.num_rows = col.size();
+  result.data = std::move(col.device_data());
+  return result;
+}
+
+std::unique_ptr<gpu_table> gpu_table_from_rdf(std::unique_ptr<rasterdf::table> tbl,
+                                               const std::vector<duckdb::LogicalType>& duckdb_types)
+{
+  auto result = std::make_unique<gpu_table>();
+  result->duckdb_types = duckdb_types;
+
+  auto cols = tbl->extract();
+  result->columns.resize(cols.size());
+  for (size_t i = 0; i < cols.size(); i++) {
+    result->columns[i] = gpu_column_from_rdf(std::move(*cols[i]));
+  }
+  return result;
+}
+
 rasterdf::table_view gpu_table::view() const
 {
   std::vector<rasterdf::column_view> views;

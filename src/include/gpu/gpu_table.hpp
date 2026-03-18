@@ -84,6 +84,13 @@ private:
   rasterdf::size_type _num_rows{0};
 };
 
+/// Create a gpu_column by moving the device_buffer out of an rasterdf::column.
+gpu_column gpu_column_from_rdf(rasterdf::column&& col);
+
+/// Create a gpu_table by extracting columns from an rasterdf::table.
+std::unique_ptr<gpu_table> gpu_table_from_rdf(std::unique_ptr<rasterdf::table> tbl,
+                                               const std::vector<duckdb::LogicalType>& duckdb_types);
+
 /// Download a gpu_column back to a flat host buffer.
 /// Returns the number of bytes written.
 size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_t dst_size);

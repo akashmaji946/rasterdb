@@ -18,8 +18,8 @@ gpu_context::gpu_context(size_t memory_limit)
 {
   RASTERDB_LOG_INFO("Initializing RasterDB GPU context (Vulkan/rasterdf)...");
 
-  // Create Vulkan context (prefers NVIDIA by default)
-  _ctx = std::make_unique<rasterdf::context>(rasterdf::DeviceVendor::ANY);
+  // Create Vulkan context — use NVIDIA discrete GPU
+  _ctx = std::make_unique<rasterdf::context>(rasterdf::DeviceVendor::NVIDIA);
   RASTERDB_LOG_INFO("GPU device: {}", _ctx->device_name());
   RASTERDB_LOG_INFO("GPU memory: {} MB", _ctx->device_memory_bytes() / (1024 * 1024));
 
@@ -70,6 +70,11 @@ void gpu_context::initialize(size_t memory_limit)
   std::call_once(_init_flag, [memory_limit]() {
     _instance = std::make_unique<gpu_context>(memory_limit);
   });
+}
+
+void gpu_context::shutdown()
+{
+  _instance.reset();
 }
 
 } // namespace gpu

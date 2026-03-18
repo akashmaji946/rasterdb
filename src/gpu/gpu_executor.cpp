@@ -15,6 +15,10 @@
 #include "log/logging.hpp"
 
 #include <rasterdf/execution/dispatcher.hpp>
+#include <rasterdf/reduction.hpp>
+#include <rasterdf/sorting.hpp>
+#include <rasterdf/copying.hpp>
+#include <rasterdf/stream_compaction.hpp>
 
 #include <duckdb/common/exception.hpp>
 #include <duckdb/common/types/data_chunk.hpp>
@@ -30,6 +34,8 @@
 #include <duckdb/planner/expression/bound_cast_expression.hpp>
 #include <duckdb/planner/bound_result_modifier.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+
+#include <duckdb/common/types/hugeint.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -221,66 +227,34 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
 }
 
 // ============================================================================
-// Apply boolean mask — prefix scan + scatter (stream compaction)
+// Apply boolean mask — order-preserving host-side compaction.
+// Downloads mask + data to CPU, compacts in order, uploads result.
+// For 1M rows (~4MB) the PCIe transfer is < 1ms, and order is preserved.
 // ============================================================================
 
 std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& input, gpu_column& mask)
 {
   uint32_t n = static_cast<uint32_t>(input.num_rows());
-  auto& disp = _ctx.dispatcher();
 
-  // Copy mask into scan buffer for prefix scan (scan operates in-place)
-  auto scan_buf = allocate_column(_ctx, {rasterdf::type_id::INT32},
-                                   static_cast<rasterdf::size_type>(n + 1));
-  {
-    binary_op_push_constants pc{};
-    pc.input_a = mask.address();
-    pc.input_b = 0;
-    pc.output_addr = scan_buf.address();
-    pc.size = n;
-    pc.op = 0; pc.scalar_val = 0; pc.mode = 1; pc.debug_mode = 0; pc.type_id = 0;
-    disp.dispatch_binary_op(pc);
-  }
+  // Download mask to host
+  std::vector<int32_t> mask_host(n);
+  const_cast<rasterdf::device_buffer&>(mask.data).copy_to_host(
+    mask_host.data(), n * sizeof(int32_t),
+    _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-  // Run 3-pass exclusive prefix scan
-  uint32_t num_blocks = std::max(1u, div_ceil(n, WG_SIZE * 2));
-  auto block_sums = allocate_buffer(_ctx, (num_blocks + 1) * sizeof(uint32_t));
-  auto total_sum_buf = allocate_buffer(_ctx, sizeof(uint32_t));
-
-  {
-    prefix_scan_pc pc{};
-    pc.data_ptr = scan_buf.address();
-    pc.block_sums_ptr = block_sums.data();
-    pc.total_sum_ptr = total_sum_buf.data();
-    pc.numElements = n;
-    pc.blockCount = num_blocks;
-    disp.dispatch_prefix_scan_local(pc, num_blocks);
-    if (num_blocks > 1) {
-      disp.dispatch_prefix_scan_global(pc);
-      disp.dispatch_prefix_scan_add(pc, num_blocks);
-    }
-  }
-
-  // Read total count: for exclusive prefix scan, total = scan[n-1] + mask[n-1]
+  // Count passing rows
   uint32_t output_count = 0;
-  {
-    std::vector<int32_t> scan_vals(n + 1);
-    const_cast<rasterdf::device_buffer&>(scan_buf.data).copy_to_host(
-      scan_vals.data(), (n + 1) * sizeof(int32_t),
-      _ctx.device(), _ctx.queue(), _ctx.command_pool());
-    std::vector<int32_t> mask_vals(n);
-    const_cast<rasterdf::device_buffer&>(mask.data).copy_to_host(
-      mask_vals.data(), n * sizeof(int32_t),
-      _ctx.device(), _ctx.queue(), _ctx.command_pool());
-    output_count = static_cast<uint32_t>(scan_vals[n - 1] + mask_vals[n - 1]);
+  for (uint32_t i = 0; i < n; i++) {
+    if (mask_host[i]) output_count++;
   }
 
   RASTERDB_LOG_DEBUG("Filter: {} -> {} rows", n, output_count);
 
+  auto result = std::make_unique<gpu_table>();
+  result->duckdb_types = input.duckdb_types;
+  result->columns.resize(input.num_columns());
+
   if (output_count == 0) {
-    auto result = std::make_unique<gpu_table>();
-    result->duckdb_types = input.duckdb_types;
-    result->columns.resize(input.num_columns());
     for (size_t c = 0; c < input.num_columns(); c++) {
       result->columns[c].type = input.col(c).type;
       result->columns[c].num_rows = 0;
@@ -288,22 +262,35 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     return result;
   }
 
-  // Gather each column using mask + prefix-scanned offsets
-  auto result = std::make_unique<gpu_table>();
-  result->duckdb_types = input.duckdb_types;
-  result->columns.resize(input.num_columns());
-
+  // For each column: download, compact on CPU, upload
   for (size_t c = 0; c < input.num_columns(); c++) {
     auto& in_col = input.col(c);
+    size_t elem_size = rdf_type_size(in_col.type.id);
+
+    // Download column data
+    std::vector<uint8_t> col_host(static_cast<size_t>(n) * elem_size);
+    const_cast<rasterdf::device_buffer&>(in_col.data).copy_to_host(
+      col_host.data(), col_host.size(),
+      _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+    // Compact on CPU (preserving order)
+    std::vector<uint8_t> compacted(static_cast<size_t>(output_count) * elem_size);
+    size_t write_pos = 0;
+    for (uint32_t i = 0; i < n; i++) {
+      if (mask_host[i]) {
+        std::memcpy(compacted.data() + write_pos * elem_size,
+                    col_host.data() + static_cast<size_t>(i) * elem_size,
+                    elem_size);
+        write_pos++;
+      }
+    }
+
+    // Upload compacted data
     result->columns[c] = allocate_column(_ctx, in_col.type,
                                           static_cast<rasterdf::size_type>(output_count));
-    gather_push_constants gc{};
-    gc.input_addr = in_col.address();
-    gc.mask_addr = mask.address();
-    gc.output_addr = result->columns[c].address();
-    gc.counter_addr = scan_buf.address();
-    gc.size = n;
-    disp.dispatch_gather(gc);
+    result->columns[c].data.copy_from_host(
+      compacted.data(), compacted.size(),
+      _ctx.device(), _ctx.queue(), _ctx.command_pool());
   }
 
   return result;
@@ -461,16 +448,30 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
     if (expr.type == duckdb::ExpressionType::BOUND_REF) {
       auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
       auto& src = input->col(ref.index);
-      // Copy column to output
+      // Copy column to output — use shader for INT32/FLOAT32, buffer copy otherwise
       result->columns[i] = allocate_column(_ctx, src.type, src.num_rows);
-      binary_op_push_constants pc{};
-      pc.input_a = src.address();
-      pc.input_b = 0;
-      pc.output_addr = result->columns[i].address();
-      pc.size = static_cast<uint32_t>(src.num_rows);
-      pc.op = 0; pc.scalar_val = 0; pc.mode = 1; pc.debug_mode = 0;
-      pc.type_id = rdf_shader_type_id(src.type.id);
-      _ctx.dispatcher().dispatch_binary_op(pc);
+      bool has_shader = (src.type.id == rasterdf::type_id::INT32 ||
+                         src.type.id == rasterdf::type_id::FLOAT32 ||
+                         src.type.id == rasterdf::type_id::TIMESTAMP_DAYS);
+      if (has_shader) {
+        binary_op_push_constants pc{};
+        pc.input_a = src.address();
+        pc.input_b = 0;
+        pc.output_addr = result->columns[i].address();
+        pc.size = static_cast<uint32_t>(src.num_rows);
+        pc.op = 0; pc.scalar_val = 0; pc.mode = 1; pc.debug_mode = 0;
+        pc.type_id = rdf_shader_type_id(src.type.id);
+        _ctx.dispatcher().dispatch_binary_op(pc);
+      } else {
+        // Fallback: host round-trip copy for types without shader support (e.g. INT64/FLOAT64)
+        // Only used for small aggregate results so overhead is negligible.
+        size_t byte_count = static_cast<size_t>(src.num_rows) * rdf_type_size(src.type.id);
+        std::vector<uint8_t> tmp(byte_count);
+        src.data.copy_to_host(tmp.data(), byte_count,
+                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        result->columns[i].data.copy_from_host(tmp.data(), byte_count,
+                                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      }
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {
       result->columns[i] = evaluate_binary_op(*input, expr);
     } else {
@@ -577,7 +578,6 @@ void gpu_executor::execute_ungrouped_aggregate(
   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
   gpu_table& output)
 {
-  auto& disp = _ctx.dispatcher();
   uint32_t n = static_cast<uint32_t>(input.num_rows());
 
   for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
@@ -609,63 +609,70 @@ void gpu_executor::execute_ungrouped_aggregate(
     }
 
     auto& in_col = input.col(col_idx);
-    int32_t type_id = rdf_shader_type_id(in_col.type.id);
+    auto col_view = in_col.view();
 
-    auto out_buf = allocate_buffer(_ctx, rdf_type_size(in_col.type.id));
-
-    sum_push_constants pc{};
-    pc.input_addr = in_col.address();
-    pc.output_addr = out_buf.data();
-    pc.size = n;
-    pc.pad = 0;
-
+    // Map DuckDB aggregate name → rasterdf aggregation kind
+    rasterdf::aggregation_kind kind;
     if (fname == "sum" || fname == "sum_no_overflow") {
-      if (type_id == 0) disp.dispatch_sum(pc);
-      else              disp.dispatch_sum_float(pc);
+      kind = rasterdf::aggregation_kind::SUM;
     } else if (fname == "min") {
-      if (type_id == 0) disp.dispatch_min(pc);
-      else              disp.dispatch_min_float(pc);
+      kind = rasterdf::aggregation_kind::MIN;
     } else if (fname == "max") {
-      if (type_id == 0) disp.dispatch_max(pc);
-      else              disp.dispatch_max_float(pc);
+      kind = rasterdf::aggregation_kind::MAX;
     } else if (fname == "count") {
-      output.columns[i] = allocate_column(_ctx, {rasterdf::type_id::INT64}, 1);
-      int64_t count = static_cast<int64_t>(n);
-      output.columns[i].data.copy_from_host(&count, sizeof(int64_t),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      continue;
+      kind = rasterdf::aggregation_kind::COUNT_VALID;
     } else if (fname == "avg" || fname == "mean") {
-      // AVG = SUM / COUNT (compute sum on GPU, divide on CPU)
-      if (type_id == 0) disp.dispatch_sum(pc);
-      else              disp.dispatch_sum_float(pc);
-
-      if (type_id == 0) {
-        int32_t sum_int = 0;
-        out_buf.copy_to_host(&sum_int, sizeof(int32_t),
-                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
-        double avg = static_cast<double>(sum_int) / static_cast<double>(n);
-        output.columns[i] = allocate_column(_ctx, {rasterdf::type_id::FLOAT64}, 1);
-        output.columns[i].data.copy_from_host(&avg, sizeof(double),
-                                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      } else {
-        float sum_val = 0;
-        out_buf.copy_to_host(&sum_val, sizeof(float),
-                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
-        double avg = static_cast<double>(sum_val) / static_cast<double>(n);
-        output.columns[i] = allocate_column(_ctx, {rasterdf::type_id::FLOAT64}, 1);
-        output.columns[i].data.copy_from_host(&avg, sizeof(double),
-                                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      }
-      continue;
+      kind = rasterdf::aggregation_kind::MEAN;
     } else {
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported aggregate function '%s'", fname.c_str());
     }
 
-    // Wrap the output buffer as a 1-element column
-    output.columns[i].type = in_col.type;
-    output.columns[i].num_rows = 1;
-    output.columns[i].data = std::move(out_buf);
+    rasterdf::reduce_aggregation agg(kind);
+
+    // rasterdf::reduce() returns scalar with correct wide type:
+    //   SUM   → INT64 (int32 input) or FLOAT64 (float32 input)
+    //   MEAN  → FLOAT64
+    //   COUNT → INT64
+    //   MIN/MAX → same as input type
+    auto scalar = rasterdf::reduce(col_view, agg, in_col.type,
+                                   _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+
+    // scalar->type tells us the actual result type after reduce()
+    auto out_type = scalar->type;
+    output.columns[i] = allocate_column(_ctx, out_type, 1);
+
+    // Copy scalar value (already on CPU) into a 1-element GPU column
+    switch (out_type.id) {
+    case rasterdf::type_id::INT64: {
+      int64_t val = scalar->as<int64_t>();
+      output.columns[i].data.copy_from_host(&val, sizeof(int64_t),
+                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      break;
+    }
+    case rasterdf::type_id::FLOAT64: {
+      double val = scalar->as<double>();
+      output.columns[i].data.copy_from_host(&val, sizeof(double),
+                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      break;
+    }
+    case rasterdf::type_id::FLOAT32: {
+      float val = scalar->as<float>();
+      output.columns[i].data.copy_from_host(&val, sizeof(float),
+                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      break;
+    }
+    case rasterdf::type_id::INT32: {
+      int32_t val = scalar->as<int32_t>();
+      output.columns[i].data.copy_from_host(&val, sizeof(int32_t),
+                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      break;
+    }
+    default:
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: unsupported reduce output type_id %d",
+        static_cast<int>(out_type.id));
+    }
   }
 }
 
@@ -693,75 +700,29 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
   }
 
   auto& ref = order.expression->Cast<duckdb::BoundReferenceExpression>();
-  auto& sort_col = input->col(ref.index);
-  int32_t type_id = rdf_shader_type_id(sort_col.type.id);
 
-  uint32_t n = static_cast<uint32_t>(input->num_rows());
-  auto& disp = _ctx.dispatcher();
+  // Build a single-column table_view for the sort key
+  auto sort_key_view = input->col(ref.index).view();
+  std::vector<rasterdf::column_view> key_views = {sort_key_view};
+  rasterdf::table_view keys_tv(key_views);
 
-  uint32_t num_groups = div_ceil(n, WG_SIZE);
-  uint32_t num_blocks = std::max(1u, div_ceil(num_groups * 256, WG_SIZE * 2));
+  // Determine sort order
+  std::vector<rasterdf::order> col_order = {
+    (order.type == duckdb::OrderType::DESCENDING)
+      ? rasterdf::order::DESCENDING
+      : rasterdf::order::ASCENDING
+  };
 
-  auto data_a = allocate_buffer(_ctx, n * sizeof(uint32_t));
-  auto data_b = allocate_buffer(_ctx, n * sizeof(uint32_t));
-  auto payload_a = allocate_buffer(_ctx, n * sizeof(uint32_t));
-  auto payload_b = allocate_buffer(_ctx, n * sizeof(uint32_t));
-  auto hist_buf = allocate_buffer(_ctx, num_groups * 256 * sizeof(uint32_t));
-  auto partial_buf = allocate_buffer(_ctx, (num_blocks + 1) * sizeof(uint32_t));
-  auto bucket_totals = allocate_buffer(_ctx, 256 * sizeof(uint32_t));
-  auto global_offsets = allocate_buffer(_ctx, 256 * sizeof(uint32_t));
+  // Use rasterdf high-level API: sorted_order → gather
+  auto indices = rasterdf::sorted_order(keys_tv, col_order,
+                                        _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+  auto indices_view = indices->view();
 
-  // Copy sort key to data_a
-  {
-    binary_op_push_constants pc{};
-    pc.input_a = sort_col.address();
-    pc.output_addr = data_a.data();
-    pc.size = n;
-    pc.op = 0; pc.scalar_val = 0; pc.mode = 1; pc.type_id = type_id;
-    pc.input_b = 0; pc.debug_mode = 0;
-    disp.dispatch_binary_op(pc);
-  }
+  // Gather all columns using sorted indices
+  auto sorted_table = rasterdf::gather(input->view(), indices_view,
+                                       _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
 
-  // Float: convert to sortable unsigned
-  if (type_id == 1) {
-    radix_init_indices_pc pc{};
-    pc.indices_ptr = data_a.data();
-    pc.numElements = n;
-    disp.dispatch_float_to_sortable(pc, num_groups);
-  }
-
-  // Initialize index payload [0, 1, 2, ..., n-1]
-  {
-    radix_init_indices_pc pc{};
-    pc.indices_ptr = payload_a.data();
-    pc.numElements = n;
-    disp.dispatch_radix_init_indices(pc, num_groups);
-  }
-
-  // Run batched radix sort
-  disp.dispatch_radix_sort_batched(
-    data_a.data(), data_b.data(), payload_a.data(), payload_b.data(),
-    hist_buf.data(), partial_buf.data(), bucket_totals.data(), global_offsets.data(),
-    n, num_groups, num_blocks);
-
-  // Gather all columns using sorted indices (result in payload_a after 8 passes)
-  auto result = std::make_unique<gpu_table>();
-  result->duckdb_types = input->duckdb_types;
-  result->columns.resize(input->num_columns());
-
-  for (size_t c = 0; c < input->num_columns(); c++) {
-    auto& in_col = input->col(c);
-    result->columns[c] = allocate_column(_ctx, in_col.type, input->num_rows());
-
-    gather_indices_pc gc{};
-    gc.input_addr = in_col.address();
-    gc.indices_addr = payload_a.data();
-    gc.output_addr = result->columns[c].address();
-    gc.size = n;
-    disp.dispatch_gather_indices(gc, num_groups);
-  }
-
-  return result;
+  return gpu_table_from_rdf(std::move(sorted_table), input->duckdb_types);
 }
 
 // ============================================================================
@@ -874,12 +835,72 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
     chunk.SetCardinality(count);
 
     for (size_t c = 0; c < num_cols; c++) {
-      size_t elem_size = rdf_type_size(table->col(c).type.id);
-      size_t byte_offset = static_cast<size_t>(offset) * elem_size;
-      size_t byte_count = static_cast<size_t>(count) * elem_size;
-
+      size_t rdf_elem_size = rdf_type_size(table->col(c).type.id);
+      size_t byte_offset = static_cast<size_t>(offset) * rdf_elem_size;
+      const uint8_t* src = host_data[c].data() + byte_offset;
       auto dst = reinterpret_cast<uint8_t*>(chunk.data[c].GetData());
-      std::memcpy(dst, host_data[c].data() + byte_offset, byte_count);
+
+      auto rdf_tid = table->col(c).type.id;
+      auto duckdb_tid = types[c].id();
+
+      // If the rasterdf type matches the DuckDB type in size, direct copy
+      bool needs_cast = false;
+
+      // Check for type mismatches that need widening/casting
+      if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
+        // int32 → hugeint (int128): widen each element
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          int32_t val;
+          std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
+          duckdb::hugeint_t hval;
+          hval.lower = static_cast<uint64_t>(val < 0 ? -static_cast<int64_t>(-val) : val);
+          hval.upper = val < 0 ? -1 : 0;
+          std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
+        }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT64 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
+        // int64 → hugeint (int128): widen each element
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          int64_t val;
+          std::memcpy(&val, src + r * sizeof(int64_t), sizeof(int64_t));
+          duckdb::hugeint_t hval;
+          hval.lower = static_cast<uint64_t>(val);
+          hval.upper = val < 0 ? -1 : 0;
+          std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
+        }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::BIGINT) {
+        // int32 → bigint (int64): widen each element
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          int32_t val;
+          std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
+          int64_t wide = static_cast<int64_t>(val);
+          std::memcpy(dst + r * sizeof(int64_t), &wide, sizeof(int64_t));
+        }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::FLOAT32 && duckdb_tid == duckdb::LogicalTypeId::DOUBLE) {
+        // float32 → double: widen each element
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          float val;
+          std::memcpy(&val, src + r * sizeof(float), sizeof(float));
+          double wide = static_cast<double>(val);
+          std::memcpy(dst + r * sizeof(double), &wide, sizeof(double));
+        }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT64 && duckdb_tid == duckdb::LogicalTypeId::BIGINT) {
+        // int64 → bigint: same size, direct copy
+        std::memcpy(dst, src, static_cast<size_t>(count) * rdf_elem_size);
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::FLOAT64 && duckdb_tid == duckdb::LogicalTypeId::DOUBLE) {
+        // float64 → double: same size, direct copy
+        std::memcpy(dst, src, static_cast<size_t>(count) * rdf_elem_size);
+        needs_cast = true;
+      }
+
+      if (!needs_cast) {
+        // Default: types match in size, direct copy
+        std::memcpy(dst, src, static_cast<size_t>(count) * rdf_elem_size);
+      }
     }
 
     collection->Append(chunk);

@@ -40,6 +40,7 @@ public:
   static gpu_context& instance();
   static bool is_initialized();
   static void initialize(size_t memory_limit = 0);
+  static void shutdown();
 
 private:
   std::unique_ptr<rasterdf::context> _ctx;

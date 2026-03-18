@@ -208,6 +208,8 @@ static void LoadInternal(ExtensionLoader& loader)
   // Initialize GPU context (Vulkan + rasterdf)
   try {
     rasterdb::gpu::gpu_context::initialize();
+    // Ensure GPU context is destroyed before static destructors run
+    std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
     RasterdbExtension::buffer_is_initialized = true;
     RASTERDB_LOG_INFO("RasterDB extension loaded with Vulkan GPU support");
   } catch (std::exception& e) {
