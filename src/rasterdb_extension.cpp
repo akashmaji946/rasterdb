@@ -15,9 +15,9 @@
  */
 
 /*
- * MINIMAL RasterDB DuckDB Extension — bare-minimum skeleton.
- * All cudf/rmm/cucascade/CUDA dependencies removed.
- * GPU operators will be added with Vulkan/rasterdf implementations.
+ * RasterDB DuckDB Extension — Vulkan/rasterdf GPU execution.
+ * Executes SQL queries on GPU via rasterdf compute shaders.
+ * Falls back to DuckDB CPU for unsupported operations.
  */
 
 #include "duckdb/main/database.hpp"
@@ -38,6 +38,8 @@
 #include "log/logging.hpp"
 #include "rasterdb_extension.hpp"
 #include "util/segfault_backtrace.hpp"
+#include "gpu/gpu_context.hpp"
+#include "gpu/gpu_executor.hpp"
 
 #include <cstdlib>
 
@@ -46,15 +48,17 @@ namespace duckdb {
 bool RasterdbExtension::buffer_is_initialized = false;
 
 // =========================================================================
-// gpu_execution — forwards query to DuckDB CPU for now.
-// Will be replaced with Vulkan/rasterdf GPU execution path.
+// gpu_execution — execute SQL on GPU via rasterdf Vulkan compute.
+// Falls back to DuckDB CPU for unsupported operators.
 // =========================================================================
 
 struct RasterDBQueryData : public TableFunctionData {
-  unique_ptr<QueryResult> res;
+  unique_ptr<QueryResult> gpu_result;   // GPU execution result
+  unique_ptr<QueryResult> cpu_result;   // CPU fallback result
   unique_ptr<Connection> conn;
   string query;
   bool finished = false;
+  bool attempted = false;
 };
 
 static unique_ptr<FunctionData> GPUExecutionBind(ClientContext& context,
@@ -69,7 +73,7 @@ static unique_ptr<FunctionData> GPUExecutionBind(ClientContext& context,
     throw BinderException("gpu_execution cannot be called with a NULL parameter");
   }
 
-  // Parse just for column names/types
+  // Parse and plan to get column names/types
   Parser parser(context.GetParserOptions());
   parser.ParseQuery(result->query);
   Planner planner(context);
@@ -88,15 +92,68 @@ static void GPUExecutionFunction(ClientContext& context,
   auto& data = data_p.bind_data->CastNoConst<RasterDBQueryData>();
   if (data.finished) { return; }
 
-  if (!data.res) {
-    // TODO: Replace with Vulkan/rasterdf GPU execution
-    RASTERDB_LOG_INFO("RasterDB: forwarding query to DuckDB CPU (GPU ops not yet implemented)");
-    data.res = data.conn->Query(data.query);
+  // First call: attempt GPU execution, fall back to CPU on failure
+  if (!data.attempted) {
+    data.attempted = true;
+
+    // Try GPU execution if the GPU context is initialized
+    if (rasterdb::gpu::gpu_context::is_initialized()) {
+      try {
+        // Parse + plan + optimize the query
+        Parser parser(context.GetParserOptions());
+        parser.ParseQuery(data.query);
+        Planner planner(context);
+        planner.CreatePlan(std::move(parser.statements[0]));
+
+        // Skip DuckDB optimizer — it pushes filters into scans and removes
+        // filter nodes. We want the unoptimized plan so the GPU executor
+        // can handle scan → filter → project → aggregate itself.
+        auto& plan = *planner.plan;
+
+        // Resolve column bindings to flat indices (BoundColumnRef -> BoundRef)
+        ColumnBindingResolver resolver;
+        resolver.VisitOperator(plan);
+
+        // Execute on GPU via rasterdf
+        auto& gpu_ctx = rasterdb::gpu::gpu_context::instance();
+        rasterdb::gpu::gpu_executor executor(gpu_ctx, context);
+        auto gpu_table = executor.execute(plan);
+
+        // Convert GPU result to DuckDB QueryResult
+        data.gpu_result = executor.to_query_result(
+          std::move(gpu_table), planner.names, planner.types);
+
+        RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf)");
+      } catch (duckdb::NotImplementedException& e) {
+        // Unsupported operator — fall back to CPU
+        RASTERDB_LOG_INFO("RasterDB: GPU fallback to CPU — {}", e.what());
+        data.gpu_result.reset();
+      } catch (std::exception& e) {
+        // Other GPU error — fall back to CPU
+        RASTERDB_LOG_WARN("RasterDB: GPU error, falling back to CPU — {}", e.what());
+        data.gpu_result.reset();
+      }
+    }
+
+    // CPU fallback if GPU didn't produce a result
+    if (!data.gpu_result) {
+      RASTERDB_LOG_INFO("RasterDB: executing query on DuckDB CPU");
+      data.cpu_result = data.conn->Query(data.query);
+    }
   }
 
-  auto chunk = data.res->Fetch();
-  if (!chunk) {
+  // Fetch next chunk from whichever result we have
+  QueryResult* active = data.gpu_result ? data.gpu_result.get() : data.cpu_result.get();
+  if (!active) {
     output.SetCardinality(0);
+    data.finished = true;
+    return;
+  }
+
+  auto chunk = active->Fetch();
+  if (!chunk || chunk->size() == 0) {
+    output.SetCardinality(0);
+    data.finished = true;
     return;
   }
   output.Reference(*chunk);
@@ -148,7 +205,15 @@ static void LoadInternal(ExtensionLoader& loader)
   RasterdbExtension::InitialGPUConfigs(config);
   RasterdbExtension::RegisterGPUFunctions(db);
 
-  RASTERDB_LOG_INFO("RasterDB extension loaded (minimal skeleton — GPU ops pending)");
+  // Initialize GPU context (Vulkan + rasterdf)
+  try {
+    rasterdb::gpu::gpu_context::initialize();
+    RasterdbExtension::buffer_is_initialized = true;
+    RASTERDB_LOG_INFO("RasterDB extension loaded with Vulkan GPU support");
+  } catch (std::exception& e) {
+    RASTERDB_LOG_WARN("RasterDB: GPU init failed ({}), CPU-only mode", e.what());
+    RasterdbExtension::buffer_is_initialized = false;
+  }
 }
 
 void RasterdbExtension::Load(ExtensionLoader& loader) { LoadInternal(loader); }

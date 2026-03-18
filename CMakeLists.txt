@@ -67,8 +67,11 @@ set(EXTENSION_SOURCES
     # Utilities
     src/util/segfault_backtrace_handler.cpp)
 
-# GPU_SOURCES — will be populated as Vulkan-based operators are added
-set(GPU_SOURCES)
+# GPU_SOURCES — Vulkan/rasterdf GPU execution layer
+set(GPU_SOURCES
+    src/gpu/gpu_context.cpp
+    src/gpu/gpu_table.cpp
+    src/gpu/gpu_executor.cpp)
 # cmake-format: on
 
 build_static_extension(rasterdb ${EXTENSION_SOURCES} ${GPU_SOURCES})
@@ -86,11 +89,14 @@ foreach(_target rasterdb_extension rasterdb_loadable_extension)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>
       $<BUILD_INTERFACE:${RASTERDF_ROOT}/include>
-      $<BUILD_INTERFACE:${RASTERDF_ROOT}>)
+      $<BUILD_INTERFACE:${RASTERDF_ROOT}>
+      $<BUILD_INTERFACE:${RASTERDF_ROOT}/build/_deps/volk-src>)
 
   target_compile_definitions(
     ${_target}
-    PRIVATE $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">)
+    PRIVATE
+      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">
+      VK_NO_PROTOTYPES)
 
   if(RASTERDF_LIBRARY)
     target_link_libraries(${_target} rasterdf_imported spdlog::spdlog Vulkan::Vulkan)
