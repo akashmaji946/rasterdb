@@ -19,7 +19,7 @@
  * @brief Tests for Config::MODIFIED_PIPELINE pipeline structure validation
  *
  * This file contains tests that verify the correctness of the modified pipeline
- * generation logic in sirius_engine::initialize_internal when MODIFIED_PIPELINE is enabled.
+ * generation logic in rasterdb_engine::initialize_internal when MODIFIED_PIPELINE is enabled.
  *
  * Validation includes:
  * - Pipeline breakdown patterns (GROUP_BY → PARTITION → CONCAT → GROUP_BY, etc.)
@@ -40,12 +40,12 @@
 #include <op/sirius_physical_concat.hpp>
 #include <op/sirius_physical_cte.hpp>
 #include <op/sirius_physical_delim_join.hpp>
-#include <op/sirius_physical_partition.hpp>
+#include <op/rasterdb_physical_partition.hpp>
 #include <op/sirius_physical_result_collector.hpp>
 #include <pipeline/sirius_pipeline.hpp>
 #include <planner/sirius_physical_plan_generator.hpp>
-#include <sirius_engine.hpp>
-#include <sirius_extension.hpp>
+#include <rasterdb_engine.hpp>
+#include <rasterdb_extension.hpp>
 
 // duckdb
 #include <duckdb.hpp>
@@ -67,16 +67,16 @@
 using namespace duckdb;
 
 // sirius types
-using sirius::sirius_engine;
-using sirius::op::sirius_physical_cte;
-using sirius::op::sirius_physical_delim_join;
-using sirius::op::sirius_physical_materialized_collector;
-using sirius::op::sirius_physical_operator;
-using sirius::op::sirius_physical_partition;
-using sirius::op::sirius_physical_result_collector;
-using sirius::op::SiriusPhysicalOperatorType;
-using sirius::pipeline::sirius_pipeline;
-using sirius::planner::sirius_physical_plan_generator;
+using rasterdb::rasterdb_engine;
+using rasterdb::op::sirius_physical_cte;
+using rasterdb::op::sirius_physical_delim_join;
+using rasterdb::op::sirius_physical_materialized_collector;
+using rasterdb::op::sirius_physical_operator;
+using rasterdb::op::rasterdb_physical_partition;
+using rasterdb::op::sirius_physical_result_collector;
+using rasterdb::op::SiriusPhysicalOperatorType;
+using rasterdb::pipeline::sirius_pipeline;
+using rasterdb::planner::sirius_physical_plan_generator;
 
 //===----------------------------------------------------------------------===//
 // Test Fixture and Helper Functions
@@ -95,7 +95,7 @@ void safe_load_extension(DuckDB& db)
 {
   if (!g_extension_loaded) {
     try {
-      db.LoadStaticExtension<SiriusExtension>();
+      db.LoadStaticExtension<RasterdbExtension>();
       g_extension_loaded = true;
     } catch (const std::exception& e) {
       // Extension might already be loaded by a previous test, that's ok
@@ -588,7 +588,7 @@ HashJoinBreakdownInfo analyze_hash_join_breakdown(
 
     // Check PARTITION sinks
     if (sink->type == SiriusPhysicalOperatorType::PARTITION) {
-      auto& partition = sink->Cast<sirius_physical_partition>();
+      auto& partition = sink->Cast<rasterdb_physical_partition>();
 
       if (partition.is_build_partition()) {
         // Build side partition
@@ -692,7 +692,7 @@ HashJoinBreakdownInfo analyze_hash_join_breakdown(
  * 3. All ports have valid data repositories
  * 4. All ports have correct src_pipeline and dest_pipeline
  */
-void validate_hash_join_modification(sirius_engine& engine, const std::string& query_name = "")
+void validate_hash_join_modification(rasterdb_engine& engine, const std::string& query_name = "")
 {
   auto& pipelines = engine.new_scheduled;
   auto info       = analyze_hash_join_breakdown(pipelines);
@@ -721,7 +721,7 @@ void validate_hash_join_modification(sirius_engine& engine, const std::string& q
 /**
  * @brief Validate the complete modified pipeline structure
  */
-void validate_modified_pipeline_structure(sirius_engine& engine, const std::string& query_name = "")
+void validate_modified_pipeline_structure(rasterdb_engine& engine, const std::string& query_name = "")
 {
   auto& new_scheduled = engine.new_scheduled;
   INFO("Query: " << query_name);
@@ -746,7 +746,7 @@ void validate_modified_pipeline_structure(sirius_engine& engine, const std::stri
     // Validate based on sink type
     if (sink->type == SiriusPhysicalOperatorType::PARTITION) {
       // This is a PARTITION operator
-      auto& partition     = sink->Cast<sirius_physical_partition>();
+      auto& partition     = sink->Cast<rasterdb_physical_partition>();
       std::string port_id = partition.is_build_partition() ? "build" : "default";
 
       if (partition->is_build_partition()) {
@@ -965,7 +965,7 @@ void run_tpch_query_test(Connection& con, const std::string& query, const std::s
   REQUIRE(gpu_plan != nullptr);
 
   // Initialize engine
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // Validate pipeline structure
@@ -1002,7 +1002,7 @@ TEST_CASE("Pipeline breakdown - GROUP_BY pattern", "[modified_pipeline][breakdow
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // Validate breakdown: should have PARTITION → CONCAT → GROUP_BY
@@ -1037,7 +1037,7 @@ TEST_CASE("Pipeline breakdown - ORDER_BY pattern", "[modified_pipeline][breakdow
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // Validate breakdown
@@ -1070,7 +1070,7 @@ TEST_CASE("Pipeline breakdown - TOP_N pattern", "[modified_pipeline][breakdown]"
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // TOP_N should have PARTITION
@@ -1099,7 +1099,7 @@ TEST_CASE("Pipeline breakdown - UNGROUPED_AGGREGATE pattern", "[modified_pipelin
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // UNGROUPED_AGGREGATE should have PARTITION
@@ -1129,7 +1129,7 @@ TEST_CASE("Pipeline breakdown - HASH_JOIN pattern", "[modified_pipeline][breakdo
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // Validate HASH_JOIN modification pattern
@@ -1162,7 +1162,7 @@ TEST_CASE("Pipeline breakdown - HASH_JOIN build side validation",
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   auto info = analyze_hash_join_breakdown(engine.new_scheduled);
@@ -1179,7 +1179,7 @@ TEST_CASE("Pipeline breakdown - HASH_JOIN build side validation",
   for (const auto& pipeline : engine.new_scheduled) {
     auto sink = pipeline->get_sink();
     if (sink->type == SiriusPhysicalOperatorType::PARTITION) {
-      auto& partition = sink->Cast<sirius_physical_partition>();
+      auto& partition = sink->Cast<rasterdb_physical_partition>();
       if (partition.is_build_partition()) {
         // The partition's parent_op is the HASH_JOIN
         sirius_physical_operator* hash_join_op = partition->get_parent_op();
@@ -1236,7 +1236,7 @@ TEST_CASE("Pipeline breakdown - HASH_JOIN probe side validation",
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   auto info                = analyze_hash_join_breakdown(engine.new_scheduled);
@@ -1252,7 +1252,7 @@ TEST_CASE("Pipeline breakdown - HASH_JOIN probe side validation",
   for (const auto& pipeline : engine.new_scheduled) {
     auto sink = pipeline->get_sink();
     if (sink->type == SiriusPhysicalOperatorType::PARTITION) {
-      auto& partition = sink->Cast<sirius_physical_partition>();
+      auto& partition = sink->Cast<rasterdb_physical_partition>();
       if (!partition.is_build_partition()) {
         // This is a probe partition - check it uses "default" port
         auto& next_ports = sink->get_next_port_after_sink();
@@ -1315,7 +1315,7 @@ TEST_CASE("Pipeline breakdown - Multi-way HASH_JOIN", "[modified_pipeline][break
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   auto info = analyze_hash_join_breakdown(engine.new_scheduled);
@@ -1379,7 +1379,7 @@ TEST_CASE("Pipeline breakdown - CTE pattern", "[modified_pipeline][cte]")
   auto gpu_plan = generate_gpu_plan(con, gpu_context, query);
   REQUIRE(gpu_plan != nullptr);
 
-  sirius_engine engine(*con.context, gpu_context);
+  rasterdb_engine engine(*con.context, gpu_context);
   engine.initialize(std::move(gpu_plan));
 
   // CTE queries should have proper pipeline structure

@@ -130,11 +130,11 @@ void orderByString(uint8_t** col_keys,
 {
   CHECK_ERROR();
   if (num_rows == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
 
-  SIRIUS_LOG_DEBUG("Launching Order By String kernel");
+  RASTERDB_LOG_DEBUG("Launching Order By String kernel");
   SETUP_TIMING();
   START_TIMER();
 
@@ -160,7 +160,7 @@ void orderByString(uint8_t** col_keys,
   auto preprocess_time_ms  = std::chrono::duration_cast<duration<double, std::milli>>(
                               preprocess_end_time - preprocess_start_time)
                               .count();
-  SIRIUS_LOG_DEBUG("STRING ORDER BY: Preprocessing took {} ms", preprocess_time_ms);
+  RASTERDB_LOG_DEBUG("STRING ORDER BY: Preprocessing took {} ms", preprocess_time_ms);
 
   // Now sort those row ids using the custom comparator
   auto sort_start_time = high_resolution_clock::now();
@@ -184,7 +184,7 @@ void orderByString(uint8_t** col_keys,
   auto sort_time_ms =
     std::chrono::duration_cast<duration<double, std::milli>>(sort_end_time - sort_start_time)
       .count();
-  SIRIUS_LOG_DEBUG("STRING ORDER BY: Sorting required {} bytes and took {} ms",
+  RASTERDB_LOG_DEBUG("STRING ORDER BY: Sorting required {} bytes and took {} ms",
                    sort_temp_storage_bytes,
                    sort_time_ms);
 

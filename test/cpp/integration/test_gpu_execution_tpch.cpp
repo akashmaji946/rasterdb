@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "op/sirius_physical_partition.hpp"
+#include "op/rasterdb_physical_partition.hpp"
 
 #include <cudf/utilities/default_stream.hpp>
 
@@ -50,28 +50,28 @@ static fs::path get_tpch_db_path()
   return db_path;
 }
 
-struct sirius_config_env_guard {
-  sirius_config_env_guard(const std::string& config_path)
+struct rasterdb_config_env_guard {
+  rasterdb_config_env_guard(const std::string& config_path)
   {
     setenv("SIRIUS_CONFIG_FILE", config_path.c_str(), 1);
   }
 
-  ~sirius_config_env_guard() { unsetenv("SIRIUS_CONFIG_FILE"); }
+  ~rasterdb_config_env_guard() { unsetenv("SIRIUS_CONFIG_FILE"); }
 };
 
 class GPUExecutionFixtureBase {
  public:
   GPUExecutionFixtureBase()
   {
-    if (sirius::test::g_integration_env && sirius::test::g_integration_env->is_active()) {
+    if (rasterdb::test::g_integration_env && rasterdb::test::g_integration_env->is_active()) {
       // Use the shared DuckDB instance managed by the test listener
       con =
-        std::make_unique<duckdb::Connection>(sirius::test::g_integration_env->make_connection());
+        std::make_unique<duckdb::Connection>(rasterdb::test::g_integration_env->make_connection());
     } else {
       // Fallback: create an isolated DuckDB (e.g. when running a single test directly)
       auto cfg_path = fs::path(__FILE__).parent_path() / "integration.cfg";
       REQUIRE(fs::exists(cfg_path));
-      config_guard = std::make_unique<sirius_config_env_guard>(cfg_path.string());
+      config_guard = std::make_unique<rasterdb_config_env_guard>(cfg_path.string());
 
       db  = std::make_unique<duckdb::DuckDB>(nullptr);
       con = std::make_unique<duckdb::Connection>(*db);
@@ -176,7 +176,7 @@ class GPUExecutionFixtureBase {
 
   std::unique_ptr<duckdb::DuckDB> db;
   std::unique_ptr<duckdb::Connection> con;
-  std::unique_ptr<sirius_config_env_guard> config_guard;
+  std::unique_ptr<rasterdb_config_env_guard> config_guard;
 };
 
 /**

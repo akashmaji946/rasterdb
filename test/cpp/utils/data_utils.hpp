@@ -37,7 +37,7 @@
 #include <string>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace test {
 
 /**
@@ -241,4 +241,4 @@ inline std::vector<std::unique_ptr<cudf::table>> make_random_striped_split(
 }
 
 }  // namespace test
-}  // namespace sirius
+}  // namespace rasterdb

@@ -23,7 +23,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace sirius::test::operator_utils {
+namespace rasterdb::test::operator_utils {
 
 template <typename T>
 struct gpu_type_traits;
@@ -195,4 +195,4 @@ struct gpu_type_traits<date32_tag> {
   static type threshold() { return 1; }
 };
 
-}  // namespace sirius::test::operator_utils
+}  // namespace rasterdb::test::operator_utils

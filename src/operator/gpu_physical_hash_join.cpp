@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -452,12 +452,12 @@ SourceResultType GPUPhysicalHashJoin::GetData(GPUIntermediateRelation& output_re
 
   idx_t left_column_count = output_relation.columns.size() - rhs_output_columns.col_idxs.size();
   if (join_type == JoinType::RIGHT_SEMI || join_type == JoinType::RIGHT_ANTI) {
-    SIRIUS_LOG_DEBUG("Right semi or right anti join so there will be no columns from LHS");
+    RASTERDB_LOG_DEBUG("Right semi or right anti join so there will be no columns from LHS");
     left_column_count = 0;
   } else if (join_type == JoinType::RIGHT || join_type == JoinType::OUTER) {
     for (idx_t col = 0; col < left_column_count; col++) {
       // pretend this to be NUll column from the left table (it should be NULL for the RIGHT join)
-      SIRIUS_LOG_DEBUG("Right join so columns from LHS will be null");
+      RASTERDB_LOG_DEBUG("Right join so columns from LHS will be null");
       output_relation.columns[col] =
         make_shared_ptr<GPUColumn>(0, GPUColumnType(GPUColumnTypeId::INT64), nullptr, nullptr);
     }
@@ -476,7 +476,7 @@ SourceResultType GPUPhysicalHashJoin::GetData(GPUIntermediateRelation& output_re
 
   for (idx_t i = 0; i < rhs_output_columns.col_idxs.size(); i++) {
     const auto rhs_col = rhs_output_columns.col_idxs[i];
-    SIRIUS_LOG_DEBUG("Writing hash_table column {} to column {}", rhs_col, i);
+    RASTERDB_LOG_DEBUG("Writing hash_table column {} to column {}", rhs_col, i);
   }
   // TODO: Check if we need to maintain unique for the RHS columns
   if (unique_probe_keys) {
@@ -520,7 +520,7 @@ SourceResultType GPUPhysicalHashJoin::GetData(GPUIntermediateRelation& output_re
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Hash Join GetData time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Hash Join GetData time: {:.2f} ms", duration.count() / 1000.0);
 
   return SourceResultType::FINISHED;
 }
@@ -576,13 +576,13 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
     auto& condition     = conditions[cond_idx];
     auto join_key_index = condition.left->Cast<BoundReferenceExpression>().index;
     if (input_relation.columns[join_key_index]->is_unique) { unique_probe_keys = true; }
-    SIRIUS_LOG_DEBUG("Materializing join key for probing hash table from index {}", join_key_index);
+    RASTERDB_LOG_DEBUG("Materializing join key for probing hash table from index {}", join_key_index);
     probe_key[cond_idx] =
       HandleMaterializeExpression(input_relation.columns[join_key_index], gpuBufferManager);
   }
 
   // probing hash table
-  SIRIUS_LOG_DEBUG("Probing hash table");
+  RASTERDB_LOG_DEBUG("Probing hash table");
   if (join_type == JoinType::INNER || join_type == JoinType::LEFT) {
     // check if there is a non-equality condition
     vector<shared_ptr<GPUColumn>> build_key(conditions.size());
@@ -641,7 +641,7 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
                           gpuBufferManager);
     // if (count[0] == 0) throw NotImplementedException("No match found");
   } else if (join_type == JoinType::MARK) {
-    SIRIUS_LOG_DEBUG("Writing boolean column to output relation");
+    RASTERDB_LOG_DEBUG("Writing boolean column to output relation");
     HandleMarkExpression(probe_key, output, gpu_hash_table, ht_len, conditions, gpuBufferManager);
   } else if (join_type == JoinType::RIGHT_SEMI || join_type == JoinType::RIGHT_ANTI) {
     HandleProbeExpression(probe_key,
@@ -661,7 +661,7 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   // materialize columns from the left table
   if (join_type == JoinType::SEMI || join_type == JoinType::ANTI || join_type == JoinType::INNER ||
       join_type == JoinType::RIGHT || join_type == JoinType::LEFT || join_type == JoinType::OUTER) {
-    SIRIUS_LOG_DEBUG("Writing LHS columns to output relation");
+    RASTERDB_LOG_DEBUG("Writing LHS columns to output relation");
 
     if (join_type == JoinType::SEMI || join_type == JoinType::ANTI || unique_build_keys) {
       HandleMaterializeRowIDsLHS(input_relation,
@@ -692,10 +692,10 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
     // 	}
     // }
   } else if (join_type == JoinType::MARK) {
-    SIRIUS_LOG_DEBUG("Writing LHS columns to output relation");
+    RASTERDB_LOG_DEBUG("Writing LHS columns to output relation");
     for (idx_t i = 0; i < lhs_output_columns.col_idxs.size(); i++) {
       auto lhs_col = lhs_output_columns.col_idxs[i];
-      SIRIUS_LOG_DEBUG("Passing column idx {} from LHS to idx {} in output relation", lhs_col, i);
+      RASTERDB_LOG_DEBUG("Passing column idx {} from LHS to idx {} in output relation", lhs_col, i);
       // output_relation.columns[i] =
       // make_shared_ptr<GPUColumn>(input_relation.columns[lhs_col]->column_length,
       // input_relation.columns[lhs_col]->data_wrapper.type,
@@ -742,7 +742,7 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   // materialize columns from the right tables
   if (join_type == JoinType::INNER || join_type == JoinType::RIGHT || join_type == JoinType::LEFT ||
       join_type == JoinType::OUTER) {
-    SIRIUS_LOG_DEBUG("Writing row IDs from RHS to output relation");
+    RASTERDB_LOG_DEBUG("Writing row IDs from RHS to output relation");
     for (int col = 0; col < hash_table_result->columns.size(); col++) {
       gpuBufferManager->lockAllocation(
         reinterpret_cast<uint8_t*>(hash_table_result->columns[col]->data_wrapper.data), 0);
@@ -789,10 +789,10 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
       // }
     }
   } else if (join_type == JoinType::RIGHT_SEMI || join_type == JoinType::RIGHT_ANTI) {
-    SIRIUS_LOG_DEBUG("Writing row IDs from RHS to output relation");
+    RASTERDB_LOG_DEBUG("Writing row IDs from RHS to output relation");
     for (idx_t i = 0; i < rhs_output_columns.col_idxs.size(); i++) {
       const auto rhs_col = rhs_output_columns.col_idxs[i];
-      SIRIUS_LOG_DEBUG(
+      RASTERDB_LOG_DEBUG(
         "Passing column idx {} from RHS (late materialized) to idx {} in output relation",
         rhs_col,
         i);
@@ -807,7 +807,7 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   }
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Hash Join Execute time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Hash Join Execute time: {:.2f} ms", duration.count() / 1000.0);
 
   return OperatorResultType::FINISHED;
 };
@@ -831,13 +831,13 @@ SinkResultType GPUPhysicalHashJoin::Sink(GPUIntermediateRelation& input_relation
     auto& condition     = conditions[cond_idx];
     auto join_key_index = condition.right->Cast<BoundReferenceExpression>().index;
     if (input_relation.columns[join_key_index]->is_unique) { unique_build_keys = true; }
-    SIRIUS_LOG_DEBUG("Materializing join key for building hash table from index {}",
+    RASTERDB_LOG_DEBUG("Materializing join key for building hash table from index {}",
                      join_key_index);
     build_keys[cond_idx] =
       HandleMaterializeExpression(input_relation.columns[join_key_index], gpuBufferManager);
   }
 
-  SIRIUS_LOG_DEBUG("Building hash table");
+  RASTERDB_LOG_DEBUG("Building hash table");
   ht_len = build_keys[0]->column_length * 2;
   if (join_type == JoinType::INNER || join_type == JoinType::SEMI || join_type == JoinType::MARK ||
       join_type == JoinType::ANTI) {
@@ -878,7 +878,7 @@ SinkResultType GPUPhysicalHashJoin::Sink(GPUIntermediateRelation& input_relation
       throw InvalidInputException("Unsupported join condition");
     }
     auto join_key_index = condition.right->Cast<BoundReferenceExpression>().index;
-    SIRIUS_LOG_DEBUG("Passing column idx {} from input relation to index {} in RHS hash table",
+    RASTERDB_LOG_DEBUG("Passing column idx {} from input relation to index {} in RHS hash table",
                      join_key_index,
                      cond_idx);
     hash_table_result->columns[cond_idx]      = input_relation.columns[join_key_index];
@@ -888,7 +888,7 @@ SinkResultType GPUPhysicalHashJoin::Sink(GPUIntermediateRelation& input_relation
 
   for (idx_t i = 0; i < payload_columns.col_idxs.size(); i++) {
     auto payload_idx = payload_columns.col_idxs[i];
-    SIRIUS_LOG_DEBUG("Passing column idx {} from input relation to index {} in RHS hash table",
+    RASTERDB_LOG_DEBUG("Passing column idx {} from input relation to index {} in RHS hash table",
                      payload_idx,
                      right_idx + i);
     hash_table_result->columns[right_idx + i] = input_relation.columns[payload_idx];
@@ -896,7 +896,7 @@ SinkResultType GPUPhysicalHashJoin::Sink(GPUIntermediateRelation& input_relation
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Hash Join Sink time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Hash Join Sink time: {:.2f} ms", duration.count() / 1000.0);
 
   return SinkResultType::FINISHED;
 };

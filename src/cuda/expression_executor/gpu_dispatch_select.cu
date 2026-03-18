@@ -22,7 +22,7 @@
 #include <tuple>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 //----------Select----------//
 std::tuple<uint64_t*, uint64_t> GpuDispatcher::DispatchSelect(const cudf::column_view& bitmap,
@@ -57,5 +57,5 @@ std::tuple<uint64_t*, uint64_t> GpuDispatcher::DispatchSelect(const cudf::column
   return std::make_tuple(row_ids, num_selected);
 }
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

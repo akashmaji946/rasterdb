@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 #pragma once
 
-#include "op/sirius_physical_operator.hpp"
+#include "op/rasterdb_physical_operator.hpp"
 
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
-namespace sirius::pipeline {
+namespace rasterdb::pipeline {
 
 /**
  * @brief Exception thrown when an OOM occurs during pipeline task execution.
@@ -64,4 +64,4 @@ class oom_reschedule_exception : public std::exception {
   std::string _message;
 };
 
-}  // namespace sirius::pipeline
+}  // namespace rasterdb::pipeline

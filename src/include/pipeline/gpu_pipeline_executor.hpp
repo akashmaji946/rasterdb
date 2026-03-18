@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@
 
 #include <thread>
 
-namespace sirius::op {
-class sirius_physical_operator;
-}  // namespace sirius::op
+namespace rasterdb::op {
+class rasterdb_physical_operator;
+}  // namespace rasterdb::op
 
-namespace sirius {
+namespace rasterdb {
 
 namespace creator {
 class task_creator;
@@ -85,7 +85,7 @@ class gpu_pipeline_executor {
    *
    * @param task The task to schedule (must be a gpu_pipeline_task)
    */
-  void schedule(std::unique_ptr<sirius::parallel::itask> task);
+  void schedule(std::unique_ptr<rasterdb::parallel::itask> task);
 
   /**
    * @brief Starts the executor and initializes worker threads
@@ -107,7 +107,7 @@ class gpu_pipeline_executor {
    *
    * @param task_creator Pointer to the task creator
    */
-  void set_task_creator(sirius::creator::task_creator* task_creator);
+  void set_task_creator(rasterdb::creator::task_creator* task_creator);
 
   /**
    * @brief Drain any leftover tasks from the queue
@@ -136,20 +136,20 @@ class gpu_pipeline_executor {
    * @return gpu_pipeline_task* The casted gpu_pipeline_task pointer
    * @throws std::bad_cast if the task is not of type gpu_pipeline_task
    */
-  gpu_pipeline_task* cast_to_gpu_pipeline_task(sirius::parallel::itask* task);
+  gpu_pipeline_task* cast_to_gpu_pipeline_task(rasterdb::parallel::itask* task);
 
   std::atomic<bool> _running{false};
   exec::thread_pool_config _config;
   exec::kiosk _kiosk;
   std::unique_ptr<exec::thread_pool> _thread_pool;
-  exec::interruptible_mpmc<std::unique_ptr<sirius::parallel::itask>> _task_queue;
+  exec::interruptible_mpmc<std::unique_ptr<rasterdb::parallel::itask>> _task_queue;
   std::thread _manager_thread;
   cucascade::memory::exclusive_stream_pool _stream_pool;
   exec::publisher<std::unique_ptr<task_request>> _task_request_publisher;
   cucascade::memory::memory_space* _memory_space;
-  sirius::creator::task_creator* _task_creator{nullptr};
+  rasterdb::creator::task_creator* _task_creator{nullptr};
   completion_handler* _completion_handler{nullptr};
 };
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

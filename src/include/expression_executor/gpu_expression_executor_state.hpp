@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 #include <memory>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 // Forward declarations
 struct GpuExpressionExecutor;
 struct GpuExpressionExecutorState;
@@ -73,5 +73,5 @@ struct GpuExpressionExecutorState {
   GpuExpressionExecutor* executor = nullptr;
 };
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

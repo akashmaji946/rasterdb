@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 #include <thread>
 #include <vector>
 
-namespace sirius::exec {
+namespace rasterdb::exec {
 
 class thread_pool {
  public:
@@ -88,10 +88,10 @@ class thread_pool {
       try {
         fn();
       } catch (const std::exception& e) {
-        SIRIUS_LOG_ERROR("Exception in thread pool task: {}, {}", e.what(), "closing thread pool");
+        RASTERDB_LOG_ERROR("Exception in thread pool task: {}, {}", e.what(), "closing thread pool");
         stop();
       } catch (...) {
-        SIRIUS_LOG_ERROR("Exception in thread pool task, closing thread pool");
+        RASTERDB_LOG_ERROR("Exception in thread pool task, closing thread pool");
         stop();
       }
     });
@@ -131,4 +131,4 @@ class thread_pool {
   std::vector<std::thread> threads_;
 };
 
-}  // namespace sirius::exec
+}  // namespace rasterdb::exec

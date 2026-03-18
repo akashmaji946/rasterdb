@@ -26,13 +26,13 @@
 #include <op/sirius_physical_table_scan.hpp>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 }  // namespace
 
 TEMPLATE_TEST_CASE(
@@ -51,7 +51,7 @@ TEMPLATE_TEST_CASE(
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -145,7 +145,7 @@ TEMPLATE_TEST_CASE(
 
 TEST_CASE("sirius_physical_table_scan with no filters passes through data", "[physical_table_scan]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -208,7 +208,7 @@ TEST_CASE("sirius_physical_table_scan with no filters passes through data", "[ph
 
 TEST_CASE("sirius_physical_table_scan with multiple filters", "[physical_table_scan]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -284,7 +284,7 @@ TEST_CASE("sirius_physical_table_scan with multiple filters", "[physical_table_s
 
 TEST_CASE("sirius_physical_table_scan filters all rows", "[physical_table_scan]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,8 +63,8 @@ static size_t GetElementSizeBytes(const GPUColumnType& col_type)
 OperatorResultType GPUPhysicalStreamingLimit::Execute(
   GPUIntermediateRelation& input_relation, GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("Executing streaming limit");
-  SIRIUS_LOG_DEBUG("Limit value {}", limit_val.GetConstantValue());
+  RASTERDB_LOG_DEBUG("Executing streaming limit");
+  RASTERDB_LOG_DEBUG("Limit value {}", limit_val.GetConstantValue());
   if (limit_val.Type() != LimitNodeType::CONSTANT_VALUE) {
     throw NotImplementedException("Streaming limit other than constant value not implemented");
   }
@@ -117,7 +117,7 @@ OperatorResultType GPUPhysicalStreamingLimit::Execute(
       callCudaMemcpyDeviceToHost<uint64_t>(end_pos, new_offset + take, 1, 0);
       output_relation.columns[col_idx]->data_wrapper.num_bytes = end_pos[0];
     }
-    SIRIUS_LOG_DEBUG("Column {} has {} rows (offset={}, take={})",
+    RASTERDB_LOG_DEBUG("Column {} has {} rows (offset={}, take={})",
                      col_idx,
                      output_relation.columns[col_idx]->column_length,
                      skip,

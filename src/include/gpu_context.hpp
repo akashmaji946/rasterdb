@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "gpu_buffer_manager.hpp"
 #include "gpu_executor.hpp"
-#include "sirius_engine.hpp"
+#include "rasterdb_engine.hpp"
 
 namespace duckdb {
 
@@ -38,11 +38,11 @@ class SiriusPreparedStatementData {
  public:
   SiriusPreparedStatementData(
     shared_ptr<PreparedStatementData> _prepared,
-    unique_ptr<::sirius::op::sirius_physical_operator> _sirius_physical_plan)
-    : prepared(_prepared), sirius_physical_plan(move(_sirius_physical_plan))
+    unique_ptr<::rasterdb::op::rasterdb_physical_operator> _rasterdb_physical_plan)
+    : prepared(_prepared), rasterdb_physical_plan(move(_rasterdb_physical_plan))
   {
   }
-  unique_ptr<::sirius::op::sirius_physical_operator> sirius_physical_plan;
+  unique_ptr<::rasterdb::op::rasterdb_physical_operator> rasterdb_physical_plan;
   shared_ptr<PreparedStatementData> prepared;
 };
 
@@ -57,7 +57,7 @@ struct GPUActiveQueryContext {
   //! The query executor
   unique_ptr<GPUExecutor> gpu_executor;
   //! The query executor
-  unique_ptr<::sirius::sirius_engine> engine;
+  unique_ptr<::rasterdb::rasterdb_engine> engine;
   //! The progress bar
   unique_ptr<ProgressBar> progress_bar;
 
@@ -136,7 +136,7 @@ class GPUContext {
 
   unique_ptr<QueryResult> SiriusExecutePendingQueryResult(PendingQueryResult& pending);
 
-  ::sirius::sirius_engine& GetSiriusEngine();
+  ::rasterdb::rasterdb_engine& GetRasterdbEngine();
 };
 
 }  // namespace duckdb

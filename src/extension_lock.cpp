@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 #include <string>
 #include <utility>
 
-namespace sirius {
+namespace rasterdb {
 
 extension_lock::extension_lock(const std::string& extension_name, const std::string& lock_prefix)
   : lock_path_(lock_prefix + "/" + extension_name + ".lock")
@@ -82,4 +82,4 @@ extension_lock& extension_lock::operator=(extension_lock&& other) noexcept
   return *this;
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 #include "pipeline/pipeline_queue.hpp"
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 void pipeline_queue::open()
 {
   _is_open.store(true, std::memory_order_release);
   // Drain any remaining items (including nullptr sentinels) from previous close()
-  std::unique_ptr<sirius::parallel::itask> task;
+  std::unique_ptr<rasterdb::parallel::itask> task;
   while (_task_queue.try_dequeue(task)) {
     // Discard old items
   }
@@ -38,14 +38,14 @@ void pipeline_queue::close()
   }
 }
 
-void pipeline_queue::push(std::unique_ptr<sirius::parallel::itask> task)
+void pipeline_queue::push(std::unique_ptr<rasterdb::parallel::itask> task)
 {
   _task_queue.enqueue(std::move(task));
 }
 
-std::unique_ptr<sirius::parallel::itask> pipeline_queue::pull()
+std::unique_ptr<rasterdb::parallel::itask> pipeline_queue::pull()
 {
-  std::unique_ptr<sirius::parallel::itask> task;
+  std::unique_ptr<rasterdb::parallel::itask> task;
   while (true) {
     if (_task_queue.try_dequeue(task)) { return task; }
 
@@ -59,4 +59,4 @@ std::unique_ptr<sirius::parallel::itask> pipeline_queue::pull()
 }
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

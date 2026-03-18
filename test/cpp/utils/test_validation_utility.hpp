@@ -39,7 +39,7 @@
 #include <string>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace test {
 
 /**
@@ -294,4 +294,4 @@ inline bool expect_data_batch_equivalent_to_table(
 }
 
 }  // namespace test
-}  // namespace sirius
+}  // namespace rasterdb

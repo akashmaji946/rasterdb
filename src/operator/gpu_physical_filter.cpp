@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,16 +44,16 @@ GPUPhysicalFilter::GPUPhysicalFilter(vector<LogicalType> types,
 OperatorResultType GPUPhysicalFilter::Execute(GPUIntermediateRelation& input_relation,
                                               GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("Executing expression {}", expression->ToString());
+  RASTERDB_LOG_DEBUG("Executing expression {}", expression->ToString());
   auto start = std::chrono::high_resolution_clock::now();
 
   // The new executor...
-  sirius::GpuExpressionExecutor gpu_expression_executor(*expression.get());
+  rasterdb::GpuExpressionExecutor gpu_expression_executor(*expression.get());
   gpu_expression_executor.Select(input_relation, output_relation);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Filter time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Filter time: {:.2f} ms", duration.count() / 1000.0);
   return OperatorResultType::FINISHED;
 }
 

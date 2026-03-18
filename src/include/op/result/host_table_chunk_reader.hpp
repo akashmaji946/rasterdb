@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@
 #include <memory>
 #include <vector>
 
-namespace sirius::op::result {
+namespace rasterdb::op::result {
 
 //===----------------------------------------------------------------------===//
 // host_table_chunk_reader
@@ -170,4 +170,4 @@ class host_table_chunk_reader {
   std::vector<column_reader> _column_readers;  ///< The column readers for each column
 };
 
-}  // namespace sirius::op::result
+}  // namespace rasterdb::op::result

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 
 // ---------------------------------------------------------------------------
 // cache_ranges
@@ -97,4 +97,4 @@ class cache_ranges {
   int numa_id_{-1};
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan

@@ -23,17 +23,17 @@
 #include <memory>
 #include <string>
 
-namespace sirius::test {
+namespace rasterdb::test {
 
 /**
- * @brief Shared test environment that holds a single DuckDB instance and SiriusContext.
+ * @brief Shared test environment that holds a single DuckDB instance and RasterDBContext.
  *
  * The constructor sets SIRIUS_CONFIG_FILE and creates a DuckDB instance, which triggers
- * the extension callback to create a SiriusContext and acquire the extension lock.
+ * the extension callback to create a RasterDBContext and acquire the extension lock.
  * All tests in the "shared" phase get connections to this DuckDB instance, avoiding
- * the overhead of repeated SiriusContext creation/destruction.
+ * the overhead of repeated RasterDBContext creation/destruction.
  *
- * For tests tagged [isolated_context] or [integration] that need their own SiriusContext,
+ * For tests tagged [isolated_context] or [integration] that need their own RasterDBContext,
  * the environment is temporarily paused (DuckDB destroyed, lock released) via a Catch2
  * listener, then resumed after the isolated test completes.
  */
@@ -51,7 +51,7 @@ class shared_test_env {
    * @brief Create a new connection to the shared DuckDB instance.
    *
    * The extension callback's OnConnectionOpened automatically registers
-   * the shared SiriusContext into the new connection's registered_state.
+   * the shared RasterDBContext into the new connection's registered_state.
    */
   duckdb::Connection make_connection();
 
@@ -98,4 +98,4 @@ class shared_test_env {
 extern shared_test_env* g_shared_env;
 extern shared_test_env* g_integration_env;
 
-}  // namespace sirius::test
+}  // namespace rasterdb::test

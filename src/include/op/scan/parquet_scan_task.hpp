@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@
 // sirius
 #include <config.hpp>
 #include <memory/multiple_blocks_allocation_accessor.hpp>
-#include <op/sirius_physical_parquet_scan.hpp>
-#include <op/sirius_physical_table_scan.hpp>
-#include <pipeline/sirius_pipeline_itask.hpp>
-#include <pipeline/sirius_pipeline_task_states.hpp>
-#include <sirius_config.hpp>
-#include <sirius_context.hpp>
+#include <op/rasterdb_physical_parquet_scan.hpp>
+#include <op/rasterdb_physical_table_scan.hpp>
+#include <pipeline/rasterdb_pipeline_itask.hpp>
+#include <pipeline/rasterdb_pipeline_task_states.hpp>
+#include <rasterdb_config.hpp>
+#include <rasterdb_context.hpp>
 
 // cucascade
 #include <cucascade/data/data_repository.hpp>
@@ -46,12 +46,12 @@
 #include <optional>
 #include <vector>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 
 //===----------------------------------------------------------------------===//
 // Parquet Scan Task Global State
 //===----------------------------------------------------------------------===//
-class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_global_state {
+class parquet_scan_task_global_state : public pipeline::rasterdb_pipeline_task_global_state {
   using hybrid_scan_reader = cudf::io::parquet::experimental::hybrid_scan_reader;
 
  public:
@@ -88,9 +88,9 @@ class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_glo
    * @param[in] approximate_batch_size The target approximate batch size for the scan tasks
    */
   parquet_scan_task_global_state(
-    duckdb::shared_ptr<pipeline::sirius_pipeline> pipeline,
-    sirius_physical_parquet_scan* scan_op,
-    size_t approximate_batch_size = sirius::config::DEFAULT_SCAN_TASK_BATCH_SIZE);
+    duckdb::shared_ptr<pipeline::rasterdb_pipeline> pipeline,
+    rasterdb_physical_parquet_scan* scan_op,
+    size_t approximate_batch_size = rasterdb::config::DEFAULT_SCAN_TASK_BATCH_SIZE);
 
   //===----------Methods----------===//
   /**
@@ -98,7 +98,7 @@ class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_glo
    *
    * @return A reference to the physical parquet scan operator.
    */
-  [[nodiscard]] sirius_physical_parquet_scan& get_operator() { return *_scan_op; }
+  [[nodiscard]] rasterdb_physical_parquet_scan& get_operator() { return *_scan_op; }
 
   /**
    * @brief Get the file path of the Parquet file to scan.
@@ -189,7 +189,7 @@ class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_glo
   /**
    * @brief Fill the vector of column indices for this scan after projection.
    */
-  void make_selected_column_indices(sirius_physical_parquet_scan const& scan_op);
+  void make_selected_column_indices(rasterdb_physical_parquet_scan const& scan_op);
 
   /**
    * @brief Accumulate the compressed and uncompressed byte sizes for each row group in the file
@@ -205,7 +205,7 @@ class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_glo
 
   //===----------Fields----------===//
   size_t _approximate_batch_size;          ///< Target approximate batch size for scan tasks
-  sirius_physical_parquet_scan* _scan_op;  ///< The physical parquet scan operator being executed
+  rasterdb_physical_parquet_scan* _scan_op;  ///< The physical parquet scan operator being executed
   bool _is_projected;                      ///< Whether projection is applied
 
   std::vector<std::string> _file_paths;                          ///< The parquet file paths
@@ -229,7 +229,7 @@ class parquet_scan_task_global_state : public pipeline::sirius_pipeline_task_glo
  * @brief Local state for parquet_scan_task, which manages the row group indices assigned to this
  * task and makes the memory allocation for the task.
  */
-class parquet_scan_task_local_state : public pipeline::sirius_pipeline_task_local_state {
+class parquet_scan_task_local_state : public pipeline::rasterdb_pipeline_task_local_state {
   using multiple_blocks_allocation =
     cucascade::memory::fixed_size_host_memory_resource::multiple_blocks_allocation;
   using memory_space = cucascade::memory::memory_space;
@@ -323,7 +323,7 @@ class parquet_scan_task_local_state : public pipeline::sirius_pipeline_task_loca
  * https://arxiv.org/html/2508.05029v1#S3.SS4
  *
  */
-class parquet_scan_task : public pipeline::sirius_pipeline_itask {
+class parquet_scan_task : public pipeline::rasterdb_pipeline_itask {
   using shared_data_repository = cucascade::shared_data_repository;
   using multiple_blocks_allocation =
     cucascade::memory::fixed_size_host_memory_resource::multiple_blocks_allocation;
@@ -344,7 +344,7 @@ class parquet_scan_task : public pipeline::sirius_pipeline_itask {
                     shared_data_repository* data_repo,
                     std::unique_ptr<parquet_scan_task_local_state> l_state,
                     std::shared_ptr<parquet_scan_task_global_state> g_state)
-    : pipeline::sirius_pipeline_itask(std::move(l_state), g_state),
+    : pipeline::rasterdb_pipeline_itask(std::move(l_state), g_state),
       _task_id(task_id),
       _data_repo(data_repo)
   {
@@ -391,10 +391,10 @@ class parquet_scan_task : public pipeline::sirius_pipeline_itask {
    *
    * @return A vector of pointers to the output consumer operators.
    */
-  std::vector<op::sirius_physical_operator*> get_output_consumers() override
+  std::vector<op::rasterdb_physical_operator*> get_output_consumers() override
   {
     auto& g_state = this->_global_state->cast<parquet_scan_task_global_state>();
-    std::vector<sirius_physical_operator*> output_consumers;
+    std::vector<rasterdb_physical_operator*> output_consumers;
     auto ports = g_state.get_operator().get_next_port_after_sink();
     for (auto& [child, port_id] : ports) {
       output_consumers.push_back(child);
@@ -445,4 +445,4 @@ class parquet_scan_task : public pipeline::sirius_pipeline_itask {
     nullptr};  ///< GPU memory space for materialization
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan

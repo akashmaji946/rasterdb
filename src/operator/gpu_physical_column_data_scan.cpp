@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ SourceResultType GPUPhysicalColumnDataScan::GetData(GPUIntermediateRelation& out
 
   // return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;
 
-  SIRIUS_LOG_DEBUG("Reading data from column data scan");
+  RASTERDB_LOG_DEBUG("Reading data from column data scan");
   for (int col_idx = 0; col_idx < output_relation.columns.size(); col_idx++) {
     // output_relation.columns[col_idx] = intermediate_relation->columns[col_idx];
     // output_relation.columns[col_idx] =

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -275,11 +275,11 @@ SinkResultType GPUPhysicalNestedLoopJoin::Sink(GPUIntermediateRelation& input_re
   for (idx_t cond_idx = 0; cond_idx < conditions.size(); cond_idx++) {
     auto& condition     = conditions[cond_idx];
     auto join_key_index = condition.right->Cast<BoundReferenceExpression>().index;
-    SIRIUS_LOG_DEBUG("Reading join key from right side from idx {}", join_key_index);
+    RASTERDB_LOG_DEBUG("Reading join key from right side from idx {}", join_key_index);
   }
 
   for (int i = 0; i < input_relation.columns.size(); i++) {
-    SIRIUS_LOG_DEBUG(
+    RASTERDB_LOG_DEBUG(
       "Passing column idx {} from right side to idx {} in right temp relation", i, i);
     // right_temp_data->columns[i] =
     // make_shared_ptr<GPUColumn>(input_relation.columns[i]->column_length,
@@ -292,7 +292,7 @@ SinkResultType GPUPhysicalNestedLoopJoin::Sink(GPUIntermediateRelation& input_re
   // measure time
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Nested loop join Sink time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Nested loop join Sink time: {:.2f} ms", duration.count() / 1000.0);
 
   return SinkResultType::FINISHED;
 }
@@ -328,16 +328,16 @@ void GPUPhysicalNestedLoopJoin::ResolveSimpleJoin(GPUIntermediateRelation& input
   for (idx_t cond_idx = 0; cond_idx < conditions.size(); cond_idx++) {
     auto& condition     = conditions[cond_idx];
     auto join_key_index = condition.left->Cast<BoundReferenceExpression>().index;
-    SIRIUS_LOG_DEBUG("Reading join key from left side from index {}", join_key_index);
+    RASTERDB_LOG_DEBUG("Reading join key from left side from index {}", join_key_index);
     input_relation.checkLateMaterialization(join_key_index);
   }
 
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (join_type == JoinType::SEMI || join_type == JoinType::ANTI || join_type == JoinType::MARK) {
-    SIRIUS_LOG_DEBUG("Writing row IDs from left side to output relation");
+    RASTERDB_LOG_DEBUG("Writing row IDs from left side to output relation");
     uint64_t* left_row_ids = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     for (idx_t i = 0; i < input_relation.column_count; i++) {
-      SIRIUS_LOG_DEBUG(
+      RASTERDB_LOG_DEBUG(
         "Passing column idx {} from LHS (late materialized) to idx {} in output relation", i, i);
       output_relation.columns[i]          = input_relation.columns[i];
       output_relation.columns[i]->row_ids = left_row_ids;
@@ -367,7 +367,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
     auto& condition = conditions[cond_idx];
     if (condition.left->GetExpressionClass() == ExpressionClass::BOUND_REF) {
       auto join_key_index = condition.left->Cast<BoundReferenceExpression>().index;
-      SIRIUS_LOG_DEBUG("Reading join key from left relation from index {}", join_key_index);
+      RASTERDB_LOG_DEBUG("Reading join key from left relation from index {}", join_key_index);
       left_keys[cond_idx] =
         HandleMaterializeExpression(input_relation.columns[join_key_index], gpuBufferManager);
     } else if (condition.left->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -378,7 +378,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
           static_cast<int>(child->GetExpressionClass()));
       }
       auto join_key_index = child->Cast<BoundReferenceExpression>().index;
-      SIRIUS_LOG_DEBUG("Reading join key from left relation from index {}", join_key_index);
+      RASTERDB_LOG_DEBUG("Reading join key from left relation from index {}", join_key_index);
       left_keys[cond_idx] =
         HandleMaterializeExpression(input_relation.columns[join_key_index], gpuBufferManager);
       // Perform cast
@@ -400,7 +400,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
     auto& condition = conditions[cond_idx];
     if (condition.right->GetExpressionClass() == ExpressionClass::BOUND_REF) {
       auto join_key_index = condition.right->Cast<BoundReferenceExpression>().index;
-      SIRIUS_LOG_DEBUG("Reading join key from right relation from index {}", join_key_index);
+      RASTERDB_LOG_DEBUG("Reading join key from right relation from index {}", join_key_index);
       right_keys[cond_idx] =
         HandleMaterializeExpression(right_temp_data->columns[join_key_index], gpuBufferManager);
     } else if (condition.right->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -411,7 +411,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
           static_cast<int>(child->GetExpressionClass()));
       }
       auto join_key_index = child->Cast<BoundReferenceExpression>().index;
-      SIRIUS_LOG_DEBUG("Reading join key from right relation from index {}", join_key_index);
+      RASTERDB_LOG_DEBUG("Reading join key from right relation from index {}", join_key_index);
       right_keys[cond_idx] =
         HandleMaterializeExpression(right_temp_data->columns[join_key_index], gpuBufferManager);
       // Perform cast
@@ -440,7 +440,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
       all_float64 = false;
     }
   }
-  SIRIUS_LOG_DEBUG("Nested loop join");
+  RASTERDB_LOG_DEBUG("Nested loop join");
   if (!all_int64 && !all_float64) {
     // Not supported by Sirius implementation, use cudf instead
     if (join_type == JoinType::INNER) {
@@ -470,10 +470,10 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
     rhs_output_columns.push_back(i);
 
   // if (count[0] == 0) throw NotImplementedException("No match found in nested loop join");
-  SIRIUS_LOG_DEBUG("Writing row IDs from LHS to output relation");
+  RASTERDB_LOG_DEBUG("Writing row IDs from LHS to output relation");
   HandleMaterializeRowIDs(
     input_relation, output_relation, count[0], row_ids_left, gpuBufferManager, false);
-  SIRIUS_LOG_DEBUG("Writing row IDs from RHS to output relation");
+  RASTERDB_LOG_DEBUG("Writing row IDs from RHS to output relation");
   HandleMaterializeRowIDsRHS(*right_temp_data,
                              output_relation,
                              rhs_output_columns,
@@ -485,7 +485,7 @@ OperatorResultType GPUPhysicalNestedLoopJoin::ResolveComplexJoin(
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Nested loop join Execute time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Nested loop join Execute time: {:.2f} ms", duration.count() / 1000.0);
 
   return OperatorResultType::FINISHED;
 }
@@ -507,7 +507,7 @@ SourceResultType GPUPhysicalNestedLoopJoin::GetData(GPUIntermediateRelation& out
   }
 
   for (idx_t i = 0; i < right_temp_data->columns.size(); i++) {
-    SIRIUS_LOG_DEBUG("Writing right temp data column idx {} to idx {} in output relation",
+    RASTERDB_LOG_DEBUG("Writing right temp data column idx {} to idx {} in output relation",
                      i,
                      left_column_count + i);
     output_relation.columns[left_column_count + i] = right_temp_data->columns[i];
@@ -515,7 +515,7 @@ SourceResultType GPUPhysicalNestedLoopJoin::GetData(GPUIntermediateRelation& out
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Nested loop join GetData time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Nested loop join GetData time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 

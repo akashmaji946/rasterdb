@@ -27,10 +27,10 @@
 
 #include <cucascade/memory/memory_space.hpp>
 
-using namespace sirius;
+using namespace rasterdb;
 using namespace cucascade;
 using namespace cucascade::memory;
-using namespace sirius::op;
+using namespace rasterdb::op;
 
 namespace {
 
@@ -73,7 +73,7 @@ batches_with_handles create_batches_with_random_data(
                                                     ranges,
                                                     cudf::get_default_stream(),
                                                     mem_space.get_default_allocator());
-    auto batch = sirius::make_data_batch(std::move(table), mem_space);
+    auto batch = rasterdb::make_data_batch(std::move(table), mem_space);
 
     // Acquire processing handle (like the old pin() call)
     REQUIRE(batch->try_to_create_task());
@@ -91,10 +91,10 @@ void validate_concat(const std::vector<std::shared_ptr<data_batch>>& input_batch
   std::vector<cudf::table_view> input_table_views;
   int expected_num_rows = 0;
   for (const auto& input_batch : input_batches) {
-    input_table_views.push_back(sirius::get_cudf_table_view(*input_batch));
+    input_table_views.push_back(rasterdb::get_cudf_table_view(*input_batch));
     expected_num_rows += input_table_views.back().num_rows();
   }
-  cudf::table_view output_table_view = sirius::get_cudf_table_view(output);
+  cudf::table_view output_table_view = rasterdb::get_cudf_table_view(output);
 
   REQUIRE(expected_num_rows == output_table_view.num_rows());
   REQUIRE(input_table_views[0].num_columns() == output_table_view.num_columns());
@@ -366,9 +366,9 @@ void validate_ungrouped_aggregate(const std::vector<std::shared_ptr<data_batch>>
 {
   std::vector<cudf::table_view> input_table_views;
   for (const auto& input_batch : input_batches) {
-    input_table_views.push_back(sirius::get_cudf_table_view(*input_batch));
+    input_table_views.push_back(rasterdb::get_cudf_table_view(*input_batch));
   }
-  cudf::table_view output_table_view = sirius::get_cudf_table_view(output);
+  cudf::table_view output_table_view = rasterdb::get_cudf_table_view(output);
 
   REQUIRE(output_table_view.num_rows() == 1);
 
@@ -580,9 +580,9 @@ void validate_grouped_aggregate(const std::vector<std::shared_ptr<data_batch>>& 
 {
   std::vector<cudf::table_view> input_table_views;
   for (const auto& input_batch : input_batches) {
-    input_table_views.push_back(sirius::get_cudf_table_view(*input_batch));
+    input_table_views.push_back(rasterdb::get_cudf_table_view(*input_batch));
   }
-  cudf::table_view output_table_view = sirius::get_cudf_table_view(output);
+  cudf::table_view output_table_view = rasterdb::get_cudf_table_view(output);
 
   // Compute expected results
   std::vector<std::vector<int64_t>> h_input_data(input_table_views[0].num_columns());
@@ -832,10 +832,10 @@ void validate_order_by(const std::vector<std::shared_ptr<data_batch>>& input_bat
   std::vector<cudf::table_view> input_table_views;
   int expected_num_rows = 0;
   for (const auto& input_batch : input_batches) {
-    input_table_views.push_back(sirius::get_cudf_table_view(*input_batch));
+    input_table_views.push_back(rasterdb::get_cudf_table_view(*input_batch));
     expected_num_rows += input_table_views.back().num_rows();
   }
-  cudf::table_view output_table_view = sirius::get_cudf_table_view(output);
+  cudf::table_view output_table_view = rasterdb::get_cudf_table_view(output);
 
   REQUIRE(output_table_view.num_rows() == expected_num_rows);
   REQUIRE(output_table_view.num_columns() == input_table_views[0].num_columns());

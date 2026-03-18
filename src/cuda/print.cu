@@ -58,15 +58,15 @@ void printGPUColumn(T* a, size_t N, int gpu)
 {
   CHECK_ERROR();
   if (N == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   T result_host_temp;
   cudaMemcpy(&result_host_temp, a, sizeof(T), cudaMemcpyDeviceToHost);
   CHECK_ERROR();
   cudaDeviceSynchronize();
-  SIRIUS_LOG_DEBUG("Result: {} and N: {}", result_host_temp, N);
-  SIRIUS_LOG_DEBUG("Input size: {}", N);
+  RASTERDB_LOG_DEBUG("Result: {} and N: {}", result_host_temp, N);
+  RASTERDB_LOG_DEBUG("Input size: {}", N);
   print_gpu_column<T><<<1, 1>>>(a, N);
   CHECK_ERROR();
   cudaDeviceSynchronize();
@@ -112,7 +112,7 @@ void printGPUTable(GPUIntermediateRelation& table, ClientContext& context)
 
 }  // namespace duckdb
 
-namespace sirius {
+namespace rasterdb {
 
 namespace {
 
@@ -234,4 +234,4 @@ void print_data_batch_contents(cucascade::data_batch const& batch, cudf::size_ty
   print_table_contents(tv, max_rows);
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

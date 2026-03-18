@@ -23,7 +23,7 @@
 #include <queue>
 #include <thread>
 
-using namespace sirius::parallel;
+using namespace rasterdb::parallel;
 using namespace std::chrono_literals;
 
 /**

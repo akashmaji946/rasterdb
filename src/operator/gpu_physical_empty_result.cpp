@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ namespace duckdb {
 
 SourceResultType GPUPhysicalEmptyResult::GetData(GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("Reading data from empty result");
+  RASTERDB_LOG_DEBUG("Reading data from empty result");
   for (int col = 0; col < types.size(); col++) {
     output_relation.columns[col] =
       make_shared_ptr<GPUColumn>(0, GPUColumnType(GPUColumnTypeId::INT64), nullptr, nullptr);

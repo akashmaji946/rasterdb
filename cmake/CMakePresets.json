@@ -27,17 +27,16 @@
   ],
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 26,
+    "minor": 5,
     "patch": 0
   },
   "configurePresets": [
     {
       "cacheVariables": {
-        "CMAKE_CUDA_COMPILER_LAUNCHER": "sccache",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
-        "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+        "CMAKE_C_COMPILER": "/usr/bin/cc",
+        "CMAKE_CXX_COMPILER": "/usr/bin/c++",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_LINKER_TYPE": "MOLD",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../.pixi/envs/default",
         "DUCKDB_EXTENSION_CONFIGS": "${sourceDir}/../extension_config.cmake",
         "EXPORT_DYNAMIC_SYMBOLS": "ON",
         "EXTENSION_STATIC_BUILD": "ON"
@@ -48,7 +47,6 @@
     },
     {
       "cacheVariables": {
-        "CMAKE_CUDA_HOST_COMPILER": "$env{CONDA_PREFIX}/bin/clang++",
         "CMAKE_CXX_COMPILER": "$env{CONDA_PREFIX}/bin/clang++",
         "CMAKE_CXX_SCAN_FOR_MODULES": "OFF",
         "CMAKE_C_COMPILER": "$env{CONDA_PREFIX}/bin/clang",
@@ -62,7 +60,6 @@
       "binaryDir": "${sourceDir}/../build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CUDA_FLAGS_DEBUG": "-g -G -O0",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
         "CMAKE_C_FLAGS_DEBUG": "-g -O0"
       },
@@ -92,7 +89,6 @@
       "binaryDir": "${sourceDir}/../build/clang-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CUDA_FLAGS_DEBUG": "-g -G -O0",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
         "CMAKE_C_FLAGS_DEBUG": "-g -O0"
       },
@@ -119,5 +115,5 @@
       "name": "clang-relwithdebinfo"
     }
   ],
-  "version": 6
+  "version": 3
 }

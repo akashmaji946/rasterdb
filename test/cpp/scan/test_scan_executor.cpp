@@ -45,14 +45,14 @@
 #include <string>
 #include <thread>
 
-using namespace sirius;
-using namespace sirius::scan_test_utils;
+using namespace rasterdb;
+using namespace rasterdb::scan_test_utils;
 using namespace cucascade::memory;
 
 /**
  * @brief Create a PhysicalTableScan for the given table
  */
-static std::unique_ptr<sirius::op::sirius_physical_duckdb_scan> make_physical_table_scan(
+static std::unique_ptr<rasterdb::op::sirius_physical_duckdb_scan> make_physical_table_scan(
   duckdb::ClientContext& ctx, std::string const& table_name)
 {
   auto& catalog = duckdb::Catalog::GetCatalog(ctx, "");
@@ -90,7 +90,7 @@ static std::unique_ptr<sirius::op::sirius_physical_duckdb_scan> make_physical_ta
   auto virtual_columns = table_catalog_entry.GetVirtualColumns();
 
   // Create sirius_physical_duckdb_scan with all required parameters
-  auto physical_scan = std::make_unique<sirius::op::sirius_physical_duckdb_scan>(
+  auto physical_scan = std::make_unique<rasterdb::op::sirius_physical_duckdb_scan>(
     table_catalog_entry.GetTypes(),   // types
     table_scan_function,              // function
     std::move(bind_data),             // bind_data
@@ -119,14 +119,14 @@ static void run_scan_test(std::string const& table_name,
                           size_t batch_size)
 {
   // Use shared DuckDB when available, otherwise create standalone
-  auto [db_owner, con] = sirius::make_test_db_and_connection();
+  auto [db_owner, con] = rasterdb::make_test_db_and_connection();
 
   // Create and populate table
   create_synthetic_table(con, table_name, num_rows);
 
   // Get client context
   auto& client_ctx = *con.context;
-  auto sirius_ctx  = sirius::get_sirius_context(con, get_test_config_path());
+  auto sirius_ctx  = rasterdb::get_rasterdb_context(con, get_test_config_path());
 
   // Verify memory manager is initialized
   auto& mem_mgr   = sirius_ctx->get_memory_manager();
@@ -159,9 +159,9 @@ static void run_scan_test(std::string const& table_name,
     std::make_unique<duckdb::ExecutionContext>(client_ctx, *thread_context, nullptr);
 
   // Only start/stop the pipeline executor when NOT using the shared test env.
-  // The shared env's SiriusContext already started it, and stopping it would
+  // The shared env's RasterDBContext already started it, and stopping it would
   // permanently break the interruptible_mpmc queue (no reset on restart).
-  bool const manage_executor = !sirius::test::g_shared_env;
+  bool const manage_executor = !rasterdb::test::g_shared_env;
   if (manage_executor) { pipeline_executor.start(); }
 
   for (int i = 0; i < scan_executor.get_num_threads(); ++i) {

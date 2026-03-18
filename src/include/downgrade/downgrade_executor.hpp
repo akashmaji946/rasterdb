@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 #include <thread>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace parallel {
 
 /**
@@ -67,7 +67,7 @@ class downgrade_executor : public itask_executor {
     cucascade::shared_data_repository_manager& data_repo_mgr,
     cucascade::memory::memory_space_id space_id,
     cucascade::memory::memory_space* memory_space,
-    sirius::memory::sirius_memory_reservation_manager& reservation_manager)
+    rasterdb::memory::rasterdb_memory_reservation_manager& reservation_manager)
     : itask_executor(std::make_unique<downgrade_task_queue>(), config),
       _data_repo_mgr(data_repo_mgr),
       _space_id(space_id),
@@ -151,11 +151,11 @@ class downgrade_executor : public itask_executor {
   cucascade::shared_data_repository_manager& _data_repo_mgr;
   cucascade::memory::memory_space_id _space_id;
   cucascade::memory::memory_space* _memory_space;
-  sirius::memory::sirius_memory_reservation_manager& _reservation_manager;
+  rasterdb::memory::rasterdb_memory_reservation_manager& _reservation_manager;
   task_completion_message_queue _message_queue;  ///< Owned; receives downgrade task completions
 
   std::thread _monitor_thread;
 };
 
 }  // namespace parallel
-}  // namespace sirius
+}  // namespace rasterdb

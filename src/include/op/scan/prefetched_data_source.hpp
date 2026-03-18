@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 #include <future>
 #include <memory>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 
 class prefetched_data_source : public cudf::io::datasource {
  public:
@@ -75,4 +75,4 @@ class prefetched_data_source : public cudf::io::datasource {
   std::atomic<size_t> total_bytes_read_from_fallback_{0};
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan

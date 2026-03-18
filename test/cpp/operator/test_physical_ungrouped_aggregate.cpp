@@ -27,10 +27,10 @@
 #include <iterator>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 
 namespace {
 inline uint64_t int128_low64(__int128_t value)
@@ -64,7 +64,7 @@ TEMPLATE_TEST_CASE("sirius_physical_ungrouped_aggregate computes SUM/MIN/MAX/COU
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -257,7 +257,7 @@ TEMPLATE_TEST_CASE("sirius_physical_ungrouped_aggregate resolves AVG in merge",
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

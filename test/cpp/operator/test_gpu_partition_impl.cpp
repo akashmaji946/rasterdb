@@ -23,10 +23,10 @@
 
 #include <cucascade/memory/memory_space.hpp>
 
-using namespace sirius;
+using namespace rasterdb;
 using namespace cucascade;
 using namespace cucascade::memory;
-using namespace sirius::op;
+using namespace rasterdb::op;
 
 namespace {
 
@@ -57,7 +57,7 @@ std::pair<std::shared_ptr<data_batch>, data_batch_processing_handle> create_batc
   }
   auto table = create_cudf_table_with_random_data(
     num_rows, column_types, ranges, cudf::get_default_stream(), mem_space.get_default_allocator());
-  auto batch = sirius::make_data_batch(std::move(table), mem_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), mem_space);
 
   REQUIRE(batch->try_to_create_task());
   auto lock_result = batch->try_to_lock_for_processing(mem_space.get_id());
@@ -113,10 +113,10 @@ void validate_hash_partition(const data_batch& input_batch,
                              const std::vector<std::shared_ptr<data_batch>>& output_batches,
                              int num_partitions)
 {
-  cudf::table_view input_table_view = sirius::get_cudf_table_view(input_batch);
+  cudf::table_view input_table_view = rasterdb::get_cudf_table_view(input_batch);
   std::vector<cudf::table_view> output_table_views;
   for (const auto& output_batch : output_batches) {
-    output_table_views.push_back(sirius::get_cudf_table_view(*output_batch));
+    output_table_views.push_back(rasterdb::get_cudf_table_view(*output_batch));
   }
 
   // Check metadata
@@ -260,10 +260,10 @@ void validate_evenly_partition(const data_batch& input_batch,
                                const std::vector<std::shared_ptr<data_batch>>& output_batches,
                                int num_partitions)
 {
-  cudf::table_view input_table_view = sirius::get_cudf_table_view(input_batch);
+  cudf::table_view input_table_view = rasterdb::get_cudf_table_view(input_batch);
   std::vector<cudf::table_view> output_table_views;
   for (const auto& output_batch : output_batches) {
-    output_table_views.push_back(sirius::get_cudf_table_view(*output_batch));
+    output_table_views.push_back(rasterdb::get_cudf_table_view(*output_batch));
   }
 
   // Check metadata

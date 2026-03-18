@@ -26,7 +26,7 @@
 
 TEST_CASE("use configuration basic setters", "[config_opt][basic]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   int int_value       = 0;
   double double_value = 0.0;
@@ -74,7 +74,7 @@ TEST_CASE("use configuration basic setters", "[config_opt][basic]")
 
 TEST_CASE("use configuration basic optional setters", "[config_opt][optional]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   std::optional<int> int_value = std::nullopt;
   setter.add_optional_config("int_value", int_value);
@@ -112,7 +112,7 @@ TEST_CASE("use configuration basic optional setters", "[config_opt][optional]")
 
 TEST_CASE("use configuration basic variant setters", "[config_opt][variant]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   std::variant<std::monostate, int, double, std::string> one_of_options;
   setter.add_variant_config<int>("int_value", one_of_options);
@@ -168,10 +168,10 @@ TEST_CASE("use configuration basic variant setters", "[config_opt][variant]")
 
 TEST_CASE("use configuration basic setters with condition", "[config_opt][conditional]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   int int_value = 0;
-  setter.add_config("int_value", int_value, sirius::config::greater_than<int>{150});
+  setter.add_config("int_value", int_value, rasterdb::config::greater_than<int>{150});
 
   // Create a libconfig config object
   libconfig::Config libconfig;
@@ -187,7 +187,7 @@ TEST_CASE("use configuration basic setters with condition", "[config_opt][condit
 
 TEST_CASE("use configuration array setters", "[config_opt][array]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   std::vector<int> int_values;
   std::vector<double> double_values;
@@ -238,8 +238,8 @@ struct complex_config {
 };
 
 template <>
-struct sirius::config::custom_config_registrar<complex_config> {
-  static void config(sirius::config::configuration_setter& setter, complex_config& opt)
+struct rasterdb::config::custom_config_registrar<complex_config> {
+  static void config(rasterdb::config::configuration_setter& setter, complex_config& opt)
   {
     setter.add_config("int_value", opt.int_value);
     setter.add_config("bool_value", opt.bool_value);
@@ -249,7 +249,7 @@ struct sirius::config::custom_config_registrar<complex_config> {
 
 TEST_CASE("use configuration class setters with registered type", "[config_opt][complex]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   complex_config cfg;
   setter.add_config("cfg", cfg);
@@ -289,7 +289,7 @@ TEST_CASE("use configuration class setters with registered type", "[config_opt][
 
 TEST_CASE("use configuration class setters array  with registered type", "[config_opt][complex]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   std::vector<complex_config> cfgs;
   setter.add_config("cfgs", cfgs);
@@ -363,7 +363,7 @@ bool enum_to_string(color c, std::string& sv)
 
 TEST_CASE("use configuration class setters custom array of enum", "[config_opt][enum]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   std::vector<ee::color> colors;
   std::vector<ee::fruit> fruits;
@@ -399,8 +399,8 @@ struct nested_config {
 };
 
 template <>
-struct sirius::config::custom_config_registrar<nested_config> {
-  static void config(sirius::config::configuration_setter& setter, nested_config& opt)
+struct rasterdb::config::custom_config_registrar<nested_config> {
+  static void config(rasterdb::config::configuration_setter& setter, nested_config& opt)
   {
     setter.add_config("int_value", opt.int_value);
     setter.add_config("inner", opt.cfg);
@@ -409,7 +409,7 @@ struct sirius::config::custom_config_registrar<nested_config> {
 
 TEST_CASE("use configuration class setters nested  with registered type", "[config_opt][nested]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   nested_config cfg;
   setter.add_config("cfg", cfg);
@@ -456,7 +456,7 @@ TEST_CASE("use configuration class setters nested  with registered type", "[conf
 
 TEST_CASE("use env variable to set variables of a registered class", "[config_opt][required]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   ee::color favorite_color = ee::color::red;
   int int_value            = 0;
@@ -473,7 +473,7 @@ TEST_CASE("use env variable to set variables of a registered class", "[config_op
 
 TEST_CASE("use nested naming with config", "[config_opt][nested_naming]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   config::configuration_setter setter;
   ee::color favorite_color = ee::color::red;
   int int_value            = 0;
@@ -499,7 +499,7 @@ TEST_CASE("use nested naming with config", "[config_opt][nested_naming]")
 // Test iterable config with element-level validation
 TEST_CASE("Iterable config validates each element", "[config_opt][validation]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   SECTION("Valid elements pass validation")
   {
     // Create a simple config with a vector of positive integers
@@ -558,7 +558,7 @@ TEST_CASE("Iterable config validates each element", "[config_opt][validation]")
     config::configuration_setter setter;
 
     // Use greater_than validator
-    setter.add_config("scores", scores, sirius::config::greater_than<int>{40});
+    setter.add_config("scores", scores, rasterdb::config::greater_than<int>{40});
 
     REQUIRE_NOTHROW(setter.apply(cfg.getRoot()));
     REQUIRE(scores.size() == 3);
@@ -577,7 +577,7 @@ TEST_CASE("Iterable config validates each element", "[config_opt][validation]")
     std::vector<double> fractions;
     config::configuration_setter setter;
 
-    setter.add_config("fractions", fractions, sirius::config::fraction<double>{});
+    setter.add_config("fractions", fractions, rasterdb::config::fraction<double>{});
 
     REQUIRE_NOTHROW(setter.apply(cfg.getRoot()));
     REQUIRE(fractions.size() == 3);
@@ -597,7 +597,7 @@ TEST_CASE("Iterable config validates each element", "[config_opt][validation]")
     std::vector<double> fractions;
     config::configuration_setter setter;
 
-    setter.add_config("fractions", fractions, sirius::config::fraction<double>{});
+    setter.add_config("fractions", fractions, rasterdb::config::fraction<double>{});
 
     REQUIRE_THROWS_AS(setter.apply(cfg.getRoot()), std::invalid_argument);
   }
@@ -606,7 +606,7 @@ TEST_CASE("Iterable config validates each element", "[config_opt][validation]")
 // Test variant config with validation
 TEST_CASE("Variant config validates the value", "[config_opt][validation][variant]")
 {
-  using namespace sirius;
+  using namespace rasterdb;
   SECTION("Valid variant value passes validation")
   {
     // Create a config with a port number (int)

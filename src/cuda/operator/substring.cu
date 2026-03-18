@@ -105,12 +105,12 @@ std::tuple<char*, uint64_t*, uint64_t> PerformSubstring(char* char_data,
 {
   CHECK_ERROR();
   if (num_strings == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     char* empty            = nullptr;
     uint64_t* empty_offset = nullptr;
     return std::make_tuple(empty, empty_offset, 0);
   }
-  SIRIUS_LOG_DEBUG("Launching substring kernel");
+  RASTERDB_LOG_DEBUG("Launching substring kernel");
   SETUP_TIMING();
   START_TIMER();
 

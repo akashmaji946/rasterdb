@@ -39,7 +39,7 @@ namespace duckdb {
     cudaDeviceSynchronize();                                                                 \
     cudaError_t err = cudaGetLastError();                                                    \
     if (err != cudaSuccess) {                                                                \
-      SIRIUS_LOG_DEBUG(                                                                      \
+      RASTERDB_LOG_DEBUG(                                                                      \
         "CUDA Error at [{}]: {} - {}", msg, cudaGetErrorName(err), cudaGetErrorString(err)); \
       return;                                                                                \
     }                                                                                        \
@@ -778,7 +778,7 @@ void MaterializeResults(vector<shared_ptr<GPUColumn>>& projection,
   cudaEventSynchronize(stop);
   float elapsedTime;
   cudaEventElapsedTime(&elapsedTime, start, stop);
-  SIRIUS_LOG_DEBUG("MULTI-COL TOP N Result Write Time : {} ms", elapsedTime);
+  RASTERDB_LOG_DEBUG("MULTI-COL TOP N Result Write Time : {} ms", elapsedTime);
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
 }
@@ -821,7 +821,7 @@ void CustomMultiColumnTopN(vector<shared_ptr<GPUColumn>>& keys,
   cudaEventSynchronize(stop);
   float elapsedTime;
   cudaEventElapsedTime(&elapsedTime, start, stop);
-  SIRIUS_LOG_DEBUG("MULTI-COL TOP N Per-Thread Filter Time : {} ms", elapsedTime);
+  RASTERDB_LOG_DEBUG("MULTI-COL TOP N Per-Thread Filter Time : {} ms", elapsedTime);
   cudaEventRecord(start, 0);
 
   // P2: Block Merge
@@ -961,7 +961,7 @@ void CustomSingleColumnRadixTopN(vector<shared_ptr<GPUColumn>>& keys,
   cudaEventSynchronize(stop);
   float elapsedTime;
   cudaEventElapsedTime(&elapsedTime, start, stop);
-  SIRIUS_LOG_DEBUG("RADIX TOP N Total Time : {} ms", elapsedTime);
+  RASTERDB_LOG_DEBUG("RADIX TOP N Total Time : {} ms", elapsedTime);
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
 
@@ -1004,7 +1004,7 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
       // Rationale: Even for single column, Heap Sort only needs one-pass scan, lower latency than
       // Radix Sort (Multi-Pass). This significantly speeds up queries like Q25, Q11 with LIMIT 10.
       if (num_results <= MAX_THREAD_TOP_K) {
-        SIRIUS_LOG_DEBUG("Using Heap Sort Engine (Small Limit)");
+        RASTERDB_LOG_DEBUG("Using Heap Sort Engine (Small Limit)");
         CustomMultiColumnTopN(
           keys, projection, num_keys, num_projections, order_by_type, num_results);
         return;
@@ -1014,7 +1014,7 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
       // Rationale: As limit grows, heap maintenance cost increases, Radix Sort's high throughput
       // advantage shows.
       else if (num_keys == 1) {
-        SIRIUS_LOG_DEBUG("Using Radix Sort Engine (Single Column Large Limit)");
+        RASTERDB_LOG_DEBUG("Using Radix Sort Engine (Single Column Large Limit)");
         CustomSingleColumnRadixTopN(
           keys, projection, num_keys, num_projections, order_by_type, num_results);
         return;
@@ -1042,12 +1042,12 @@ void cudf_orderby(vector<shared_ptr<GPUColumn>>& keys,
     }
     return;
   }
-  SIRIUS_LOG_DEBUG("Cudf order using custom top n of {} has val {}", num_results, false);
+  RASTERDB_LOG_DEBUG("Cudf order using custom top n of {} has val {}", num_results, false);
 
   // 3. Fallback: libcudf full sorting
   // Applicable for: multi-column with Limit > 32, or unsupported types, or complex Offset handling
   // (though currently logic doesn't pass Offset)
-  SIRIUS_LOG_DEBUG("CUDF Order By (Fallback)");
+  RASTERDB_LOG_DEBUG("CUDF Order By (Fallback)");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   cudf::set_current_device_resource(gpuBufferManager->mr);
 

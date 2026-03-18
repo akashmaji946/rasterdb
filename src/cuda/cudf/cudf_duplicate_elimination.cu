@@ -25,7 +25,7 @@ namespace duckdb {
 void cudf_duplicate_elimination(vector<shared_ptr<GPUColumn>>& keys, uint64_t num_keys)
 {
   if (keys[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     for (idx_t group = 0; group < num_keys; group++) {
       bool old_unique = keys[group]->is_unique;
       if (keys[group]->data_wrapper.type.id() == GPUColumnTypeId::VARCHAR) {
@@ -45,8 +45,8 @@ void cudf_duplicate_elimination(vector<shared_ptr<GPUColumn>>& keys, uint64_t nu
     return;
   }
 
-  SIRIUS_LOG_DEBUG("CUDF Group By");
-  SIRIUS_LOG_DEBUG("Input size: {}", keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF Group By");
+  RASTERDB_LOG_DEBUG("Input size: {}", keys[0]->column_length);
   SETUP_TIMING();
   START_TIMER();
 
@@ -75,7 +75,7 @@ void cudf_duplicate_elimination(vector<shared_ptr<GPUColumn>>& keys, uint64_t nu
   }
 
   STOP_TIMER();
-  SIRIUS_LOG_DEBUG("CUDF Groupby result count: {}", keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF Groupby result count: {}", keys[0]->column_length);
 }
 
 }  // namespace duckdb

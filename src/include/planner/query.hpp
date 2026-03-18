@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,11 @@
 #pragma once
 
 #include "duckdb/common/unordered_map.hpp"
-#include "op/sirius_physical_operator.hpp"
-#include "pipeline/sirius_pipeline.hpp"
-#include "sirius_pipeline_hashmap.hpp"
+#include "op/rasterdb_physical_operator.hpp"
+#include "pipeline/rasterdb_pipeline.hpp"
+#include "rasterdb_pipeline_hashmap.hpp"
 
-namespace sirius::planner {
+namespace rasterdb::planner {
 
 /**
  * @brief Represents a query execution plan with its associated pipelines.
@@ -38,7 +38,7 @@ class query {
    * @param pipeline_hashmap The pipeline hashmap containing the ordered pipelines
    *                         required to execute this query.
    */
-  explicit query(sirius_pipeline_hashmap pipeline_hashmap);
+  explicit query(rasterdb_pipeline_hashmap pipeline_hashmap);
 
   ~query() = default;
 
@@ -54,11 +54,11 @@ class query {
    * @brief Get the scan operators in pipeline execution order.
    *
    * Returns a vector of pointers to scan operators in the order they appear
-   * in the sirius_pipeline_hashmap.
+   * in the rasterdb_pipeline_hashmap.
    *
    * @return Reference to the vector of pointers to scan operators.
    */
-  [[nodiscard]] const duckdb::vector<op::sirius_physical_operator*>& get_scan_operators() const;
+  [[nodiscard]] const duckdb::vector<op::rasterdb_physical_operator*>& get_scan_operators() const;
 
   /**
    * @brief Get the pipeline containing a specific physical operator.
@@ -67,17 +67,17 @@ class query {
    * @return Shared pointer to the pipeline containing the operator,
    *         or nullptr if not found.
    */
-  duckdb::shared_ptr<pipeline::sirius_pipeline> get_pipeline(op::sirius_physical_operator* op);
+  duckdb::shared_ptr<pipeline::rasterdb_pipeline> get_pipeline(op::rasterdb_physical_operator* op);
 
   /**
    * @brief Get all pipelines in execution order.
    *
-   * Returns the pipelines in the order they appear in the sirius_pipeline_hashmap,
+   * Returns the pipelines in the order they appear in the rasterdb_pipeline_hashmap,
    * which represents the required execution order for query completion.
    *
    * @return Reference to the vector of pipelines in execution order.
    */
-  [[nodiscard]] const duckdb::vector<duckdb::shared_ptr<pipeline::sirius_pipeline>>& get_pipelines()
+  [[nodiscard]] const duckdb::vector<duckdb::shared_ptr<pipeline::rasterdb_pipeline>>& get_pipelines()
     const;
 
   /**
@@ -85,19 +85,19 @@ class query {
    *
    * @return Reference to the pipeline hashmap.
    */
-  [[nodiscard]] sirius_pipeline_hashmap& get_pipeline_hashmap();
+  [[nodiscard]] rasterdb_pipeline_hashmap& get_pipeline_hashmap();
 
  private:
   //! Builds the internal data structures from the pipeline hashmap
   void build_indices();
 
-  sirius_pipeline_hashmap _pipeline_hashmap;
+  rasterdb_pipeline_hashmap _pipeline_hashmap;
   //! Cached scan operators in pipeline execution order
-  duckdb::vector<op::sirius_physical_operator*> _scan_operators;
+  duckdb::vector<op::rasterdb_physical_operator*> _scan_operators;
   //! Map from operator pointer to its containing pipeline
-  duckdb::unordered_map<op::sirius_physical_operator*,
-                        duckdb::shared_ptr<pipeline::sirius_pipeline>>
+  duckdb::unordered_map<op::rasterdb_physical_operator*,
+                        duckdb::shared_ptr<pipeline::rasterdb_pipeline>>
     _operator_to_pipeline;
 };
 
-}  // namespace sirius::planner
+}  // namespace rasterdb::planner

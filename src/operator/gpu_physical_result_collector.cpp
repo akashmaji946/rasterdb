@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -127,7 +127,7 @@ void GPUPhysicalMaterializedCollector::FinalMaterializeString(
     cudf::bitmask_type* out_mask = nullptr;
     cudf::bitmask_type* mask     = input_relation.columns[col]->data_wrapper.validity_mask;
 
-    SIRIUS_LOG_DEBUG("Running string late materalization with {} rows", num_rows);
+    RASTERDB_LOG_DEBUG("Running string late materalization with {} rows", num_rows);
 
     materializeString(
       data, offset, result, result_offset, row_ids, new_num_bytes, num_rows, mask, out_mask);
@@ -220,7 +220,7 @@ size_t GPUPhysicalMaterializedCollector::FinalMaterialize(GPUIntermediateRelatio
         static_cast<int>(input_relation.columns[col]->data_wrapper.type.id()));
   }
   // output_relation.length = output_relation.columns[col]->column_length;
-  // SIRIUS_LOG_DEBUG("Final materialize size {} bytes", size_bytes);
+  // RASTERDB_LOG_DEBUG("Final materialize size {} bytes", size_bytes);
   return size_bytes;
 }
 
@@ -289,7 +289,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
     if (col_type.id() != GPUColumnTypeId::VARCHAR) {
       if (types[col].InternalType() == PhysicalType::INT128) {
         if (materialized_relation.columns[col]->data_wrapper.type.id() == GPUColumnTypeId::INT64) {
-          SIRIUS_LOG_DEBUG("Converting INT64 to INT128 for column {}", col);
+          RASTERDB_LOG_DEBUG("Converting INT64 to INT128 for column {}", col);
           uint8_t* temp_int128 = gpuBufferManager->customCudaMalloc<uint8_t>(size_bytes * 2, 0, 0);
           convertInt64ToInt128(materialized_relation.columns[col]->data_wrapper.data,
                                temp_int128,
@@ -298,7 +298,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
           callCudaMemcpyDeviceToHost<uint8_t>(host_data[col], temp_int128, size_bytes * 2, 0);
         } else if (materialized_relation.columns[col]->data_wrapper.type.id() ==
                    GPUColumnTypeId::INT32) {
-          SIRIUS_LOG_DEBUG("Converting INT32 to INT128 for column {}", col);
+          RASTERDB_LOG_DEBUG("Converting INT32 to INT128 for column {}", col);
           uint8_t* temp_int128 = gpuBufferManager->customCudaMalloc<uint8_t>(size_bytes * 4, 0, 0);
           convertInt32ToInt128(materialized_relation.columns[col]->data_wrapper.data,
                                temp_int128,
@@ -307,7 +307,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
           callCudaMemcpyDeviceToHost<uint8_t>(host_data[col], temp_int128, size_bytes * 4, 0);
         } else if (materialized_relation.columns[col]->data_wrapper.type.id() ==
                    GPUColumnTypeId::INT16) {
-          SIRIUS_LOG_DEBUG("Converting INT16 to INT128 for column {}", col);
+          RASTERDB_LOG_DEBUG("Converting INT16 to INT128 for column {}", col);
           uint8_t* temp_int128 = gpuBufferManager->customCudaMalloc<uint8_t>(size_bytes * 8, 0, 0);
           convertInt16ToInt128(materialized_relation.columns[col]->data_wrapper.data,
                                temp_int128,
@@ -361,7 +361,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
       }
 
       if (materialized_relation.columns[col]->data_wrapper.validity_mask == nullptr) {
-        SIRIUS_LOG_DEBUG("Column {} has no validity mask, creating a mask with all valid values\n",
+        RASTERDB_LOG_DEBUG("Column {} has no validity mask, creating a mask with all valid values\n",
                          col);
         uint64_t padded_bytes = getMaskBytesSize(materialized_relation.columns[col]->column_length);
         // If the validity mask is null, we create a mask with all valid values
@@ -369,7 +369,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
         memset(host_mask_data[col], 0xFF, padded_bytes);  // All bits set to 1 (valid)
       } else {
         // Copy the existing validity mask
-        SIRIUS_LOG_DEBUG("Copying validity mask for column {}\n", col);
+        RASTERDB_LOG_DEBUG("Copying validity mask for column {}\n", col);
         host_mask_data[col] = gpuBufferManager->customCudaHostAlloc<uint8_t>(
           materialized_relation.columns[col]->data_wrapper.mask_bytes);
         callCudaMemcpyDeviceToHost<uint8_t>(
@@ -388,7 +388,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
       materialized_relation.columns[col] = str_column;
       is_string                          = true;
       if (str_column->data_wrapper.validity_mask == nullptr) {
-        SIRIUS_LOG_DEBUG("Column {} has no validity mask, creating a mask with all valid values\n",
+        RASTERDB_LOG_DEBUG("Column {} has no validity mask, creating a mask with all valid values\n",
                          col);
         // printf("Column %d has no validity mask, creating a mask with all valid values\n", col);
         uint64_t padded_bytes = getMaskBytesSize(str_column->column_length);
@@ -397,7 +397,7 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
         memset(host_mask_data[col], 0xFF, padded_bytes);  // All bits set to 1 (valid)
       } else {
         // Copy the existing validity mask
-        SIRIUS_LOG_DEBUG("Copying validity mask for column {}\n", col);
+        RASTERDB_LOG_DEBUG("Copying validity mask for column {}\n", col);
         host_mask_data[col] =
           gpuBufferManager->customCudaHostAlloc<uint8_t>(str_column->data_wrapper.mask_bytes);
         callCudaMemcpyDeviceToHost<uint8_t>(
@@ -418,13 +418,13 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
                                    materialize_end_time - materialize_start_time)
                                    .count() /
                                  1000.0;
-  SIRIUS_LOG_DEBUG("Result Collector CPU Materialize Time: {:.2f} ms", materialize_duration_ms);
+  RASTERDB_LOG_DEBUG("Result Collector CPU Materialize Time: {:.2f} ms", materialize_duration_ms);
 
   auto chunk_start_time = std::chrono::high_resolution_clock::now();
   size_t num_records    = materialized_relation.columns[0]->column_length;
   size_t total_vector   = (num_records + STANDARD_VECTOR_SIZE - 1) / STANDARD_VECTOR_SIZE;
   result_collection->SetCapacity(total_vector);
-  SIRIUS_LOG_DEBUG(
+  RASTERDB_LOG_DEBUG(
     "Result Collector: Num Records - {}, Total vectors - {}", num_records, total_vector);
 
   size_t remaining    = num_records;
@@ -466,12 +466,12 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
     std::chrono::duration_cast<std::chrono::microseconds>(chunk_end_time - chunk_start_time)
       .count() /
     1000.0;
-  SIRIUS_LOG_DEBUG("Result Collector Chunking Time: {:.2f} ms", chunking_duration_ms);
+  RASTERDB_LOG_DEBUG("Result Collector Chunking Time: {:.2f} ms", chunking_duration_ms);
 
   // measure time
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Result collector time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Result collector time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 #include <atomic>
 #include <memory>
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 /**
@@ -37,7 +37,7 @@ namespace pipeline {
  * tasks. Currently it just uses the std::queue, but in the future we might want to implement a
  * more sophisticated queue that supports priority scheduling, task stealing, etc..
  */
-class gpu_pipeline_queue : public sirius::parallel::itask_queue {
+class gpu_pipeline_queue : public rasterdb::parallel::itask_queue {
  public:
   /**
    * @brief Construct a new gpu_pipeline_queue object
@@ -58,9 +58,9 @@ class gpu_pipeline_queue : public sirius::parallel::itask_queue {
    * @brief Push a new task to be scheduled.
    *
    * @param task The task to be scheduled
-   * @throws sirius::runtime_error If the scheduler is not currently accepting requests
+   * @throws rasterdb::runtime_error If the scheduler is not currently accepting requests
    */
-  void push(std::unique_ptr<sirius::parallel::itask> task) override;
+  void push(std::unique_ptr<rasterdb::parallel::itask> task) override;
 
   /**
    * @brief Pull a task to execute.
@@ -69,16 +69,16 @@ class gpu_pipeline_queue : public sirius::parallel::itask_queue {
    * future we should consider this call blocking.
    *
    * @return A unique pointer to the task to execute if there is one, nullptr otherwise
-   * @throws sirius::runtime_error If the scheduler is not currently stopped and thus not returning
+   * @throws rasterdb::runtime_error If the scheduler is not currently stopped and thus not returning
    * tasks
    */
-  std::unique_ptr<sirius::parallel::itask> pull() override;
+  std::unique_ptr<rasterdb::parallel::itask> pull() override;
 
  private:
   size_t _num_threads;
-  duckdb_moodycamel::BlockingConcurrentQueue<std::unique_ptr<sirius::parallel::itask>> _task_queue;
+  duckdb_moodycamel::BlockingConcurrentQueue<std::unique_ptr<rasterdb::parallel::itask>> _task_queue;
   std::atomic<bool> _is_open{false};  ///< Whether the queue is open for pushing/pulling tasks
 };
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

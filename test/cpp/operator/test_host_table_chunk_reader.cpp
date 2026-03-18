@@ -41,7 +41,7 @@
 #include <string>
 #include <vector>
 
-using namespace sirius;
+using namespace rasterdb;
 using namespace cucascade;
 using namespace cucascade::memory;
 
@@ -59,7 +59,7 @@ std::filesystem::path get_test_config_path()
   return std::filesystem::path(__FILE__).parent_path() / "result.cfg";
 }
 
-memory_space* get_default_gpu_space(duckdb::shared_ptr<duckdb::SiriusContext>& sirius_ctx)
+memory_space* get_default_gpu_space(duckdb::shared_ptr<duckdb::RasterDBContext>& sirius_ctx)
 {
   auto& manager = sirius_ctx->get_memory_manager();
   auto* space   = manager.get_memory_space(Tier::GPU, 0);
@@ -210,7 +210,7 @@ size_t estimate_packed_data_bytes(cudf::table_view const& view)
 }
 
 host_data_representation const& convert_to_host_table(
-  duckdb::shared_ptr<duckdb::SiriusContext> sirius_ctx,
+  duckdb::shared_ptr<duckdb::RasterDBContext> sirius_ctx,
   std::shared_ptr<data_batch> const& batch,
   rmm::cuda_stream_view stream)
 {
@@ -221,7 +221,7 @@ host_data_representation const& convert_to_host_table(
 
   auto reservation =
     manager.request_reservation(any_memory_space_in_tier{Tier::HOST},
-                                estimate_packed_data_bytes(sirius::get_cudf_table_view(*batch)));
+                                estimate_packed_data_bytes(rasterdb::get_cudf_table_view(*batch)));
 
   if (!reservation) { throw std::runtime_error("Failed to reserve host memory for test"); }
 
@@ -229,7 +229,7 @@ host_data_representation const& convert_to_host_table(
 
   if (!host_space) { throw std::runtime_error("Invalid host memory space in test"); }
 
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
   batch->convert_to<host_data_representation>(registry, host_space, stream);
 
   data = batch->get_data();
@@ -243,8 +243,8 @@ TEST_CASE("host_table_chunk_reader produces correct DataChunks",
           "[operator][result_collector][host_table_chunk_reader][shared_context]")
 {
   constexpr size_t num_rows = STANDARD_VECTOR_SIZE + 5;
-  auto [db_owner, con]      = sirius::make_test_db_and_connection();
-  auto sirius_ctx           = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]      = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx           = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto* gpu_space           = get_default_gpu_space(sirius_ctx);
   REQUIRE(gpu_space != nullptr);
   rmm::cuda_stream stream;  // Must outlive data_batch for cudaMemcpyBatchAsync
@@ -255,9 +255,9 @@ TEST_CASE("host_table_chunk_reader produces correct DataChunks",
   std::vector<std::optional<std::pair<int, int>>> ranges{
     std::make_pair(0, 100), std::make_pair(1000, 2000), std::make_pair(0, 100)};
 
-  auto table = sirius::create_cudf_table_with_random_data(
+  auto table = rasterdb::create_cudf_table_with_random_data(
     num_rows, column_types, ranges, stream, gpu_space->get_default_allocator(), true);
-  auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
 
   expected_table_data expected;
   std::vector<std::string> expected_strings;
@@ -267,7 +267,7 @@ TEST_CASE("host_table_chunk_reader produces correct DataChunks",
     REQUIRE(lock_result.success);
     auto handle = std::move(lock_result.handle);
 
-    auto const gpu_view = sirius::get_cudf_table_view(*batch);
+    auto const gpu_view = rasterdb::get_cudf_table_view(*batch);
     expected            = extract_expected_data(gpu_view);
     expected_strings    = build_expected_strings(expected);
   }
@@ -277,7 +277,7 @@ TEST_CASE("host_table_chunk_reader produces correct DataChunks",
   duckdb::vector<duckdb::LogicalType> types{duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
                                             duckdb::LogicalType(duckdb::LogicalTypeId::BIGINT),
                                             duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
-  sirius::op::result::host_table_chunk_reader reader(*con.context, host_table, types);
+  rasterdb::op::result::host_table_chunk_reader reader(*con.context, host_table, types);
 
   size_t row_base       = 0;
   auto const num_chunks = reader.calculate_num_chunks();
@@ -317,8 +317,8 @@ TEST_CASE("host_table_chunk_reader handles null masks",
           "[operator][result_collector][host_table_chunk_reader][shared_context]")
 {
   constexpr size_t num_rows = STANDARD_VECTOR_SIZE * 2 + 3;
-  auto [db_owner, con]      = sirius::make_test_db_and_connection();
-  auto sirius_ctx           = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]      = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx           = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto* gpu_space           = get_default_gpu_space(sirius_ctx);
   REQUIRE(gpu_space != nullptr);
   rmm::cuda_stream stream;  // Must outlive data_batch for cudaMemcpyBatchAsync
@@ -331,7 +331,7 @@ TEST_CASE("host_table_chunk_reader handles null masks",
     std::make_pair(0, 100), std::make_pair(1000, 2000), std::make_pair(0, 100)};
 
   auto table =
-    sirius::create_cudf_table_with_random_data(num_rows, column_types, ranges, stream, mr, true);
+    rasterdb::create_cudf_table_with_random_data(num_rows, column_types, ranges, stream, mr, true);
   auto int64_nulls = build_null_indices(
     num_rows,
     {0, 5, STANDARD_VECTOR_SIZE - 1, STANDARD_VECTOR_SIZE, STANDARD_VECTOR_SIZE + 1, num_rows - 1});
@@ -340,7 +340,7 @@ TEST_CASE("host_table_chunk_reader handles null masks",
   apply_null_mask(table->get_column(1), int64_nulls, stream, mr);
   apply_null_mask(table->get_column(2), string_nulls, stream, mr);
 
-  auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
 
   expected_table_data expected;
   std::vector<std::string> expected_strings;
@@ -352,7 +352,7 @@ TEST_CASE("host_table_chunk_reader handles null masks",
     REQUIRE(lock_result.success);
     auto handle = std::move(lock_result.handle);
 
-    auto const gpu_view   = sirius::get_cudf_table_view(*batch);
+    auto const gpu_view   = rasterdb::get_cudf_table_view(*batch);
     expected              = extract_expected_data(gpu_view);
     expected_strings      = build_expected_strings(expected);
     expected_int64_valid  = extract_validity(gpu_view.column(1));
@@ -364,7 +364,7 @@ TEST_CASE("host_table_chunk_reader handles null masks",
   duckdb::vector<duckdb::LogicalType> types{duckdb::LogicalType(duckdb::LogicalTypeId::INTEGER),
                                             duckdb::LogicalType(duckdb::LogicalTypeId::BIGINT),
                                             duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR)};
-  sirius::op::result::host_table_chunk_reader reader(*con.context, host_table, types);
+  rasterdb::op::result::host_table_chunk_reader reader(*con.context, host_table, types);
 
   size_t row_base       = 0;
   auto const num_chunks = reader.calculate_num_chunks();

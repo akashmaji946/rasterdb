@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@
 #include "exec/kiosk.hpp"
 #include "exec/thread_pool.hpp"
 #include "helper/helper.hpp"
-#include "memory/sirius_memory_reservation_manager.hpp"
-#include "op/sirius_physical_operator.hpp"
+#include "memory/rasterdb_memory_reservation_manager.hpp"
+#include "op/rasterdb_physical_operator.hpp"
 #include "parallel/task_executor.hpp"
-#include "pipeline/sirius_pipeline.hpp"
-#include "sirius_pipeline_hashmap.hpp"
+#include "pipeline/rasterdb_pipeline.hpp"
+#include "rasterdb_pipeline_hashmap.hpp"
 
 #include <blockingconcurrentqueue.h>
 #include <cucascade/data/data_batch.hpp>
@@ -41,21 +41,21 @@
 #include <thread>
 #include <variant>
 
-namespace sirius::pipeline {
+namespace rasterdb::pipeline {
 class pipeline_executor;
-class sirius_pipeline_task_global_state;
-}  // namespace sirius::pipeline
+class rasterdb_pipeline_task_global_state;
+}  // namespace rasterdb::pipeline
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 class duckdb_scan_task_global_state;
 class parquet_scan_task_global_state;
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan
 
-namespace sirius::planner {
+namespace rasterdb::planner {
 class query;
-}  // namespace sirius::planner
+}  // namespace rasterdb::planner
 
-namespace sirius::creator {
+namespace rasterdb::creator {
 
 /**
  * @brief Manages the creation and scheduling of GPU pipeline tasks.
@@ -73,7 +73,7 @@ namespace sirius::creator {
  */
 
 struct task_creation_request {
-  op::sirius_physical_operator* node;
+  op::rasterdb_physical_operator* node;
 };
 
 class task_creator {
@@ -85,7 +85,7 @@ class task_creator {
    * @param mem_res_mgr Reference to the memory reservation manager.
    */
   task_creator(exec::thread_pool_config config,
-               sirius::memory::sirius_memory_reservation_manager& mem_res_mgr);
+               rasterdb::memory::rasterdb_memory_reservation_manager& mem_res_mgr);
 
   /**
    * @brief Destructor that ensures the thread pool is stopped.
@@ -102,10 +102,10 @@ class task_creator {
   void set_client_context(::duckdb::ClientContext& client_context);
 
   /// \brief sets pipeline executor reference
-  void set_pipeline_executor(sirius::pipeline::pipeline_executor& pipeline_executor);
+  void set_pipeline_executor(rasterdb::pipeline::pipeline_executor& pipeline_executor);
 
   /// \brief prepare global states for all pipelines in the query
-  void prepare_for_query(const sirius::planner::query& query);
+  void prepare_for_query(const rasterdb::planner::query& query);
 
   /// \brief clean-up query bound resources and prepare the task creator for next query
   void reset();
@@ -144,7 +144,7 @@ class task_creator {
    *
    * @param info The task creation info to schedule.
    */
-  virtual void schedule(op::sirius_physical_operator* request);
+  virtual void schedule(op::rasterdb_physical_operator* request);
 
   /**
    * @brief Get the next task id.
@@ -163,7 +163,7 @@ class task_creator {
    * @return The operator node that should be scheduled next, or nullptr if no task should be
    * scheduled.
    */
-  op::sirius_physical_operator* get_operator_for_next_task(op::sirius_physical_operator* node);
+  op::rasterdb_physical_operator* get_operator_for_next_task(op::rasterdb_physical_operator* node);
 
   /**
    * @brief Manager loop to consume task creation requests and dispatch to the thread pool.
@@ -179,8 +179,8 @@ class task_creator {
   std::unique_ptr<exec::thread_pool> _thread_pool;
   std::thread _manager_thread;
   ::duckdb::ClientContext* _client_context;
-  sirius::pipeline::pipeline_executor* _pipeline_executor{nullptr};
-  sirius::memory::sirius_memory_reservation_manager& _mem_res_mgr;
+  rasterdb::pipeline::pipeline_executor* _pipeline_executor{nullptr};
+  rasterdb::memory::rasterdb_memory_reservation_manager& _mem_res_mgr;
   std::atomic<uint64_t> _task_id{0};
 
   // Queue for creating tasks based on operators. The operator is the starting point to start
@@ -193,11 +193,11 @@ class task_creator {
     _scan_operator_global_state_map;
   std::map<size_t, std::shared_ptr<op::scan::parquet_scan_task_global_state>>
     _parquet_scan_operator_global_state_map;
-  std::map<size_t, std::shared_ptr<pipeline::sirius_pipeline_task_global_state>>
+  std::map<size_t, std::shared_ptr<pipeline::rasterdb_pipeline_task_global_state>>
     _gpu_operator_global_state_map;
   std::unique_ptr<duckdb::ThreadContext> _thread_context;
   std::unique_ptr<duckdb::ExecutionContext> _execution_context;
   std::mutex _global_state_mutex;  // Protect concurrent access to the map
 };
 
-}  // namespace sirius::creator
+}  // namespace rasterdb::creator

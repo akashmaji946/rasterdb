@@ -25,13 +25,13 @@
 #include <op/sirius_physical_hash_join.hpp>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 
 //===----------------------------------------------------------------------===//
 // Fixture helpers
@@ -91,7 +91,7 @@ mark_join_fixture create_mark_join()
 
 memory_space* get_shared_mem_space()
 {
-  static auto manager = sirius::test::operator_utils::initialize_memory_manager();
+  static auto manager = rasterdb::test::operator_utils::initialize_memory_manager();
   return manager->get_memory_space(Tier::GPU, 0);
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -181,7 +181,7 @@ idx_t GPUPipeline::UpdateBatchIndex(idx_t old_index, idx_t new_index)
 //===--------------------------------------------------------------------===//
 void GPUPipelineBuildState::SetPipelineSource(GPUPipeline& pipeline, GPUPhysicalOperator& op)
 {
-  SIRIUS_LOG_DEBUG("Setting pipeline source {}", PhysicalOperatorToString(op.type));
+  RASTERDB_LOG_DEBUG("Setting pipeline source {}", PhysicalOperatorToString(op.type));
   pipeline.source = &op;
 }
 
@@ -191,7 +191,7 @@ void GPUPipelineBuildState::SetPipelineSink(GPUPipeline& pipeline,
 {
   pipeline.sink = op;
   if (pipeline.sink)
-    SIRIUS_LOG_DEBUG("Setting pipeline sink {}", PhysicalOperatorToString((*pipeline.sink).type));
+    RASTERDB_LOG_DEBUG("Setting pipeline sink {}", PhysicalOperatorToString((*pipeline.sink).type));
   // set the base batch index of this pipeline based on how many other pipelines have this node as
   // their sink
   pipeline.base_batch_index = BATCH_INCREMENT * sink_pipeline_count;
@@ -199,7 +199,7 @@ void GPUPipelineBuildState::SetPipelineSink(GPUPipeline& pipeline,
 
 void GPUPipelineBuildState::AddPipelineOperator(GPUPipeline& pipeline, GPUPhysicalOperator& op)
 {
-  SIRIUS_LOG_DEBUG("Adding operator to pipeline {}", PhysicalOperatorToString(op.type));
+  RASTERDB_LOG_DEBUG("Adding operator to pipeline {}", PhysicalOperatorToString(op.type));
   pipeline.operators.push_back(op);
 }
 

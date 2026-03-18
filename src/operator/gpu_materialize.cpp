@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -153,7 +153,7 @@ void HandleMaterializeRowIDs(GPUIntermediateRelation& input_relation,
   vector<uint64_t*> new_row_ids;
   vector<uint64_t*> prev_row_ids;
   for (int i = 0; i < input_relation.columns.size(); i++) {
-    SIRIUS_LOG_DEBUG(
+    RASTERDB_LOG_DEBUG(
       "Materializing column idx {} in input relation to idx {} in output relation", i, i);
     if (count == 0) {
       output_relation.columns[i] =
@@ -290,7 +290,7 @@ void HandleMaterializeRowIDsLHS(GPUIntermediateRelation& input_relation,
   vector<uint64_t*> prev_row_ids;
   for (idx_t i = 0; i < lhs_output_columns.size(); i++) {
     const auto lhs_col = lhs_output_columns[i];
-    SIRIUS_LOG_DEBUG(
+    RASTERDB_LOG_DEBUG(
       "Materializing column idx {} from input relation to idx {} in output relation", lhs_col, i);
     if (count == 0) {
       output_relation.columns[i] =

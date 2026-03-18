@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@
 #include <utility>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 
 /**
  * @brief Class for translating (a subset of) DuckDB expressions and join conditions into cuDF ASTs
@@ -218,4 +218,4 @@ class gpu_expression_translator {
                     ///< translator (e.g. in constructing literals).
 };
 
-}  // namespace sirius
+}  // namespace rasterdb

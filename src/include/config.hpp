@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ namespace duckdb {
 
 // If you are adding a new field to this struct, then you also need to make the following changes:
 // * Specify the default value in config.cpp
-// * Add a configuration field associated with Sirius (see InitialGPUConfigs in sirius_extension.cpp
+// * Add a configuration field associated with Sirius (see InitialGPUConfigs in rasterdb_extension.cpp
 // for examples)
 struct Config {
   // For gpu buffer manager
@@ -58,7 +58,7 @@ struct Config {
 
 }  // namespace duckdb
 
-namespace sirius {
+namespace rasterdb {
 
 struct Config {
   static const uint64_t NUM_GPU_EXECUTOR_THREADS         = 2;
@@ -68,4 +68,4 @@ struct Config {
   static const uint64_t NUM_GPU                          = 1;
 };
 
-}  // namespace sirius
+}  // namespace rasterdb

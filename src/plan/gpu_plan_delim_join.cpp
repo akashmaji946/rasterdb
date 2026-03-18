@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,14 +29,14 @@ static void GatherDelimScans(GPUPhysicalOperator& op,
                              idx_t delim_index)
 {
   if (op.type == PhysicalOperatorType::DELIM_SCAN) {
-    SIRIUS_LOG_DEBUG("Found a delim scan");
-    SIRIUS_LOG_DEBUG("op type: {}", PhysicalOperatorToString(op.type));
+    RASTERDB_LOG_DEBUG("Found a delim scan");
+    RASTERDB_LOG_DEBUG("op type: {}", PhysicalOperatorToString(op.type));
     auto& scan       = op.Cast<GPUPhysicalColumnDataScan>();
     scan.delim_index = optional_idx(delim_index);
     if (scan.delim_index.IsValid()) {
-      SIRIUS_LOG_DEBUG("Scan delim index: {}", scan.delim_index.GetIndex());
+      RASTERDB_LOG_DEBUG("Scan delim index: {}", scan.delim_index.GetIndex());
     } else {
-      SIRIUS_LOG_DEBUG("Scan delim index invalid");
+      RASTERDB_LOG_DEBUG("Scan delim index invalid");
     }
     delim_scans.push_back(op);
   }

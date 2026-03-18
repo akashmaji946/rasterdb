@@ -63,7 +63,7 @@ constexpr auto kHoldDuration           = std::chrono::milliseconds(800);
 //------------------------------------------------------------------------------
 // Test global state — shared across all tasks
 //------------------------------------------------------------------------------
-class oom_test_global_state : public sirius::pipeline::sirius_pipeline_task_global_state {
+class oom_test_global_state : public rasterdb::pipeline::sirius_pipeline_task_global_state {
  public:
   oom_test_global_state() : sirius_pipeline_task_global_state(nullptr) {}
 
@@ -85,10 +85,10 @@ class oom_test_global_state : public sirius::pipeline::sirius_pipeline_task_glob
 // Test task — allocates kAllocationBytes of GPU memory, holds it, then frees.
 // If OOM occurs, throws oom_reschedule_exception for the executor to handle.
 //------------------------------------------------------------------------------
-class oom_test_task : public sirius::pipeline::gpu_pipeline_task {
+class oom_test_task : public rasterdb::pipeline::gpu_pipeline_task {
  public:
   oom_test_task(uint64_t task_id,
-                std::unique_ptr<sirius::pipeline::gpu_pipeline_task_local_state> local_state,
+                std::unique_ptr<rasterdb::pipeline::gpu_pipeline_task_local_state> local_state,
                 std::shared_ptr<oom_test_global_state> global_state)
     : gpu_pipeline_task(task_id,
                         std::vector<cucascade::shared_data_repository*>{},
@@ -100,7 +100,7 @@ class oom_test_task : public sirius::pipeline::gpu_pipeline_task {
   void execute(rmm::cuda_stream_view stream) override
   {
     auto& global = _global_state->cast<oom_test_global_state>();
-    auto& local  = _local_state->cast<sirius::pipeline::gpu_pipeline_task_local_state>();
+    auto& local  = _local_state->cast<rasterdb::pipeline::gpu_pipeline_task_local_state>();
 
     auto reservation = local.release_reservation();
     if (!reservation) {
@@ -139,7 +139,7 @@ class oom_test_task : public sirius::pipeline::gpu_pipeline_task {
       global.oom_count.fetch_add(1, std::memory_order_relaxed);
       // Throw oom_reschedule_exception so the executor reschedules this task.
       // Pass the input data through so the rescheduled task can use it.
-      throw sirius::pipeline::oom_reschedule_exception(
+      throw rasterdb::pipeline::oom_reschedule_exception(
         std::move(local._input_data), 0, "OOM in test task allocation");
     }
 
@@ -150,23 +150,23 @@ class oom_test_task : public sirius::pipeline::gpu_pipeline_task {
     global.completed_count.fetch_add(1, std::memory_order_relaxed);
   }
 
-  std::unique_ptr<sirius::op::operator_data> compute_task(rmm::cuda_stream_view) override
+  std::unique_ptr<rasterdb::op::operator_data> compute_task(rmm::cuda_stream_view) override
   {
     return nullptr;
   }
 
-  void publish_output(sirius::op::operator_data&, rmm::cuda_stream_view) override {}
+  void publish_output(rasterdb::op::operator_data&, rmm::cuda_stream_view) override {}
 
   std::size_t get_estimated_reservation_size() const override { return kReservationSize; }
 
-  std::vector<sirius::op::sirius_physical_operator*> get_output_consumers() override { return {}; }
+  std::vector<rasterdb::op::sirius_physical_operator*> get_output_consumers() override { return {}; }
 
   std::unique_ptr<gpu_pipeline_task> create_rescheduled_task(
     uint64_t task_id,
-    std::unique_ptr<sirius::pipeline::sirius_pipeline_task_local_state> local_state) override
+    std::unique_ptr<rasterdb::pipeline::sirius_pipeline_task_local_state> local_state) override
   {
-    auto typed_local = std::unique_ptr<sirius::pipeline::gpu_pipeline_task_local_state>(
-      static_cast<sirius::pipeline::gpu_pipeline_task_local_state*>(local_state.release()));
+    auto typed_local = std::unique_ptr<rasterdb::pipeline::gpu_pipeline_task_local_state>(
+      static_cast<rasterdb::pipeline::gpu_pipeline_task_local_state*>(local_state.release()));
     return std::make_unique<oom_test_task>(
       task_id,
       std::move(typed_local),
@@ -181,7 +181,7 @@ TEST_CASE("GPU pipeline executor reschedules tasks on OOM", "[gpu_pipeline_execu
   //--------------------------------------------------------------------------
   // 1. Set up a constrained GPU memory environment (900 MB software limit)
   //--------------------------------------------------------------------------
-  std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> manager;
+  std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> manager;
   try {
     cucascade::memory::reservation_manager_configurator builder;
     builder.set_number_of_gpus(1)
@@ -193,7 +193,7 @@ TEST_CASE("GPU pipeline executor reschedules tasks on OOM", "[gpu_pipeline_execu
       .set_reservation_fraction_per_host(0.75);
     auto space_configs = builder.build();
     manager =
-      std::make_unique<sirius::memory::sirius_memory_reservation_manager>(std::move(space_configs));
+      std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(std::move(space_configs));
   } catch (const std::exception& e) {
     WARN("Skipping OOM reschedule test due to insufficient GPUs: " << e.what());
     return;
@@ -208,14 +208,14 @@ TEST_CASE("GPU pipeline executor reschedules tasks on OOM", "[gpu_pipeline_execu
   //--------------------------------------------------------------------------
   // 2. Create the executor with 3 worker threads so all tasks run concurrently
   //--------------------------------------------------------------------------
-  sirius::exec::channel<std::unique_ptr<sirius::pipeline::task_request>> request_channel;
+  rasterdb::exec::channel<std::unique_ptr<rasterdb::pipeline::task_request>> request_channel;
   auto request_publisher = request_channel.make_publisher();
 
-  sirius::exec::thread_pool_config config;
+  rasterdb::exec::thread_pool_config config;
   config.num_threads        = 3;
   config.thread_name_prefix = "oom-test";
 
-  sirius::pipeline::gpu_pipeline_executor executor(config, mem_space, request_publisher);
+  rasterdb::pipeline::gpu_pipeline_executor executor(config, mem_space, request_publisher);
   auto global_state = std::make_shared<oom_test_global_state>();
 
   //--------------------------------------------------------------------------
@@ -232,8 +232,8 @@ TEST_CASE("GPU pipeline executor reschedules tasks on OOM", "[gpu_pipeline_execu
       auto request = request_channel.get();
       if (!request) { break; }
 
-      auto local_state = std::make_unique<sirius::pipeline::gpu_pipeline_task_local_state>(
-        std::make_unique<sirius::op::operator_data>(
+      auto local_state = std::make_unique<rasterdb::pipeline::gpu_pipeline_task_local_state>(
+        std::make_unique<rasterdb::op::operator_data>(
           std::vector<std::shared_ptr<cucascade::data_batch>>{}));
       auto task = std::make_unique<oom_test_task>(
         static_cast<uint64_t>(dispatched.load(std::memory_order_relaxed)),

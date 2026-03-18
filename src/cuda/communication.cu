@@ -90,15 +90,15 @@ void callCudaMemcpyHostToDevice(T* dest, T* src, size_t size, int gpu)
 {
   CHECK_ERROR();
   if (size == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
-  SIRIUS_LOG_DEBUG("Send data to GPU");
+  RASTERDB_LOG_DEBUG("Send data to GPU");
   cudaSetDevice(gpu);
   gpuErrchk(cudaMemcpy(dest, src, size * sizeof(T), cudaMemcpyHostToDevice));
   gpuErrchk(cudaDeviceSynchronize());
   cudaSetDevice(0);
-  SIRIUS_LOG_DEBUG("Done sending data to GPU");
+  RASTERDB_LOG_DEBUG("Done sending data to GPU");
 }
 
 template <typename T>
@@ -106,21 +106,21 @@ void callCudaMemcpyDeviceToHost(T* dest, T* src, size_t size, int gpu)
 {
   CHECK_ERROR();
   if (size == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Send data to CPU");
+  RASTERDB_LOG_DEBUG("Send data to CPU");
   cudaSetDevice(gpu);
-  SIRIUS_LOG_DEBUG("Transferred bytes: {}", size * sizeof(T));
-  if (src == nullptr) { SIRIUS_LOG_DEBUG("src is null"); }
-  if (dest == nullptr) { SIRIUS_LOG_DEBUG("dest is null"); }
+  RASTERDB_LOG_DEBUG("Transferred bytes: {}", size * sizeof(T));
+  if (src == nullptr) { RASTERDB_LOG_DEBUG("src is null"); }
+  if (dest == nullptr) { RASTERDB_LOG_DEBUG("dest is null"); }
   gpuErrchk(cudaMemcpy(dest, src, size * sizeof(T), cudaMemcpyDeviceToHost));
   CHECK_ERROR();
   gpuErrchk(cudaDeviceSynchronize());
   cudaSetDevice(0);
-  SIRIUS_LOG_DEBUG("Done sending data to CPU");
+  RASTERDB_LOG_DEBUG("Done sending data to CPU");
   STOP_TIMER();
 }
 
@@ -129,21 +129,21 @@ void callCudaMemcpyDeviceToDevice(T* dest, T* src, size_t size, int gpu)
 {
   CHECK_ERROR();
   if (size == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Send data within GPU");
+  RASTERDB_LOG_DEBUG("Send data within GPU");
   cudaSetDevice(gpu);
-  SIRIUS_LOG_DEBUG("Transferred bytes: {}", size * sizeof(T));
-  if (src == nullptr) { SIRIUS_LOG_DEBUG("src is null"); }
-  if (dest == nullptr) { SIRIUS_LOG_DEBUG("dest is null"); }
+  RASTERDB_LOG_DEBUG("Transferred bytes: {}", size * sizeof(T));
+  if (src == nullptr) { RASTERDB_LOG_DEBUG("src is null"); }
+  if (dest == nullptr) { RASTERDB_LOG_DEBUG("dest is null"); }
   gpuErrchk(cudaMemcpy(dest, src, size * sizeof(T), cudaMemcpyDeviceToDevice));
   CHECK_ERROR();
   gpuErrchk(cudaDeviceSynchronize());
   cudaSetDevice(0);
-  SIRIUS_LOG_DEBUG("Done sending data to GPU");
+  RASTERDB_LOG_DEBUG("Done sending data to GPU");
   STOP_TIMER();
 }
 
@@ -151,18 +151,18 @@ void callCudaMemset(void* ptr, int value, size_t size, int gpu)
 {
   CHECK_ERROR();
   if (size == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Setting memory on GPU");
+  RASTERDB_LOG_DEBUG("Setting memory on GPU");
   cudaSetDevice(gpu);
   gpuErrchk(cudaMemset(ptr, value, size));
   CHECK_ERROR();
   gpuErrchk(cudaDeviceSynchronize());
   cudaSetDevice(0);
-  SIRIUS_LOG_DEBUG("Done setting memory on GPU");
+  RASTERDB_LOG_DEBUG("Done setting memory on GPU");
   STOP_TIMER();
 }
 

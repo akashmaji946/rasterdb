@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,9 @@
 
 #include "planner/query.hpp"
 
-namespace sirius::planner {
+namespace rasterdb::planner {
 
-query::query(sirius_pipeline_hashmap pipeline_hashmap)
+query::query(rasterdb_pipeline_hashmap pipeline_hashmap)
   : _pipeline_hashmap(std::move(pipeline_hashmap))
 {
   build_indices();
@@ -37,8 +37,8 @@ void query::build_indices()
       _operator_to_pipeline[source.get()] = pipeline;
 
       // If it's a table scan, add to scan operators vector
-      if (source->type == op::SiriusPhysicalOperatorType::DUCKDB_SCAN ||
-          source->type == op::SiriusPhysicalOperatorType::PARQUET_SCAN) {
+      if (source->type == op::RasterDBPhysicalOperatorType::DUCKDB_SCAN ||
+          source->type == op::RasterDBPhysicalOperatorType::PARQUET_SCAN) {
         _scan_operators.push_back(source.get());
       }
     }
@@ -53,23 +53,23 @@ void query::build_indices()
   }
 }
 
-const duckdb::vector<op::sirius_physical_operator*>& query::get_scan_operators() const
+const duckdb::vector<op::rasterdb_physical_operator*>& query::get_scan_operators() const
 {
   return _scan_operators;
 }
 
-duckdb::shared_ptr<pipeline::sirius_pipeline> query::get_pipeline(op::sirius_physical_operator* op)
+duckdb::shared_ptr<pipeline::rasterdb_pipeline> query::get_pipeline(op::rasterdb_physical_operator* op)
 {
   auto it = _operator_to_pipeline.find(op);
   if (it != _operator_to_pipeline.end()) { return it->second; }
   return nullptr;
 }
 
-const duckdb::vector<duckdb::shared_ptr<pipeline::sirius_pipeline>>& query::get_pipelines() const
+const duckdb::vector<duckdb::shared_ptr<pipeline::rasterdb_pipeline>>& query::get_pipelines() const
 {
   return _pipeline_hashmap._vec;
 }
 
-sirius_pipeline_hashmap& query::get_pipeline_hashmap() { return _pipeline_hashmap; }
+rasterdb_pipeline_hashmap& query::get_pipeline_hashmap() { return _pipeline_hashmap; }
 
-}  // namespace sirius::planner
+}  // namespace rasterdb::planner

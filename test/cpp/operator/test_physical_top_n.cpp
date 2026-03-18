@@ -22,11 +22,11 @@
 #include <op/sirius_physical_top_n.hpp>
 #include <op/sirius_physical_top_n_merge.hpp>
 
-using namespace sirius::op;
-using sirius::op::operator_data;
+using namespace rasterdb::op;
+using rasterdb::op::operator_data;
 using namespace cucascade;
 using namespace cucascade::memory;
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 
 // Helper functions - defined outside anonymous namespace to avoid ODR issues with
 // LogicalType::BIGINT
@@ -66,7 +66,7 @@ static std::shared_ptr<data_batch> make_range_batch(memory_space& space,
 
 TEST_CASE("sirius_physical_top_n single-key uses top_k per batch", "[physical_top_n]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -104,7 +104,7 @@ TEST_CASE("sirius_physical_top_n single-key uses top_k per batch", "[physical_to
 
 TEST_CASE("sirius_physical_top_n multi-key falls back to sort_by_key", "[physical_top_n]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

@@ -53,10 +53,10 @@
 #include <utility>
 #include <vector>
 
-using namespace sirius;
+using namespace rasterdb;
 using namespace cucascade;
 using namespace cucascade::memory;
-using sirius::op::operator_data;
+using rasterdb::op::operator_data;
 
 namespace {
 
@@ -72,7 +72,7 @@ std::filesystem::path get_test_config_path()
   return std::filesystem::path(__FILE__).parent_path() / "result.cfg";
 }
 
-memory_space* get_default_gpu_space(duckdb::shared_ptr<duckdb::SiriusContext>& sirius_ctx)
+memory_space* get_default_gpu_space(duckdb::shared_ptr<duckdb::RasterDBContext>& sirius_ctx)
 {
   auto& manager = sirius_ctx->get_memory_manager();
   auto* space   = manager.get_memory_space(Tier::GPU, 0);
@@ -176,14 +176,14 @@ size_t estimate_packed_data_bytes(cudf::table_view const& view)
   return total_bytes;
 }
 
-void convert_batch_to_host(duckdb::shared_ptr<duckdb::SiriusContext> sirius_ctx,
+void convert_batch_to_host(duckdb::shared_ptr<duckdb::RasterDBContext> sirius_ctx,
                            std::shared_ptr<data_batch> const& batch,
                            rmm::cuda_stream_view stream)
 {
   auto* data = batch->get_data();
   if (!data) { throw std::runtime_error("data_batch has no data representation"); }
 
-  auto const view       = sirius::get_cudf_table_view(*batch);
+  auto const view       = rasterdb::get_cudf_table_view(*batch);
   auto const data_bytes = estimate_packed_data_bytes(view);
 
   auto& manager = sirius_ctx->get_memory_manager();
@@ -194,7 +194,7 @@ void convert_batch_to_host(duckdb::shared_ptr<duckdb::SiriusContext> sirius_ctx,
   auto* host_space = manager.get_memory_space(reservation->tier(), reservation->device_id());
   if (!host_space) { throw std::runtime_error("Invalid host memory space for test"); }
 
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
   batch->convert_to<cucascade::host_data_representation>(registry, host_space, stream);
 }
 
@@ -204,8 +204,8 @@ TEST_CASE("sirius_physical_materialized_collector sink with host input",
           "[operator][physical_result_collector][shared_context]")
 {
   constexpr size_t num_rows = STANDARD_VECTOR_SIZE + 7;
-  auto [db_owner, con]      = sirius::make_test_db_and_connection();
-  auto sirius_ctx           = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]      = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx           = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto* gpu_space           = get_default_gpu_space(sirius_ctx);
   REQUIRE(gpu_space != nullptr);
   rmm::cuda_stream stream;  // Must outlive data_batch for cudaMemcpyBatchAsync
@@ -216,9 +216,9 @@ TEST_CASE("sirius_physical_materialized_collector sink with host input",
   std::vector<std::optional<std::pair<int, int>>> ranges{
     std::make_pair(0, 100), std::make_pair(1000, 2000), std::make_pair(0, 100)};
 
-  auto table = sirius::create_cudf_table_with_random_data(
+  auto table = rasterdb::create_cudf_table_with_random_data(
     num_rows, column_types, ranges, stream, gpu_space->get_default_allocator(), true);
-  auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
 
   expected_table_data expected;
   std::vector<std::string> expected_strings;
@@ -228,7 +228,7 @@ TEST_CASE("sirius_physical_materialized_collector sink with host input",
     REQUIRE(lock_result.success);
     auto handle = std::move(lock_result.handle);
 
-    auto const gpu_view = sirius::get_cudf_table_view(*batch);
+    auto const gpu_view = rasterdb::get_cudf_table_view(*batch);
     expected            = extract_expected_data(gpu_view);
     expected_strings    = build_expected_strings(expected);
   }
@@ -242,10 +242,10 @@ TEST_CASE("sirius_physical_materialized_collector sink with host input",
     duckdb::make_shared_ptr<duckdb::PreparedStatementData>(duckdb::StatementType::SELECT_STATEMENT);
   prepared->types = types;
   prepared->names = {"c0", "c1", "c2"};
-  auto plan       = duckdb::make_uniq<sirius::op::sirius_physical_dummy_scan>(types, 0);
+  auto plan       = duckdb::make_uniq<rasterdb::op::sirius_physical_dummy_scan>(types, 0);
   auto sirius_prepared =
     duckdb::make_shared_ptr<sirius_prepared_statement_data>(prepared, std::move(plan));
-  sirius::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
+  rasterdb::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
 
   collector.sink(operator_data({batch}), cudf::get_default_stream());
   duckdb::GlobalSinkState sink_state;
@@ -276,8 +276,8 @@ TEST_CASE("sirius_physical_materialized_collector sink converts GPU input",
           "[operator][physical_result_collector][shared_context]")
 {
   constexpr size_t num_rows = STANDARD_VECTOR_SIZE * 2 + 3;
-  auto [db_owner, con]      = sirius::make_test_db_and_connection();
-  auto sirius_ctx           = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]      = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx           = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto* gpu_space           = get_default_gpu_space(sirius_ctx);
   REQUIRE(gpu_space != nullptr);
   rmm::cuda_stream stream;  // Must outlive data_batch for cudaMemcpyBatchAsync
@@ -287,9 +287,9 @@ TEST_CASE("sirius_physical_materialized_collector sink converts GPU input",
   std::vector<std::optional<std::pair<int, int>>> ranges{std::make_pair(0, 100),
                                                          std::make_pair(1000, 2000)};
 
-  auto table = sirius::create_cudf_table_with_random_data(
+  auto table = rasterdb::create_cudf_table_with_random_data(
     num_rows, column_types, ranges, stream, gpu_space->get_default_allocator(), false);
-  auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
 
   expected_table_data expected;
   {
@@ -298,7 +298,7 @@ TEST_CASE("sirius_physical_materialized_collector sink converts GPU input",
     REQUIRE(lock_result.success);
     auto handle = std::move(lock_result.handle);
 
-    auto const gpu_view = sirius::get_cudf_table_view(*batch);
+    auto const gpu_view = rasterdb::get_cudf_table_view(*batch);
     expected            = extract_expected_data(gpu_view);
   }
 
@@ -308,10 +308,10 @@ TEST_CASE("sirius_physical_materialized_collector sink converts GPU input",
     duckdb::make_shared_ptr<duckdb::PreparedStatementData>(duckdb::StatementType::SELECT_STATEMENT);
   prepared->types = types;
   prepared->names = {"c0", "c1"};
-  auto plan       = duckdb::make_uniq<sirius::op::sirius_physical_dummy_scan>(types, 0);
+  auto plan       = duckdb::make_uniq<rasterdb::op::sirius_physical_dummy_scan>(types, 0);
   auto sirius_prepared =
     duckdb::make_shared_ptr<sirius_prepared_statement_data>(prepared, std::move(plan));
-  sirius::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
+  rasterdb::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
 
   collector.sink(operator_data({batch}), stream);
   duckdb::GlobalSinkState sink_state;
@@ -340,8 +340,8 @@ TEST_CASE("sirius_physical_materialized_collector sink supports concurrent appen
 {
   constexpr int num_threads       = 4;
   constexpr size_t rows_per_batch = STANDARD_VECTOR_SIZE * 3 + 13;
-  auto [db_owner, con]            = sirius::make_test_db_and_connection();
-  auto sirius_ctx                 = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]            = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx                 = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto* gpu_space                 = get_default_gpu_space(sirius_ctx);
   REQUIRE(gpu_space != nullptr);
   rmm::cuda_stream stream;  // Must outlive data_batch for cudaMemcpyBatchAsync
@@ -390,7 +390,7 @@ TEST_CASE("sirius_physical_materialized_collector sink supports concurrent appen
     cols.push_back(std::move(col1));
 
     auto table = std::make_unique<cudf::table>(std::move(cols));
-    auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+    auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
     convert_batch_to_host(sirius_ctx, batch, stream);
     batches.emplace_back(std::move(batch));
   }
@@ -401,10 +401,10 @@ TEST_CASE("sirius_physical_materialized_collector sink supports concurrent appen
     duckdb::make_shared_ptr<duckdb::PreparedStatementData>(duckdb::StatementType::SELECT_STATEMENT);
   prepared->types = types;
   prepared->names = {"c0", "c1"};
-  auto plan       = duckdb::make_uniq<sirius::op::sirius_physical_dummy_scan>(types, 0);
+  auto plan       = duckdb::make_uniq<rasterdb::op::sirius_physical_dummy_scan>(types, 0);
   auto sirius_prepared =
     duckdb::make_shared_ptr<sirius_prepared_statement_data>(prepared, std::move(plan));
-  sirius::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
+  rasterdb::op::sirius_physical_materialized_collector collector(*sirius_prepared, *con.context);
 
   std::atomic<int> ready{0};
   std::atomic<bool> go{false};

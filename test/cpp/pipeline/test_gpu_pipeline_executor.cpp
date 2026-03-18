@@ -41,7 +41,7 @@ constexpr std::size_t kReservationBytes = 20 * 1024 * 1024;
 constexpr std::size_t kAllocationBytes  = 10 * 1024 * 1024;
 
 class test_gpu_pipeline_task_global_state
-  : public sirius::pipeline::sirius_pipeline_task_global_state {
+  : public rasterdb::pipeline::sirius_pipeline_task_global_state {
  public:
   test_gpu_pipeline_task_global_state() : sirius_pipeline_task_global_state(nullptr) {}
 
@@ -62,12 +62,12 @@ class test_gpu_pipeline_task_global_state
   std::vector<std::size_t> memory_consumption;
 };
 
-class test_gpu_pipeline_task_local_state : public sirius::pipeline::gpu_pipeline_task_local_state {
+class test_gpu_pipeline_task_local_state : public rasterdb::pipeline::gpu_pipeline_task_local_state {
  public:
-  using sirius::pipeline::gpu_pipeline_task_local_state::gpu_pipeline_task_local_state;
+  using rasterdb::pipeline::gpu_pipeline_task_local_state::gpu_pipeline_task_local_state;
 };
 
-class sirius_pipeline_task : public sirius::pipeline::gpu_pipeline_task {
+class sirius_pipeline_task : public rasterdb::pipeline::gpu_pipeline_task {
  public:
   sirius_pipeline_task(uint64_t task_id,
                        std::unique_ptr<test_gpu_pipeline_task_local_state> local_state,
@@ -130,7 +130,7 @@ class sirius_pipeline_task : public sirius::pipeline::gpu_pipeline_task {
 
   std::size_t get_estimated_reservation_size() const override { return kReservationBytes; }
 
-  std::vector<sirius::op::sirius_physical_operator*> get_output_consumers() override { return {}; }
+  std::vector<rasterdb::op::sirius_physical_operator*> get_output_consumers() override { return {}; }
 };
 
 }  // namespace
@@ -138,7 +138,7 @@ class sirius_pipeline_task : public sirius::pipeline::gpu_pipeline_task {
 TEST_CASE("GPU pipeline executor uses task requests to schedule GPU tasks",
           "[gpu_pipeline_executor]")
 {
-  std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> manager;
+  std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> manager;
   try {
     cucascade::memory::reservation_manager_configurator builder;
     builder.set_number_of_gpus(1)
@@ -150,7 +150,7 @@ TEST_CASE("GPU pipeline executor uses task requests to schedule GPU tasks",
       .set_reservation_fraction_per_host(0.75);
     auto space_configs = builder.build();
     manager =
-      std::make_unique<sirius::memory::sirius_memory_reservation_manager>(std::move(space_configs));
+      std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(std::move(space_configs));
   } catch (const std::exception& e) {
     WARN("Skipping test due to insufficient GPUs: " << e.what());
     return;
@@ -162,14 +162,14 @@ TEST_CASE("GPU pipeline executor uses task requests to schedule GPU tasks",
     return;
   }
 
-  sirius::exec::channel<std::unique_ptr<sirius::pipeline::task_request>> request_channel;
+  rasterdb::exec::channel<std::unique_ptr<rasterdb::pipeline::task_request>> request_channel;
   auto request_publisher = request_channel.make_publisher();
 
-  sirius::exec::thread_pool_config config;
+  rasterdb::exec::thread_pool_config config;
   config.num_threads        = 2;
   config.thread_name_prefix = "gpu-pipeline-test";
 
-  sirius::pipeline::gpu_pipeline_executor executor(config, mem_space, request_publisher);
+  rasterdb::pipeline::gpu_pipeline_executor executor(config, mem_space, request_publisher);
   auto global_state = std::make_shared<test_gpu_pipeline_task_global_state>();
 
   const int num_tasks = 10;
@@ -183,7 +183,7 @@ TEST_CASE("GPU pipeline executor uses task requests to schedule GPU tasks",
       if (!request) { break; }
 
       auto local_state = std::make_unique<test_gpu_pipeline_task_local_state>(
-        std::make_unique<sirius::op::operator_data>(
+        std::make_unique<rasterdb::op::operator_data>(
           std::vector<std::shared_ptr<cucascade::data_batch>>{}));
       auto task = std::make_unique<sirius_pipeline_task>(
         static_cast<uint64_t>(dispatched.load(std::memory_order_relaxed)),

@@ -64,21 +64,21 @@ T* callCudaMalloc(size_t size, int gpu)
   T* ptr;
   cudaError_t err = cudaSetDevice(gpu);
   if (err != cudaSuccess) {
-    SIRIUS_LOG_ERROR("CUDA initialization error for gpu {}: {}", gpu, cudaGetErrorString(err));
+    RASTERDB_LOG_ERROR("CUDA initialization error for gpu {}: {}", gpu, cudaGetErrorString(err));
   }
   int nDevices;
   err = cudaGetDeviceCount(&nDevices);
   if (err != cudaSuccess) {
-    SIRIUS_LOG_ERROR("CUDA error for gpu {}: {}", gpu, cudaGetErrorString(err));
+    RASTERDB_LOG_ERROR("CUDA error for gpu {}: {}", gpu, cudaGetErrorString(err));
   }
 
   int driverVersion = 0;
   err               = cudaDriverGetVersion(&driverVersion);
-  if (err != cudaSuccess) { SIRIUS_LOG_ERROR("CUDA driver error: {}", cudaGetErrorString(err)); }
-  SIRIUS_LOG_DEBUG("Number of devices: {}", nDevices);
+  if (err != cudaSuccess) { RASTERDB_LOG_ERROR("CUDA driver error: {}", cudaGetErrorString(err)); }
+  RASTERDB_LOG_DEBUG("Number of devices: {}", nDevices);
   CHECK_ERROR();
 
-  SIRIUS_LOG_DEBUG("Allocating {} bytes on GPU {}", size * sizeof(T), gpu);
+  RASTERDB_LOG_DEBUG("Allocating {} bytes on GPU {}", size * sizeof(T), gpu);
   gpuErrchk(cudaMalloc((void**)&ptr, size * sizeof(T)));
   cudaDeviceSynchronize();
   cudaSetDevice(0);
@@ -89,7 +89,7 @@ template <typename T>
 T* callCudaHostAlloc(size_t size, bool return_dev_ptr)
 {
   T* ptr;
-  SIRIUS_LOG_DEBUG("Allocating {} bytes on CPU", size * sizeof(T));
+  RASTERDB_LOG_DEBUG("Allocating {} bytes on CPU", size * sizeof(T));
   gpuErrchk(cudaHostAlloc((void**)&ptr, size * sizeof(T), cudaHostAllocMapped));
   if (return_dev_ptr) {
     T* return_ptr;

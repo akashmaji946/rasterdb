@@ -48,14 +48,14 @@
 #include <vector>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
-using sirius::test::vector_to_cudf_column;
+using namespace rasterdb::test::operator_utils;
+using rasterdb::test::vector_to_cudf_column;
 
 // ---------------------------------------------------------------------------
 // Helper: build input table [key_col (int32), val_col (T)]
@@ -115,7 +115,7 @@ TEST_CASE("count distinct: single batch, basic correctness",
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<int32_t>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -129,12 +129,12 @@ TEST_CASE("count distinct: single batch, basic correctness",
   std::vector<int32_t> values = {10, 20, 10, 30, 20, 40, 50, 40, 60, 60, 60};
 
   auto input_batch =
-    sirius::make_data_batch(make_count_distinct_input<ValTraits>(keys, values, stream, mr), *space);
+    rasterdb::make_data_batch(make_count_distinct_input<ValTraits>(keys, values, stream, mr), *space);
 
   auto expected_table = make_count_distinct_expected({0, 1, 2}, {3, 2, 1}, stream, mr);
 
   // Local operator
-  auto agg1 = sirius::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
+  auto agg1 = rasterdb::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
   sirius_physical_grouped_aggregate local_op(context,
                                              std::move(agg1.output_types),
                                              std::move(agg1.aggregates),
@@ -151,7 +151,7 @@ TEST_CASE("count distinct: single batch, basic correctness",
     operator_data(std::vector<std::shared_ptr<data_batch>>{local_out}), default_stream());
   REQUIRE(final_out->get_data_batches().size() == 1);
 
-  bool match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool match = rasterdb::test::expect_data_batch_equivalent_to_table(
     final_out->get_data_batches()[0], expected_table->view(), true /*sort*/);
   REQUIRE(match);
 }
@@ -175,7 +175,7 @@ TEMPLATE_TEST_CASE("count distinct: multiple batches, randomly striped",
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -208,7 +208,7 @@ TEMPLATE_TEST_CASE("count distinct: multiple batches, randomly striped",
   auto full_table = make_count_distinct_input<ValTraits>(keys, values, stream, mr);
 
   // Split into 5 random, non-contiguous partitions
-  auto splits = sirius::test::make_random_striped_split(std::move(full_table), 5, stream, mr);
+  auto splits = rasterdb::test::make_random_striped_split(std::move(full_table), 5, stream, mr);
 
   // Build expected: all groups have count_distinct == 3
   std::vector<int32_t> exp_keys(num_groups);
@@ -217,7 +217,7 @@ TEMPLATE_TEST_CASE("count distinct: multiple batches, randomly striped",
   auto expected_table = make_count_distinct_expected(exp_keys, exp_counts, stream, mr);
 
   // Local operator
-  auto agg1 = sirius::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
+  auto agg1 = rasterdb::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
   sirius_physical_grouped_aggregate local_op(context,
                                              std::move(agg1.output_types),
                                              std::move(agg1.aggregates),
@@ -230,7 +230,7 @@ TEMPLATE_TEST_CASE("count distinct: multiple batches, randomly striped",
   // Run local aggregate on each split
   std::vector<std::shared_ptr<data_batch>> local_results;
   for (auto& split : splits) {
-    auto input_batch = sirius::make_data_batch(std::move(split), *space);
+    auto input_batch = rasterdb::make_data_batch(std::move(split), *space);
     local_results.push_back(run_local(local_op, input_batch));
   }
 
@@ -238,7 +238,7 @@ TEMPLATE_TEST_CASE("count distinct: multiple batches, randomly striped",
   auto final_out = merge_op.execute(operator_data(local_results), default_stream());
   REQUIRE(final_out->get_data_batches().size() == 1);
 
-  bool match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool match = rasterdb::test::expect_data_batch_equivalent_to_table(
     final_out->get_data_batches()[0], expected_table->view(), true /*sort*/);
   REQUIRE(match);
 }
@@ -267,7 +267,7 @@ TEST_CASE("count distinct: cross-batch duplicate deduplication within a partitio
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<int32_t>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -278,21 +278,21 @@ TEST_CASE("count distinct: cross-batch duplicate deduplication within a partitio
   auto& context = *con.context;
 
   // Batch 1
-  auto batch1 = sirius::make_data_batch(
+  auto batch1 = rasterdb::make_data_batch(
     make_count_distinct_input<ValTraits>({0, 0, 1, 2}, {10, 20, 40, 60}, stream, mr), *space);
 
   // Batch 2 — intentional cross-batch dups: (0,10), (1,40), (2,60)
-  auto batch2 = sirius::make_data_batch(
+  auto batch2 = rasterdb::make_data_batch(
     make_count_distinct_input<ValTraits>({0, 1, 1, 2}, {10, 50, 40, 60}, stream, mr), *space);
 
   // Batch 3 — further cross-batch dups: (1,40), (2,60)
-  auto batch3 = sirius::make_data_batch(
+  auto batch3 = rasterdb::make_data_batch(
     make_count_distinct_input<ValTraits>({0, 1, 2}, {30, 40, 60}, stream, mr), *space);
 
   auto expected_table = make_count_distinct_expected({0, 1, 2}, {3, 2, 1}, stream, mr);
 
   // Local operator (shared across all batches)
-  auto agg1 = sirius::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
+  auto agg1 = rasterdb::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
   sirius_physical_grouped_aggregate local_op(context,
                                              std::move(agg1.output_types),
                                              std::move(agg1.aggregates),
@@ -309,7 +309,7 @@ TEST_CASE("count distinct: cross-batch duplicate deduplication within a partitio
   auto final_out = merge_op.execute(operator_data(local_results), default_stream());
   REQUIRE(final_out->get_data_batches().size() == 1);
 
-  bool match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool match = rasterdb::test::expect_data_batch_equivalent_to_table(
     final_out->get_data_batches()[0], expected_table->view(), true /*sort*/);
   REQUIRE(match);
 }
@@ -333,7 +333,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<int32_t>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -346,11 +346,11 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
   // Batch 1 and Batch 2 together form the full dataset:
   // key=0: [10,10,20] ++ [20,30]  → {10,20,30} → count_distinct=3, min=10, count=5
   // key=1: [40,40]    ++ [50]     → {40,50}    → count_distinct=2, min=40, count=3
-  auto batch1 = sirius::make_data_batch(
+  auto batch1 = rasterdb::make_data_batch(
     make_count_distinct_input<ValTraits>({0, 0, 0, 1, 1}, {10, 10, 20, 40, 40}, stream, mr),
     *space);
 
-  auto batch2 = sirius::make_data_batch(
+  auto batch2 = rasterdb::make_data_batch(
     make_count_distinct_input<ValTraits>({0, 0, 1}, {20, 30, 50}, stream, mr), *space);
 
   // Build expected: [key(int32) | count_distinct(int64) | min(int32) | count(int64)]
@@ -379,7 +379,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
   {
     duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> ch;
     ch.push_back(duckdb::make_uniq<duckdb::BoundReferenceExpression>(ValTraits::logical_type(), 1));
-    auto fn = sirius::test::MakeDummyAggregate(
+    auto fn = rasterdb::test::MakeDummyAggregate(
       "count", {ValTraits::logical_type()}, duckdb::LogicalType::BIGINT);
     aggregates.push_back(duckdb::make_uniq<duckdb::BoundAggregateExpression>(
       fn, std::move(ch), nullptr, nullptr, duckdb::AggregateType::DISTINCT));
@@ -388,7 +388,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
   {
     duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> ch;
     ch.push_back(duckdb::make_uniq<duckdb::BoundReferenceExpression>(ValTraits::logical_type(), 1));
-    auto fn = sirius::test::MakeDummyAggregate(
+    auto fn = rasterdb::test::MakeDummyAggregate(
       "min", {ValTraits::logical_type()}, ValTraits::logical_type());
     aggregates.push_back(duckdb::make_uniq<duckdb::BoundAggregateExpression>(
       fn, std::move(ch), nullptr, nullptr, duckdb::AggregateType::NON_DISTINCT));
@@ -397,7 +397,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
   {
     duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> ch;
     ch.push_back(duckdb::make_uniq<duckdb::BoundReferenceExpression>(ValTraits::logical_type(), 1));
-    auto fn = sirius::test::MakeDummyAggregate(
+    auto fn = rasterdb::test::MakeDummyAggregate(
       "count", {ValTraits::logical_type()}, ValTraits::logical_type());
     aggregates.push_back(duckdb::make_uniq<duckdb::BoundAggregateExpression>(
       fn, std::move(ch), nullptr, nullptr, duckdb::AggregateType::NON_DISTINCT));
@@ -432,7 +432,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
     operator_data(std::vector<std::shared_ptr<data_batch>>{local1, local2}), default_stream());
   REQUIRE(final_out->get_data_batches().size() == 1);
 
-  bool match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool match = rasterdb::test::expect_data_batch_equivalent_to_table(
     final_out->get_data_batches()[0], expected_table->view(), true /*sort*/);
   REQUIRE(match);
 }
@@ -440,7 +440,7 @@ TEST_CASE("count distinct: mixed with regular aggregations, multiple batches",
 // ===========================================================================
 // TEST 5: Multiple partitions - separate execute() calls per partition
 //
-// In the real pipeline, sirius_physical_partition distributes rows by group-key
+// In the real pipeline, rasterdb_physical_partition distributes rows by group-key
 // hash so each group belongs to exactly ONE partition.  The merge operator's
 // execute() is then called once per partition with ALL of that partition's local
 // aggregate outputs.  This test replicates that structure:
@@ -461,7 +461,7 @@ TEST_CASE("count distinct: multiple partitions with multiple batches per partiti
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<int32_t>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -489,14 +489,14 @@ TEST_CASE("count distinct: multiple partitions with multiple batches per partiti
 
   // Partition 0: keys 0, 1, 2
   auto table0  = make_partition_table({0, 1, 2});
-  auto splits0 = sirius::test::make_random_striped_split(std::move(table0), 3, stream, mr);
+  auto splits0 = rasterdb::test::make_random_striped_split(std::move(table0), 3, stream, mr);
 
   // Partition 1: keys 3, 4
   auto table1  = make_partition_table({3, 4});
-  auto splits1 = sirius::test::make_random_striped_split(std::move(table1), 3, stream, mr);
+  auto splits1 = rasterdb::test::make_random_striped_split(std::move(table1), 3, stream, mr);
 
   // Shared local + merge operators
-  auto agg_spec = sirius::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
+  auto agg_spec = rasterdb::test::create_count_distinct_expressions<KeyTraits, ValTraits>({0}, 1);
   sirius_physical_grouped_aggregate local_op(context,
                                              std::move(agg_spec.output_types),
                                              std::move(agg_spec.aggregates),
@@ -507,25 +507,25 @@ TEST_CASE("count distinct: multiple partitions with multiple batches per partiti
   // --- Process partition 0 (separate execute() call, as the real pipeline does) ---
   std::vector<std::shared_ptr<data_batch>> local_p0;
   for (auto& split : splits0) {
-    local_p0.push_back(run_local(local_op, sirius::make_data_batch(std::move(split), *space)));
+    local_p0.push_back(run_local(local_op, rasterdb::make_data_batch(std::move(split), *space)));
   }
   auto result_p0 = merge_op.execute(operator_data(local_p0), default_stream());
   REQUIRE(result_p0->get_data_batches().size() == 1);
 
   auto expected_p0 = make_count_distinct_expected({0, 1, 2}, {4, 4, 4}, stream, mr);
-  REQUIRE(sirius::test::expect_data_batch_equivalent_to_table(
+  REQUIRE(rasterdb::test::expect_data_batch_equivalent_to_table(
     result_p0->get_data_batches()[0], expected_p0->view(), true /*sort*/));
 
   // --- Process partition 1 (separate execute() call) ---
   std::vector<std::shared_ptr<data_batch>> local_p1;
   for (auto& split : splits1) {
-    local_p1.push_back(run_local(local_op, sirius::make_data_batch(std::move(split), *space)));
+    local_p1.push_back(run_local(local_op, rasterdb::make_data_batch(std::move(split), *space)));
   }
   auto result_p1 = merge_op.execute(operator_data(local_p1), default_stream());
   REQUIRE(result_p1->get_data_batches().size() == 1);
 
   auto expected_p1 = make_count_distinct_expected({3, 4}, {4, 4}, stream, mr);
-  REQUIRE(sirius::test::expect_data_batch_equivalent_to_table(
+  REQUIRE(rasterdb::test::expect_data_batch_equivalent_to_table(
     result_p1->get_data_batches()[0], expected_p1->view(), true /*sort*/));
 }
 
@@ -549,7 +549,7 @@ TEST_CASE("count distinct: multi-column struct expression",
   using KeyTraits = gpu_type_traits<int32_t>;
   using ValTraits = gpu_type_traits<int32_t>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(Tier::GPU, 0);
   REQUIRE(space != nullptr);
   auto mr     = get_resource_ref(*space);
@@ -572,17 +572,17 @@ TEST_CASE("count distinct: multi-column struct expression",
 
   // Batch 1
   auto batch1 =
-    sirius::make_data_batch(make_3col_input({0, 0, 1, 1}, {10, 10, 30, 30}, {1, 1, 3, 3}), *space);
+    rasterdb::make_data_batch(make_3col_input({0, 0, 1, 1}, {10, 10, 30, 30}, {1, 1, 3, 3}), *space);
 
   // Batch 2 — introduces new combos and cross-batch dups
   auto batch2 =
-    sirius::make_data_batch(make_3col_input({0, 0, 0, 1}, {10, 10, 20, 40}, {2, 1, 1, 3}), *space);
+    rasterdb::make_data_batch(make_3col_input({0, 0, 0, 1}, {10, 10, 20, 40}, {2, 1, 1, 3}), *space);
 
   // Expected: key=0 → 3 (combos: (10,1),(10,2),(20,1)), key=1 → 2 (combos: (30,3),(40,3))
   auto expected_table = make_count_distinct_expected({0, 1}, {3, 2}, stream, mr);
 
   // Build COUNT(DISTINCT (col1, col2)) grouped by col0
-  auto agg_spec = sirius::test::create_count_distinct_struct_col_expressions(
+  auto agg_spec = rasterdb::test::create_count_distinct_struct_col_expressions(
     {{duckdb::LogicalType::INTEGER, 0}},  // GROUP BY col0
     {{duckdb::LogicalType::INTEGER, 1},   // struct_pack(col1, col2)
      {duckdb::LogicalType::INTEGER, 2}});
@@ -601,6 +601,6 @@ TEST_CASE("count distinct: multi-column struct expression",
     operator_data(std::vector<std::shared_ptr<data_batch>>{local1, local2}), default_stream());
   REQUIRE(final_out->get_data_batches().size() == 1);
 
-  REQUIRE(sirius::test::expect_data_batch_equivalent_to_table(
+  REQUIRE(rasterdb::test::expect_data_batch_equivalent_to_table(
     final_out->get_data_batches()[0], expected_table->view(), true /*sort*/));
 }

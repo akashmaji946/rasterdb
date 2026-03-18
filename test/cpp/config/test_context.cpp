@@ -15,7 +15,7 @@
  */
 
 #include "catch.hpp"
-#include "sirius_context.hpp"
+#include "rasterdb_context.hpp"
 
 #include <cucascade/memory/common.hpp>
 #include <duckdb.hpp>
@@ -55,7 +55,7 @@ TEST_CASE("Sirius configuration loading from file with configurator",
   // get client context from con
   auto& client_ctx = *con.context;
   // get registered sirius context
-  auto sirius_ctx = client_ctx.registered_state->Get<duckdb::SiriusContext>("sirius_state");
+  auto sirius_ctx = client_ctx.registered_state->Get<duckdb::RasterDBContext>("sirius_state");
 
   REQUIRE(sirius_ctx != nullptr);
 
@@ -80,7 +80,7 @@ TEST_CASE("Sirius configuration loading from file with spaces",
   duckdb::Connection con(db);
 
   auto& client_ctx = *con.context;
-  auto sirius_ctx  = client_ctx.registered_state->Get<duckdb::SiriusContext>("sirius_state");
+  auto sirius_ctx  = client_ctx.registered_state->Get<duckdb::RasterDBContext>("sirius_state");
 
   REQUIRE(sirius_ctx != nullptr);
 

@@ -60,11 +60,11 @@ using namespace cucascade::memory;
  * Only initializes once per test run.
  *
  */
-inline std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> initialize_memory_manager(
+inline std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> initialize_memory_manager(
   std::size_t n_gpus = 1)
 {
   // Reset converter registry to avoid cross-test leakage
-  sirius::converter_registry::reset_for_testing();
+  rasterdb::converter_registry::reset_for_testing();
 
   reservation_manager_configurator builder;
 
@@ -82,14 +82,14 @@ inline std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> initia
 
   auto space_configs = builder.build();
   auto manager =
-    std::make_unique<sirius::memory::sirius_memory_reservation_manager>(std::move(space_configs));
+    std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(std::move(space_configs));
 
   // Initialize converters used by data representations
-  sirius::converter_registry::initialize();
+  rasterdb::converter_registry::initialize();
   return manager;
 }
 
-namespace sirius::scan_test_utils {
+namespace rasterdb::scan_test_utils {
 
 inline std::filesystem::path get_test_config_path()
 {
@@ -194,7 +194,7 @@ inline void validate_scanned_batches(
 {
   auto* gpu_space = get_space(mem_mgr, cucascade::memory::Tier::GPU);
   REQUIRE(gpu_space != nullptr);
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
 
   if (expected_rows > 0) { REQUIRE_FALSE(batches.empty()); }
 
@@ -204,7 +204,7 @@ inline void validate_scanned_batches(
   for (auto const& batch : batches) {
     REQUIRE(batch != nullptr);
     batch->convert_to<cucascade::gpu_table_representation>(registry, gpu_space, stream);
-    auto table_view = sirius::get_cudf_table_view(*batch);
+    auto table_view = rasterdb::get_cudf_table_view(*batch);
 
     REQUIRE(table_view.num_columns() == 4);
     REQUIRE(table_view.column(0).type().id() == cudf::type_id::INT32);
@@ -280,7 +280,7 @@ inline void validate_projected_id_price_batches(
 {
   auto* gpu_space = get_space(mem_mgr, cucascade::memory::Tier::GPU);
   REQUIRE(gpu_space != nullptr);
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
 
   if (expected_rows > 0) { REQUIRE_FALSE(batches.empty()); }
 
@@ -290,7 +290,7 @@ inline void validate_projected_id_price_batches(
   for (auto const& batch : batches) {
     REQUIRE(batch != nullptr);
     batch->convert_to<cucascade::gpu_table_representation>(registry, gpu_space, stream);
-    auto table_view = sirius::get_cudf_table_view(*batch);
+    auto table_view = rasterdb::get_cudf_table_view(*batch);
 
     REQUIRE(table_view.num_columns() == 2);
     REQUIRE(table_view.column(0).type().id() == cudf::type_id::INT32);
@@ -329,4 +329,4 @@ inline void validate_projected_id_price_batches(
   }
 }
 
-}  // namespace sirius::scan_test_utils
+}  // namespace rasterdb::scan_test_utils

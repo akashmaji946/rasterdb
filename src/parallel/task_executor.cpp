@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 
 #include <cudf/utilities/default_stream.hpp>
 
-namespace sirius {
+namespace rasterdb {
 namespace parallel {
 
 void itask_executor::start()
@@ -81,4 +81,4 @@ void itask_executor::worker_loop(int worker_id)
 }
 
 }  // namespace parallel
-}  // namespace sirius
+}  // namespace rasterdb

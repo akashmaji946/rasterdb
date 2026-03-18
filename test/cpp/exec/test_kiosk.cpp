@@ -22,7 +22,7 @@
 #include <thread>
 #include <vector>
 
-using namespace sirius::exec;
+using namespace rasterdb::exec;
 using namespace std::chrono_literals;
 
 // =============================================================================

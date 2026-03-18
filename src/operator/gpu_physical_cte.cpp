@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@ SinkResultType GPUPhysicalCTE::Sink(GPUIntermediateRelation& input_relation) con
   // lstate.lhs_data.Append(lstate.append_state, chunk);
 
   // return SinkResultType::NEED_MORE_INPUT;
-  SIRIUS_LOG_DEBUG("Sinking data into CTE");
+  RASTERDB_LOG_DEBUG("Sinking data into CTE");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   for (int col_idx = 0; col_idx < input_relation.columns.size(); col_idx++) {
     // working_table_gpu->columns[col_idx] =

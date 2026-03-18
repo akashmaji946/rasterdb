@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ namespace duckdb {
 
 SourceResultType GPUPhysicalDummyScan::GetData(GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("Reading data from dummy scan");
+  RASTERDB_LOG_DEBUG("Reading data from dummy scan");
   for (int col_idx = 0; col_idx < output_relation.columns.size(); col_idx++) {
     output_relation.columns[col_idx] = nullptr;
   }

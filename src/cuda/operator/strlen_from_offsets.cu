@@ -23,7 +23,7 @@
 #include <cstdint>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 static constexpr int BLOCK_SIZE = 256;
 
@@ -69,5 +69,5 @@ std::unique_ptr<cudf::column> StrlenFromOffsets(const uint64_t* offsets,
   return std::make_unique<cudf::column>(std::move(output), rmm::device_buffer(0, stream, mr), 0);
 }
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

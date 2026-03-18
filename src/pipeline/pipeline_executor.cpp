@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 #include "creator/task_creator.hpp"
 #include "exec/config.hpp"
 #include "log/logging.hpp"
-#include "memory/sirius_memory_reservation_manager.hpp"
+#include "memory/rasterdb_memory_reservation_manager.hpp"
 #include "op/scan/duckdb_scan_executor.hpp"
 #include "op/scan/duckdb_scan_task.hpp"
 #include "op/scan/parquet_scan_task.hpp"
@@ -29,17 +29,17 @@
 #include <cucascade/memory/memory_reservation.hpp>
 #include <cucascade/memory/memory_space.hpp>
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 pipeline_executor::pipeline_executor(const exec::thread_pool_config& gpu_executor_config,
                                      const exec::thread_pool_config& scan_executor_config,
-                                     sirius::memory::sirius_memory_reservation_manager& mem_mgr,
+                                     rasterdb::memory::rasterdb_memory_reservation_manager& mem_mgr,
                                      const cucascade::memory::system_topology_info* sys_topology)
 {
   // Create the scan executor with memory manager for host allocations
   // Pass a publisher so it can submit task requests without depending on pipeline_executor
-  _scan_executor = std::make_unique<sirius::op::scan::duckdb_scan_executor>(
+  _scan_executor = std::make_unique<rasterdb::op::scan::duckdb_scan_executor>(
     scan_executor_config, &mem_mgr, _task_request_channel.make_publisher());
 
   auto gpu_spaces = mem_mgr.get_memory_spaces_for_tier(cucascade::memory::Tier::GPU);
@@ -67,11 +67,11 @@ pipeline_executor::pipeline_executor(const exec::thread_pool_config& gpu_executo
 
 pipeline_executor::~pipeline_executor() { stop(); }
 
-void pipeline_executor::schedule(std::unique_ptr<sirius::parallel::itask> task)
+void pipeline_executor::schedule(std::unique_ptr<rasterdb::parallel::itask> task)
 {
-  if (task->is<sirius::op::scan::duckdb_scan_task>()) {
+  if (task->is<rasterdb::op::scan::duckdb_scan_task>()) {
     _scan_executor->schedule(std::move(task));
-  } else if (task->is<sirius::op::scan::parquet_scan_task>()) {
+  } else if (task->is<rasterdb::op::scan::parquet_scan_task>()) {
     _scan_executor->schedule(std::move(task));
   } else {
     _task_queue.push(std::move(task));
@@ -102,7 +102,7 @@ void pipeline_executor::stop()
   if (_management_thread.joinable()) { _management_thread.join(); }
 }
 
-void pipeline_executor::set_task_creator(sirius::creator::task_creator& task_creator)
+void pipeline_executor::set_task_creator(rasterdb::creator::task_creator& task_creator)
 {
   _task_creator = &task_creator;
 
@@ -112,19 +112,19 @@ void pipeline_executor::set_task_creator(sirius::creator::task_creator& task_cre
   }
 }
 
-[[nodiscard]] sirius::op::scan::duckdb_scan_executor&
+[[nodiscard]] rasterdb::op::scan::duckdb_scan_executor&
 pipeline_executor::get_scan_executor() noexcept
 {
   return *_scan_executor;
 }
 
-[[nodiscard]] const sirius::op::scan::duckdb_scan_executor& pipeline_executor::get_scan_executor()
+[[nodiscard]] const rasterdb::op::scan::duckdb_scan_executor& pipeline_executor::get_scan_executor()
   const noexcept
 {
   return *_scan_executor;
 }
 
-void pipeline_executor::set_scan_caching_config(sirius::op::scan::cache_level level)
+void pipeline_executor::set_scan_caching_config(rasterdb::op::scan::cache_level level)
 {
   _scan_executor->set_scan_caching_enabled(level);
 }
@@ -177,13 +177,13 @@ void pipeline_executor::management_eventloop()
   while (_running.load()) {
     auto request = _task_request_channel.get();
     if (request == nullptr) {
-      SIRIUS_LOG_INFO("Task request channel closed, exiting management event loop.");
+      RASTERDB_LOG_INFO("Task request channel closed, exiting management event loop.");
       break;
     }
     if (!request->is_scan) {
       auto task = _task_queue.pop();
       if (task == nullptr) {
-        SIRIUS_LOG_INFO("Task queue closed, exiting management event loop.");
+        RASTERDB_LOG_INFO("Task queue closed, exiting management event loop.");
         break;
       }
       _gpu_executors.at(request->device_id)->schedule(std::move(task));
@@ -206,4 +206,4 @@ void pipeline_executor::schedule_next_scan_tasks()
 }
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

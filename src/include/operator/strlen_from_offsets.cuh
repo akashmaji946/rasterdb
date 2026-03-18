@@ -26,7 +26,7 @@
 #include <memory>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 // Returns an INT32 column where result[i] = length in bytes of the string at position i.
 // Computed via offset arithmetic: result[i] = offsets[i+1] - offsets[i].
@@ -37,5 +37,5 @@ std::unique_ptr<cudf::column> StrlenFromOffsets(const uint64_t* offsets,
                                                 rmm::cuda_stream_view stream,
                                                 rmm::device_async_resource_ref mr);
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

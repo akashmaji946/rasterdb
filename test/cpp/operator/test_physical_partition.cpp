@@ -21,22 +21,22 @@
 #include "utils/data_utils.hpp"
 
 #include <catch.hpp>
-#include <op/sirius_physical_partition.hpp>
+#include <op/rasterdb_physical_partition.hpp>
 
 #include <numeric>
 
 using namespace duckdb;
-using namespace sirius::op;
-using sirius::op::operator_data;
+using namespace rasterdb::op;
+using rasterdb::op::operator_data;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 }  // namespace
 
-TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single partition key",
+TEMPLATE_TEST_CASE("rasterdb_physical_partition partitions data_batch with single partition key",
                    "[physical_partition]",
                    int32_t,
                    int64_t,
@@ -51,7 +51,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -91,9 +91,9 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
   auto mr     = get_resource_ref(*space);
 
   // Column 0: aggregation key
-  auto col0 = sirius::test::vector_to_cudf_column<Traits>(values, stream, mr);
+  auto col0 = rasterdb::test::vector_to_cudf_column<Traits>(values, stream, mr);
   // Column 1: aggregation value (all ones)
-  auto col1 = sirius::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(
+  auto col1 = rasterdb::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(
     std::vector<int32_t>(num_values, 1), stream, mr);
 
   std::vector<std::unique_ptr<cudf::column>> columns;
@@ -103,7 +103,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
 
   auto gpu_repr = std::make_unique<gpu_table_representation>(std::move(table), *space);
   auto input_batch =
-    std::make_shared<data_batch>(::sirius::get_next_batch_id(), std::move(gpu_repr));
+    std::make_shared<data_batch>(::rasterdb::get_next_batch_id(), std::move(gpu_repr));
 
   // this cardinality is not real, we are setting here this large in order to force more partitions
   // to be made
@@ -115,7 +115,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
   auto& context = *con.context;
 
   // Create aggregate expressions: GROUP BY column 0, SUM(column 1)
-  auto agg_result = sirius::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
     {0},      // group_indexes: GROUP BY column 0
     {"sum"},  // aggregations: SUM
     {1}       // agg_indexes: SUM(column 1)
@@ -131,7 +131,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
                                                              std::move(agg_result.groups),
                                                              estimated_cardinality);
 
-  sirius_physical_partition partitioner(std::move(partitioner_types),
+  rasterdb_physical_partition partitioner(std::move(partitioner_types),
                                         estimated_cardinality,
                                         &grouped_aggregator,
                                         false,
@@ -159,7 +159,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with single 
   REQUIRE(total_num_rows == num_values);
 }
 
-TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two partition keys",
+TEMPLATE_TEST_CASE("rasterdb_physical_partition partitions data_batch with two partition keys",
                    "[physical_partition]",
                    int32_t,
                    int64_t,
@@ -174,7 +174,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -219,11 +219,11 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
   auto mr     = get_resource_ref(*space);
 
   // Column 0: aggregation key0
-  auto col0 = sirius::test::vector_to_cudf_column<Traits>(values0, stream, mr);
+  auto col0 = rasterdb::test::vector_to_cudf_column<Traits>(values0, stream, mr);
   // Column 1: aggregation key1
-  auto col1 = sirius::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values1, stream, mr);
+  auto col1 = rasterdb::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values1, stream, mr);
   // Column 2: aggregation value (same as column 1; values won't matter)
-  auto col2 = sirius::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values1, stream, mr);
+  auto col2 = rasterdb::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values1, stream, mr);
 
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(std::move(col0));
@@ -233,7 +233,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
 
   auto gpu_repr = std::make_unique<gpu_table_representation>(std::move(table), *space);
   auto input_batch =
-    std::make_shared<data_batch>(::sirius::get_next_batch_id(), std::move(gpu_repr));
+    std::make_shared<data_batch>(::rasterdb::get_next_batch_id(), std::move(gpu_repr));
 
   std::size_t partition_size = 10000000;
   // this cardinality is not real, we are setting here this large in order to force more partitions
@@ -246,7 +246,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
   auto& context = *con.context;
 
   // Create aggregate expressions: GROUP BY column 0, SUM(column 1)
-  auto agg_result = sirius::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
     {0, 1},   // group_indexes: GROUP BY column 0 and 1
     {"min"},  // aggregations: MIN
     {2}       // agg_indexes: MIN(column 2)
@@ -262,7 +262,7 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
                                                              std::move(agg_result.groups),
                                                              estimated_cardinality);
 
-  sirius_physical_partition partitioner(std::move(partitioner_types),
+  rasterdb_physical_partition partitioner(std::move(partitioner_types),
                                         estimated_cardinality,
                                         &grouped_aggregator,
                                         false,
@@ -296,10 +296,10 @@ TEMPLATE_TEST_CASE("sirius_physical_partition partitions data_batch with two par
 }
 
 TEST_CASE(
-  "sirius_physical_partition partitions data_batch with single partition key and 1 partition",
+  "rasterdb_physical_partition partitions data_batch with single partition key and 1 partition",
   "[physical_partition]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -312,9 +312,9 @@ TEST_CASE(
   auto mr     = get_resource_ref(*space);
 
   // Column 0: partition key
-  auto col0 = sirius::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values, stream, mr);
+  auto col0 = rasterdb::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(values, stream, mr);
   // Column 1: aggregation value (all ones)
-  auto col1 = sirius::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(
+  auto col1 = rasterdb::test::vector_to_cudf_column<gpu_type_traits<int32_t>>(
     std::vector<int32_t>(num_values, 1), stream, mr);
 
   std::vector<std::unique_ptr<cudf::column>> columns;
@@ -324,7 +324,7 @@ TEST_CASE(
 
   auto gpu_repr = std::make_unique<gpu_table_representation>(std::move(table), *space);
   auto input_batch =
-    std::make_shared<data_batch>(::sirius::get_next_batch_id(), std::move(gpu_repr));
+    std::make_shared<data_batch>(::rasterdb::get_next_batch_id(), std::move(gpu_repr));
 
   std::size_t estimated_cardinality = num_values;
 
@@ -334,7 +334,7 @@ TEST_CASE(
   auto& context = *con.context;
 
   // Create aggregate expressions: GROUP BY column 0, SUM(column 1)
-  auto agg_result = sirius::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<gpu_type_traits<int32_t>>(
     {0},      // group_indexes: GROUP BY column 0
     {"sum"},  // aggregations: SUM
     {1}       // agg_indexes: SUM(column 1)
@@ -350,7 +350,7 @@ TEST_CASE(
                                                              std::move(agg_result.groups),
                                                              estimated_cardinality);
 
-  sirius_physical_partition partitioner(
+  rasterdb_physical_partition partitioner(
     std::move(partitioner_types), estimated_cardinality, &grouped_aggregator, false);
 
   // Compute num_partitions from estimated bytes: cardinality * bytes_per_row / partition_size
@@ -358,7 +358,7 @@ TEST_CASE(
   std::size_t bytes_per_row               = sizeof(int32_t) * 2;
   std::size_t estimated_cardinality_bytes = estimated_cardinality * bytes_per_row;
   int num_partitions                      = static_cast<int>(std::max(
-    std::size_t(1), estimated_cardinality_bytes / sirius::config::DEFAULT_HASH_PARTITION_BYTES));
+    std::size_t(1), estimated_cardinality_bytes / rasterdb::config::DEFAULT_HASH_PARTITION_BYTES));
   partitioner.set_num_partitions(num_partitions);
 
   auto outputs = partitioner.execute(operator_data({input_batch}), default_stream());

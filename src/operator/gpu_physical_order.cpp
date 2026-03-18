@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,13 +61,13 @@ SourceResultType GPUPhysicalOrder::GetData(GPUIntermediateRelation& output_relat
 {
   auto start = std::chrono::high_resolution_clock::now();
   for (int col = 0; col < sort_result->columns.size(); col++) {
-    SIRIUS_LOG_DEBUG("Writing order by result to column {}", col);
+    RASTERDB_LOG_DEBUG("Writing order by result to column {}", col);
     output_relation.columns[col] = sort_result->columns[col];
   }
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Order by GetData time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Order by GetData time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 
@@ -117,7 +117,7 @@ SinkResultType GPUPhysicalOrder::Sink(GPUIntermediateRelation& input_relation) c
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Order by Sink time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Order by Sink time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 

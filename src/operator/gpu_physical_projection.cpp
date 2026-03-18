@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,16 +32,16 @@ GPUPhysicalProjection::GPUPhysicalProjection(vector<LogicalType> types,
 OperatorResultType GPUPhysicalProjection::Execute(GPUIntermediateRelation& input_relation,
                                                   GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("Executing projection");
+  RASTERDB_LOG_DEBUG("Executing projection");
   auto start = std::chrono::high_resolution_clock::now();
 
   // The new executor...
-  sirius::GpuExpressionExecutor gpu_expression_executor(select_list);
+  rasterdb::GpuExpressionExecutor gpu_expression_executor(select_list);
   gpu_expression_executor.Execute(input_relation, output_relation);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Projection time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Projection time: {:.2f} ms", duration.count() / 1000.0);
   return OperatorResultType::FINISHED;
 }
 

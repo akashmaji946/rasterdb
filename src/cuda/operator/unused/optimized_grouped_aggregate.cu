@@ -320,13 +320,13 @@ void optimizedGroupedStringAggregate(uint8_t** keys,
   CHECK_ERROR();
   if (N == 0) {
     count[0] = 0;
-    SIRIUS_LOG_DEBUG("groupedStringAggregate called with 0 rows");
+    RASTERDB_LOG_DEBUG("groupedStringAggregate called with 0 rows");
     return;
   }
 
   // First perform preprocessing to convert the input group by columns into row level records
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
-  SIRIUS_LOG_DEBUG("Launching String Grouped Aggregate Kernel");
+  RASTERDB_LOG_DEBUG("Launching String Grouped Aggregate Kernel");
 
   uint64_t total_preprocessing_bytes = 2 * N * sizeof(uint64_t);
   auto preprocess_start_time         = high_resolution_clock::now();
@@ -355,7 +355,7 @@ void optimizedGroupedStringAggregate(uint8_t** keys,
   auto preprocess_time_ms  = std::chrono::duration_cast<duration<double, std::milli>>(
                               preprocess_end_time - preprocess_start_time)
                               .count();
-  SIRIUS_LOG_DEBUG("STRING GROUP BY: Preprocessing required {} bytes and took {} ms",
+  RASTERDB_LOG_DEBUG("STRING GROUP BY: Preprocessing required {} bytes and took {} ms",
                    total_preprocessing_bytes,
                    preprocess_time_ms);
 
@@ -380,7 +380,7 @@ void optimizedGroupedStringAggregate(uint8_t** keys,
   auto sort_time_ms =
     std::chrono::duration_cast<duration<double, std::milli>>(sort_end_time - sort_start_time)
       .count();
-  SIRIUS_LOG_DEBUG("STRING GROUP BY: Sorting required {} bytes and took {} ms",
+  RASTERDB_LOG_DEBUG("STRING GROUP BY: Sorting required {} bytes and took {} ms",
                    sort_temp_storage_bytes,
                    sort_time_ms);
 
@@ -569,8 +569,8 @@ void optimizedGroupedStringAggregate(uint8_t** keys,
   auto group_by_time_ms  = std::chrono::duration_cast<duration<double, std::milli>>(
                             group_by_end_time - group_by_start_time)
                             .count();
-  SIRIUS_LOG_DEBUG("STRING GROUP BY: Group By got {} unique groups", num_groups);
-  SIRIUS_LOG_DEBUG("STRING GROUP BY: Group By required {} bytes and took {} ms",
+  RASTERDB_LOG_DEBUG("STRING GROUP BY: Group By got {} unique groups", num_groups);
+  RASTERDB_LOG_DEBUG("STRING GROUP BY: Group By required {} bytes and took {} ms",
                    total_aggregation_bytes,
                    group_by_time_ms);
 
@@ -627,7 +627,7 @@ void optimizedGroupedStringAggregate(uint8_t** keys,
   auto post_processing_time_ms  = std::chrono::duration_cast<duration<double, std::milli>>(
                                    post_processing_end_time - post_processing_start_time)
                                    .count();
-  SIRIUS_LOG_DEBUG("STRING GROUP BY V3: Post Processing took {} ms", post_processing_time_ms);
+  RASTERDB_LOG_DEBUG("STRING GROUP BY V3: Post Processing took {} ms", post_processing_time_ms);
 
   cudaDeviceSynchronize();
   CHECK_ERROR();
@@ -672,7 +672,7 @@ void combineStrings(uint8_t* a,
 {
   CHECK_ERROR();
   if (N_a == 0 || N_b == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());

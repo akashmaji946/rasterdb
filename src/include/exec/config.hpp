@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace sirius::exec {
+namespace rasterdb::exec {
 
 struct thread_pool_config {
   int num_threads{0};
@@ -27,4 +27,4 @@ struct thread_pool_config {
   std::vector<int> cpu_affinity_list;
 };
 
-}  // namespace sirius::exec
+}  // namespace rasterdb::exec

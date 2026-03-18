@@ -1,53 +1,36 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * cudf_utils.hpp — Type bridge between DuckDB and cudf shim types.
+ * Originally used real cudf headers; now uses RasterDB's cudf compatibility shim.
  */
 
 #pragma once
 
-#include <cudf/version_config.hpp>
-#define CUDF_VERSION_NUM (CUDF_VERSION_MAJOR * 100 + CUDF_VERSION_MINOR)
-
+// Use our cudf compatibility shim (not real cudf)
+#include <cudf/types.hpp>
 #include <cudf/table/table.hpp>
-#if CUDF_VERSION_NUM > 2504
-#include <cudf/detail/aggregation/aggregation.hpp>
-#include <cudf/detail/stream_compaction.hpp>
-#include <cudf/join/conditional_join.hpp>
-#include <cudf/join/distinct_hash_join.hpp>
-#include <cudf/join/hash_join.hpp>
-#include <cudf/join/join.hpp>
-#include <cudf/join/mixed_join.hpp>
-#else
-#include <cudf/join.hpp>
-#endif
-#include <cudf/aggregation.hpp>
-#include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/table/table_view.hpp>
+#include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/aggregation.hpp>
+#include <cudf/sorting.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/reduction.hpp>
-#if CUDF_VERSION_NUM >= 2604
-#include <cudf/reduction/distinct_count.hpp>
-#endif
 #include <cudf/round.hpp>
-#include <cudf/scalar/scalar.hpp>
-#include <cudf/scalar/scalar_factories.hpp>
-#include <cudf/sorting.hpp>
-#include <cudf/table/table_view.hpp>
-#include <cudf/types.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/join/hash_join.hpp>
+#include <cudf/join/join.hpp>
+#include <cudf/join/conditional_join.hpp>
+#include <cudf/join/distinct_hash_join.hpp>
+#include <cudf/join/mixed_join.hpp>
+#include <cudf/ast/expressions.hpp>
+#include <cudf/detail/aggregation/aggregation.hpp>
+#include <cudf/detail/stream_compaction.hpp>
+#include <cudf/reduction/distinct_count.hpp>
 
 #include <rmm/cuda_device.hpp>
 #include <rmm/mr/cuda_memory_resource.hpp>
@@ -59,6 +42,15 @@
 
 #include <memory>
 #include <vector>
+
+// Compatibility: define version macros so existing #if guards compile
+#ifndef CUDF_VERSION_MAJOR
+#define CUDF_VERSION_MAJOR 99
+#endif
+#ifndef CUDF_VERSION_MINOR
+#define CUDF_VERSION_MINOR 99
+#endif
+#define CUDF_VERSION_NUM (CUDF_VERSION_MAJOR * 100 + CUDF_VERSION_MINOR)
 
 namespace duckdb {
 
@@ -79,10 +71,6 @@ inline int GetCudfDecimalTypeSize(const cudf::data_type& type)
 
 /**
  * @brief Type switch from duckdb LogicalType to cudf data_type
- *
- * @param[in] logical_type The duckdb LogicalType
- * @return The corresponding cudf data_type
- * @throws InvalidInputException if the duckdb type is unsupported
  */
 inline cudf::data_type GetCudfType(const LogicalType& logical_type)
 {
@@ -91,14 +79,13 @@ inline cudf::data_type GetCudfType(const LogicalType& logical_type)
     case LogicalTypeId::SMALLINT: return cudf::data_type(cudf::type_id::INT16);
     case LogicalTypeId::INTEGER: return cudf::data_type(cudf::type_id::INT32);
     case LogicalTypeId::BIGINT:
-    case LogicalTypeId::HUGEINT:  // FIXME: unsafe conversion from duckdb HugeInt to cudf Int64,
-                                  // since cudf does not support Int128.
+    case LogicalTypeId::HUGEINT:
       return cudf::data_type(cudf::type_id::INT64);
     case LogicalTypeId::UTINYINT: return cudf::data_type(cudf::type_id::UINT8);
     case LogicalTypeId::USMALLINT: return cudf::data_type(cudf::type_id::UINT16);
     case LogicalTypeId::UINTEGER: return cudf::data_type(cudf::type_id::UINT32);
     case LogicalTypeId::UBIGINT:
-    case LogicalTypeId::UHUGEINT: return cudf::data_type(cudf::type_id::UINT64); ;
+    case LogicalTypeId::UHUGEINT: return cudf::data_type(cudf::type_id::UINT64);
     case LogicalTypeId::FLOAT: return cudf::data_type(cudf::type_id::FLOAT32);
     case LogicalTypeId::DOUBLE: return cudf::data_type(cudf::type_id::FLOAT64);
     case LogicalTypeId::BOOLEAN: return cudf::data_type(cudf::type_id::BOOL8);
@@ -112,7 +99,6 @@ inline cudf::data_type GetCudfType(const LogicalType& logical_type)
     case LogicalTypeId::DECIMAL: {
       switch (logical_type.InternalType()) {
         case PhysicalType::INT32:
-          // cudf decimal type uses negative scale, same for below
           return cudf::data_type(cudf::type_id::DECIMAL32, -DecimalType::GetScale(logical_type));
         case PhysicalType::INT64:
           return cudf::data_type(cudf::type_id::DECIMAL64, -DecimalType::GetScale(logical_type));

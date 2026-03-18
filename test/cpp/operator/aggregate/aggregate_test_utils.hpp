@@ -35,7 +35,7 @@
 #include <utility>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace test {
 
 /**
@@ -515,4 +515,4 @@ inline AggregateExpressionResult create_count_distinct_struct_col_expressions(
 }
 
 }  // namespace test
-}  // namespace sirius
+}  // namespace rasterdb

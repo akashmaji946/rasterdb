@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #include "gpu_pipeline.hpp"
 #include "helper/helper.hpp"
 
-namespace sirius {
+namespace rasterdb {
 
 /**
  * @brief Helper container that indexes GPU pipelines by their operators.
@@ -47,4 +47,4 @@ class gpu_pipeline_hashmap {
   duckdb::vector<duckdb::shared_ptr<duckdb::GPUPipeline>> _vec;
 };
 
-}  // namespace sirius
+}  // namespace rasterdb

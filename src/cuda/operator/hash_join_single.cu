@@ -278,10 +278,10 @@ void probeHashTableSingleMatch(uint8_t** keys,
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Probe Kernel Unique Join");
+  RASTERDB_LOG_DEBUG("Launching Probe Kernel Unique Join");
   SETUP_TIMING();
   START_TIMER();
   count = gpuBufferManager->customCudaMalloc<uint64_t>(1, 0, 0);
@@ -335,7 +335,7 @@ void probeHashTableSingleMatch(uint8_t** keys,
   uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
   cudaMemcpy(h_count, count, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   assert(h_count[0] > 0);
-  SIRIUS_LOG_DEBUG("Probe Hash Table Single Match Result Count: {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("Probe Hash Table Single Match Result Count: {}", h_count[0]);
   // if (join_mode == 0 || join_mode == 3) {
   //     gpuBufferManager->gpuProcessingPointer[0] = (reinterpret_cast<uint8_t*>(row_ids_left +
   //     h_count[0]) - gpuBufferManager->gpuProcessing[0]);
@@ -367,10 +367,10 @@ void probeHashTableRightSemiAntiSingleMatch(uint8_t** keys,
 {
   CHECK_ERROR();
   if (N == 0 || ht_len == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Probe Kernel Unique Join");
+  RASTERDB_LOG_DEBUG("Launching Probe Kernel Unique Join");
   SETUP_TIMING();
   START_TIMER();
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
@@ -402,7 +402,7 @@ void probeHashTableRightSemiAntiSingleMatch(uint8_t** keys,
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(keys_dev), 0);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(condition_mode_dev), 0);
 
-  SIRIUS_LOG_DEBUG("Finished probe right");
+  RASTERDB_LOG_DEBUG("Finished probe right");
   STOP_TIMER();
 }
 
@@ -420,10 +420,10 @@ void probeHashTableMark(uint8_t** keys,
   if (N == 0 || ht_len == 0) {
     output = gpuBufferManager->customCudaMalloc<uint8_t>(N, 0, 0);
     cudaMemset(output, 0, N * sizeof(uint8_t));
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Probe Kernel Mark");
+  RASTERDB_LOG_DEBUG("Launching Probe Kernel Mark");
   SETUP_TIMING();
   START_TIMER();
 

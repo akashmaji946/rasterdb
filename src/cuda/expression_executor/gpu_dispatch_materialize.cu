@@ -27,7 +27,7 @@
 #include <thrust/transform.h>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 // Helper (template) functors to reduce bloat
 //----------Numerics----------//
@@ -281,5 +281,5 @@ std::unique_ptr<cudf::column> GpuDispatcher::DispatchMaterialize(const GPUColumn
   }
 }
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

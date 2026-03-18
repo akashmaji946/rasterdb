@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@
 
 #include "config.hpp"
 #include "parallel/task_executor.hpp"
-#include "pipeline/sirius_pipeline.hpp"
-#include "pipeline/sirius_pipeline_itask.hpp"
-#include "pipeline/sirius_pipeline_task_states.hpp"
+#include "pipeline/rasterdb_pipeline.hpp"
+#include "pipeline/rasterdb_pipeline_itask.hpp"
+#include "pipeline/rasterdb_pipeline_task_states.hpp"
 
 #include <cucascade/data/data_batch.hpp>
 #include <cucascade/data/data_repository.hpp>
@@ -31,7 +31,7 @@
 #include <memory>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace op {
 class operator_data;
 }
@@ -41,10 +41,10 @@ namespace pipeline {
 /**
  * @brief Global state shared across all GPU pipeline tasks in an execution context.
  *
- * This is an alias to sirius_pipeline_task_global_state for backward compatibility
+ * This is an alias to rasterdb_pipeline_task_global_state for backward compatibility
  * and semantic clarity in GPU pipeline contexts.
  */
-using gpu_pipeline_task_global_state = sirius_pipeline_task_global_state;
+using gpu_pipeline_task_global_state = rasterdb_pipeline_task_global_state;
 
 /**
  * @brief Local state specific to an individual GPU pipeline task instance.
@@ -53,7 +53,7 @@ using gpu_pipeline_task_global_state = sirius_pipeline_task_global_state;
  * execution. It holds the task and pipeline identifiers, the GPU pipeline to
  * execute, and the data batch views that serve as input to the pipeline.
  */
-class gpu_pipeline_task_local_state : public sirius_pipeline_task_local_state {
+class gpu_pipeline_task_local_state : public rasterdb_pipeline_task_local_state {
  public:
   /**
    * @brief Construct a new gpu_pipeline_task_local_state object
@@ -89,7 +89,7 @@ class gpu_pipeline_task_local_state : public sirius_pipeline_task_local_state {
  * Note that this class will be further derived to represent specific types of tasks such as build,
  * aggregation, etc..
  */
-class gpu_pipeline_task : public sirius_pipeline_itask {
+class gpu_pipeline_task : public rasterdb_pipeline_itask {
  public:
   /**
    * @brief Construct a new gpu_pipeline_task object
@@ -101,8 +101,8 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
    */
   gpu_pipeline_task(uint64_t task_id,
                     std::vector<cucascade::shared_data_repository*> data_repos,
-                    std::unique_ptr<sirius_pipeline_task_local_state> local_state,
-                    std::shared_ptr<sirius_pipeline_task_global_state> global_state);
+                    std::unique_ptr<rasterdb_pipeline_task_local_state> local_state,
+                    std::shared_ptr<rasterdb_pipeline_task_global_state> global_state);
 
   ~gpu_pipeline_task() override;
 
@@ -123,9 +123,9 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
   /**
    * @brief Get the GPU pipeline associated with this task
    *
-   * @return const duckdb::sirius_pipeline* Pointer to the GPU pipeline
+   * @return const duckdb::rasterdb_pipeline* Pointer to the GPU pipeline
    */
-  const sirius_pipeline* get_pipeline() const;
+  const rasterdb_pipeline* get_pipeline() const;
 
   /**
    * @brief Compute and return the output data batches for this task.
@@ -156,7 +156,7 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
   std::size_t get_estimated_reservation_size() const override;
 
   /// @brief Get the output consumer operators for this task.
-  std::vector<op::sirius_physical_operator*> get_output_consumers() override;
+  std::vector<op::rasterdb_physical_operator*> get_output_consumers() override;
 
   /**
    * @brief Mark this task as rescheduled due to OOM.
@@ -187,9 +187,9 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
    *
    * Used by the executor to create a rescheduled task sharing the same pipeline context.
    */
-  [[nodiscard]] std::shared_ptr<sirius_pipeline_task_global_state> get_shared_global_state() const
+  [[nodiscard]] std::shared_ptr<rasterdb_pipeline_task_global_state> get_shared_global_state() const
   {
-    return std::dynamic_pointer_cast<sirius_pipeline_task_global_state>(_global_state);
+    return std::dynamic_pointer_cast<rasterdb_pipeline_task_global_state>(_global_state);
   }
 
   /**
@@ -203,7 +203,7 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
    * @return A new task ready to be scheduled for execution
    */
   virtual std::unique_ptr<gpu_pipeline_task> create_rescheduled_task(
-    uint64_t task_id, std::unique_ptr<sirius_pipeline_task_local_state> local_state);
+    uint64_t task_id, std::unique_ptr<rasterdb_pipeline_task_local_state> local_state);
 
  private:
   uint64_t _task_id;
@@ -212,4 +212,4 @@ class gpu_pipeline_task : public sirius_pipeline_itask {
 };
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

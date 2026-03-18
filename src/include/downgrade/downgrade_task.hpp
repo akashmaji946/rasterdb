@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #pragma once
 
 #include "config.hpp"
-#include "memory/sirius_memory_reservation_manager.hpp"
+#include "memory/rasterdb_memory_reservation_manager.hpp"
 #include "parallel/task_executor.hpp"
 #include "task_completion.hpp"
 
@@ -29,7 +29,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace sirius {
+namespace rasterdb {
 namespace parallel {
 
 /**
@@ -48,7 +48,7 @@ class downgrade_task_global_state : public itask_global_state {
    * @param message_queue Reference to the message queue for task completion notifications
    */
   explicit downgrade_task_global_state(
-    sirius::memory::sirius_memory_reservation_manager& reservation_manager,
+    rasterdb::memory::rasterdb_memory_reservation_manager& reservation_manager,
     cucascade::shared_data_repository_manager& data_repo_mgr,
     task_completion_message_queue& message_queue)
     : _reservation_manager(reservation_manager),
@@ -57,7 +57,7 @@ class downgrade_task_global_state : public itask_global_state {
   {
   }
 
-  sirius::memory::sirius_memory_reservation_manager& _reservation_manager;
+  rasterdb::memory::rasterdb_memory_reservation_manager& _reservation_manager;
   cucascade::shared_data_repository_manager&
     _data_repo_mgr;  ///< Repository for storing and retrieving data batches
   task_completion_message_queue&
@@ -133,4 +133,4 @@ class downgrade_task : public itask {
 };
 
 }  // namespace parallel
-}  // namespace sirius
+}  // namespace rasterdb

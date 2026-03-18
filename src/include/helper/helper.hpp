@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 
 #include <nvtx3/nvtx3.hpp>
 
-namespace sirius {
+namespace rasterdb {
 
 template <class T, class SRC>
 void DynamicCastCheck(const SRC* source)
@@ -29,4 +29,4 @@ void DynamicCastCheck(const SRC* source)
 #endif
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

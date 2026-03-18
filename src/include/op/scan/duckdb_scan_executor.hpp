@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,19 +34,19 @@
 #include <string>
 #include <thread>
 
-namespace sirius::op {
-class sirius_physical_operator;
-}  // namespace sirius::op
+namespace rasterdb::op {
+class rasterdb_physical_operator;
+}  // namespace rasterdb::op
 
-namespace sirius::creator {
+namespace rasterdb::creator {
 class task_creator;
-}  // namespace sirius::creator
+}  // namespace rasterdb::creator
 
-namespace sirius::pipeline {
+namespace rasterdb::pipeline {
 class completion_handler;
-}  // namespace sirius::pipeline
+}  // namespace rasterdb::pipeline
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 
 //===----------------------------------------------------------------------===//
 // DuckDB Scan Executor
@@ -70,7 +70,7 @@ class duckdb_scan_executor {
   explicit duckdb_scan_executor(
     exec::thread_pool_config config,
     cucascade::memory::memory_reservation_manager* mem_mgr,
-    exec::publisher<std::unique_ptr<sirius::pipeline::task_request>> task_request_publisher);
+    exec::publisher<std::unique_ptr<rasterdb::pipeline::task_request>> task_request_publisher);
 
   /**
    * @brief Destructor for the duckdb_scan_executor.
@@ -88,7 +88,7 @@ class duckdb_scan_executor {
    *
    * @param task The task to be scheduled.
    */
-  void schedule(std::unique_ptr<sirius::parallel::itask> task);
+  void schedule(std::unique_ptr<rasterdb::parallel::itask> task);
 
   /**
    * @brief Starts the executor and initializes worker threads
@@ -122,7 +122,7 @@ class duckdb_scan_executor {
    *
    * @param task_creator Pointer to the task creator
    */
-  void set_task_creator(sirius::creator::task_creator* task_creator);
+  void set_task_creator(rasterdb::creator::task_creator* task_creator);
 
   /**
    * @brief Drain any leftover tasks from the queue
@@ -136,7 +136,7 @@ class duckdb_scan_executor {
    *
    * @param handler Pointer to the completion handler
    */
-  void set_completion_handler(sirius::pipeline::completion_handler* handler) noexcept;
+  void set_completion_handler(rasterdb::pipeline::completion_handler* handler) noexcept;
 
   /**
    * @brief Cache scan results for the given query
@@ -171,7 +171,7 @@ class duckdb_scan_executor {
    * @param scan_operators Vector of scan operators to prepare cache for
    */
   void prepare_cache_for_scan_operators(
-    const std::vector<sirius::op::sirius_physical_operator*>& scan_operators);
+    const std::vector<rasterdb::op::rasterdb_physical_operator*>& scan_operators);
 
  private:
   /**
@@ -184,7 +184,7 @@ class duckdb_scan_executor {
    */
   void submit_scan_request();
 
-  std::unique_ptr<op::operator_data> get_scan_output(pipeline::sirius_pipeline_itask* task,
+  std::unique_ptr<op::operator_data> get_scan_output(pipeline::rasterdb_pipeline_itask* task,
                                                      rmm::cuda_stream_view stream);
 
   struct cache_entry {
@@ -203,13 +203,13 @@ class duckdb_scan_executor {
   exec::kiosk _kiosk;
   std::unique_ptr<cucascade::memory::exclusive_stream_pool> _stream_pool;
   std::unique_ptr<exec::thread_pool> _thread_pool;
-  exec::interruptible_mpmc<std::unique_ptr<sirius::parallel::itask>> _task_queue;
+  exec::interruptible_mpmc<std::unique_ptr<rasterdb::parallel::itask>> _task_queue;
   std::thread _manager_thread;
-  exec::publisher<std::unique_ptr<sirius::pipeline::task_request>> _task_request_publisher;
+  exec::publisher<std::unique_ptr<rasterdb::pipeline::task_request>> _task_request_publisher;
   cucascade::memory::memory_reservation_manager* _mem_mgr{nullptr};
-  sirius::creator::task_creator* _task_creator{nullptr};
-  sirius::pipeline::completion_handler* _completion_handler{nullptr};
+  rasterdb::creator::task_creator* _task_creator{nullptr};
+  rasterdb::pipeline::completion_handler* _completion_handler{nullptr};
   cucascade::memory::memory_space* _gpu_memory_space{nullptr};
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan

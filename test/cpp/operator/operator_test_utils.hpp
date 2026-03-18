@@ -44,15 +44,15 @@
 #include <optional>
 #include <type_traits>
 
-namespace sirius::test::operator_utils {
+namespace rasterdb::test::operator_utils {
 
 using data_repository_mgr =
   cucascade::data_repository_manager<std::shared_ptr<cucascade::data_batch>>;
-inline std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> initialize_memory_manager(
+inline std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> initialize_memory_manager(
   std::size_t n_gpus = 1)
 {
   // Reset converter registry to avoid cross-test leakage
-  sirius::converter_registry::reset_for_testing();
+  rasterdb::converter_registry::reset_for_testing();
 
   cucascade::memory::reservation_manager_configurator builder;
 
@@ -70,10 +70,10 @@ inline std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> initia
 
   auto space_configs = builder.build();
   auto manager =
-    std::make_unique<sirius::memory::sirius_memory_reservation_manager>(std::move(space_configs));
+    std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(std::move(space_configs));
 
   // Initialize converters used by data representations
-  sirius::converter_registry::initialize();
+  rasterdb::converter_registry::initialize();
   return manager;
 }
 
@@ -129,7 +129,7 @@ inline std::shared_ptr<cucascade::data_batch> concatenate_batches_horizontal(
   // Create and return new data_batch
   auto gpu_repr =
     std::make_unique<cucascade::gpu_table_representation>(std::move(concatenated_table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -208,7 +208,7 @@ inline std::shared_ptr<cucascade::data_batch> make_numeric_batch(
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<cucascade::gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -273,7 +273,7 @@ inline std::shared_ptr<cucascade::data_batch> make_string_batch(
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<cucascade::gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -299,7 +299,7 @@ inline std::shared_ptr<cucascade::data_batch> make_decimal64_batch(
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<cucascade::gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -332,7 +332,7 @@ inline std::shared_ptr<cucascade::data_batch> make_timestamp_batch(
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<cucascade::gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -428,8 +428,8 @@ inline std::shared_ptr<cucascade::data_batch> make_two_column_batch(
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<cucascade::gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<cucascade::data_batch>(batch_id, std::move(gpu_repr));
 }
 
-}  // namespace sirius::test::operator_utils
+}  // namespace rasterdb::test::operator_utils

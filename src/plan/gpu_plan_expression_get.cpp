@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ unique_ptr<GPUPhysicalOperator> GPUPhysicalPlanGenerator::CreatePlan(LogicalExpr
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   cudf::set_current_device_resource(gpuBufferManager->mr);
   for (idx_t expression_idx = 0; expression_idx < op.expressions.size(); expression_idx++) {
-    SIRIUS_LOG_DEBUG("Expression idx: {}", expression_idx);
+    RASTERDB_LOG_DEBUG("Expression idx: {}", expression_idx);
     if (op.expressions[expression_idx].size() > 1) {
       throw NotImplementedException("Expression get not supported");
     }

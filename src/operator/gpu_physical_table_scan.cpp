@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -91,7 +91,7 @@ GPUPhysicalTableScan::GPUPhysicalTableScan(vector<LogicalType> types,
       cudaStreamCreate(&cuda_streams[i]);
     }
   }
-  SIRIUS_LOG_DEBUG("Table scan column ids: {}", column_ids.size());
+  RASTERDB_LOG_DEBUG("Table scan column ids: {}", column_ids.size());
 }
 
 template <typename T>
@@ -988,11 +988,11 @@ class TableScanCoalesceTask : public BaseExecutorTask {
 SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_context)
 {
   // Check if columns are all cached
-  SIRIUS_LOG_DEBUG("GPUPhysicalTableScan GetDataDuckDBOpt invoked");
+  RASTERDB_LOG_DEBUG("GPUPhysicalTableScan GetDataDuckDBOpt invoked");
   D_ASSERT(!column_ids.empty());
   auto gpuBufferManager = &(GPUBufferManager::GetInstance());
 
-  SIRIUS_LOG_DEBUG("Reading data from duckdb storage");
+  RASTERDB_LOG_DEBUG("Reading data from duckdb storage");
 
   TableFunctionToStringInput input(function, bind_data.get());
   auto to_string_result = function.to_string(input);
@@ -1006,12 +1006,12 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
 
   // Get cached column info
   for (int i = 0; i < column_ids.size(); i++) {
-    SIRIUS_LOG_DEBUG("Scan Idx {} has column id of {}", i, column_ids[i].GetPrimaryIndex());
+    RASTERDB_LOG_DEBUG("Scan Idx {} has column id of {}", i, column_ids[i].GetPrimaryIndex());
   }
 
   auto num_columns = column_ids.size() - gen_row_id_column;
   bool all_cached  = num_columns > 0;
-  SIRIUS_LOG_DEBUG("Checking if all of the {}/{} columns of table {} are cached",
+  RASTERDB_LOG_DEBUG("Checking if all of the {}/{} columns of table {} are cached",
                    num_columns,
                    column_ids.size(),
                    table_name);
@@ -1026,7 +1026,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
   }
 
   if (all_cached) {
-    SIRIUS_LOG_DEBUG("Early terminating from GetDataDuckdbOpt because all cols are cached");
+    RASTERDB_LOG_DEBUG("Early terminating from GetDataDuckdbOpt because all cols are cached");
     return SourceResultType::FINISHED;
   }
 
@@ -1041,7 +1041,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
     auto g_state = GetGlobalSourceState(exec_context.client);
     vector<unique_ptr<LocalSourceState>> l_states;
     l_states.resize(num_threads);
-    SIRIUS_LOG_DEBUG(
+    RASTERDB_LOG_DEBUG(
       "GetDataDuckdbOpt: Starting Scheduling of Tasks with l_states of size {} and uncached of "
       "size {}",
       l_states.size(),
@@ -1052,10 +1052,10 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
         executor, i, function, exec_context, *this, g_state.get(), l_states[i].get());
       executor.ScheduleTask(std::move(task));
     }
-    SIRIUS_LOG_DEBUG("GetDataDuckdbOpt: Finished Scheduling of Tasks");
+    RASTERDB_LOG_DEBUG("GetDataDuckdbOpt: Finished Scheduling of Tasks");
 
     executor.WorkOnTasks();
-    SIRIUS_LOG_DEBUG("GetDataDuckdbOpt: Tasks finished executing");
+    RASTERDB_LOG_DEBUG("GetDataDuckdbOpt: Tasks finished executing");
 
     for (int i = 0; i < num_threads; ++i) {
       auto& l_state_scan = l_states[i]->Cast<GPUTableScanLocalSourceState>();
@@ -1064,7 +1064,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
         column_size[col] += l_state_scan.column_size[col];
       }
     }
-    SIRIUS_LOG_DEBUG("GetDataDuckdbOpt: Gathered Results From Tasks with num rows of {}", num_rows);
+    RASTERDB_LOG_DEBUG("GetDataDuckdbOpt: Gathered Results From Tasks with num rows of {}", num_rows);
 
     std::fill(mask_size, mask_size + num_columns, getMaskBytesSize(num_rows));
     uint64_t total_size = 0;
@@ -1080,7 +1080,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
     }
 
     // Create table/columns in gpu and check OOM
-    SIRIUS_LOG_DEBUG("GetDataDuckDBOpt creating {} columns for table {} with total cols of {}",
+    RASTERDB_LOG_DEBUG("GetDataDuckDBOpt creating {} columns for table {} with total cols of {}",
                      num_columns,
                      table_name,
                      column_ids.size());
@@ -1114,28 +1114,28 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDBOpt(ExecutionContext& exec_c
       }
     }
 
-    SIRIUS_LOG_DEBUG("GetDataDuckDBOpt finished caching all necessary columns");
+    RASTERDB_LOG_DEBUG("GetDataDuckDBOpt finished caching all necessary columns");
 
     // Perform the second scan to copy data to gpu
     if (num_columns > 0) ScanDataDuckDBOpt(exec_context, gpuBufferManager, table_name);
 
     auto end      = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    SIRIUS_LOG_DEBUG("Reading data and converting data from duckdb time: {:.2f} ms",
+    RASTERDB_LOG_DEBUG("Reading data and converting data from duckdb time: {:.2f} ms",
                      duration.count() / 1000.0);
     return SourceResultType::FINISHED;
   } else {
     throw NotImplementedException("Table in-out function not supported");
   }
 
-  SIRIUS_LOG_DEBUG("GetDataDuckDBOpt updated num rows to {}", num_rows);
+  RASTERDB_LOG_DEBUG("GetDataDuckDBOpt updated num rows to {}", num_rows);
 }
 
 void GPUPhysicalTableScan::ScanDataDuckDBOpt(ExecutionContext& exec_context,
                                              GPUBufferManager* gpuBufferManager,
                                              string table_name)
 {
-  SIRIUS_LOG_DEBUG("GPUPhysicalTableScan ScanDataDuckDBOpt invoked");
+  RASTERDB_LOG_DEBUG("GPUPhysicalTableScan ScanDataDuckDBOpt invoked");
   if (function.function) {
     // Perform the second scan to coalesce duckdb chunk data to continuous pinned memory data,
     // `offset_ptr` represents string length before copied to gpu, after which we do prefix sum
@@ -1337,7 +1337,7 @@ void GPUPhysicalTableScan::ScanDataDuckDBOpt(ExecutionContext& exec_context,
           table->columns[column_idx]->data_wrapper =
             DataWrapper(column_type, d_data_ptr[col], num_rows, validity_mask);
         }
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Column {}.{} cached in GPU at index {}", up_table_name, up_column_name, column_idx);
       }
     }
@@ -1422,7 +1422,7 @@ void GPUPhysicalTableScan::ScanDataDuckDBOpt(ExecutionContext& exec_context,
 
 SourceResultType GPUPhysicalTableScan::GetDataDuckDB(ExecutionContext& exec_context)
 {
-  SIRIUS_LOG_DEBUG("GPUPhysicalTableScan GetDataDuckDB invoked");
+  RASTERDB_LOG_DEBUG("GPUPhysicalTableScan GetDataDuckDB invoked");
 
   // Use optimized scan if required
   if (Config::USE_OPT_TABLE_SCAN) { return GetDataDuckDBOpt(exec_context); }
@@ -1430,7 +1430,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDB(ExecutionContext& exec_cont
   D_ASSERT(!column_ids.empty());
   auto gpuBufferManager = &(GPUBufferManager::GetInstance());
 
-  SIRIUS_LOG_DEBUG("Reading data from duckdb storage");
+  RASTERDB_LOG_DEBUG("Reading data from duckdb storage");
 
   TableFunctionToStringInput input(function, bind_data.get());
   auto to_string_result = function.to_string(input);
@@ -1505,7 +1505,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDB(ExecutionContext& exec_cont
     }
 
     auto num_columns = column_ids.size() - gen_row_id_column;
-    SIRIUS_LOG_DEBUG("GetDataDuckDB creating {} columns for table {} with total cols of {}",
+    RASTERDB_LOG_DEBUG("GetDataDuckDB creating {} columns for table {} with total cols of {}",
                      num_columns,
                      table_name,
                      column_ids.size());
@@ -1537,7 +1537,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDB(ExecutionContext& exec_cont
     ScanDataDuckDB(gpuBufferManager, table_name);
     auto end      = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    SIRIUS_LOG_DEBUG("Reading data and converting data from duckdb time: {:.2f} ms",
+    RASTERDB_LOG_DEBUG("Reading data and converting data from duckdb time: {:.2f} ms",
                      duration.count() / 1000.0);
     return SourceResultType::FINISHED;
   } else {
@@ -1548,7 +1548,7 @@ SourceResultType GPUPhysicalTableScan::GetDataDuckDB(ExecutionContext& exec_cont
 void GPUPhysicalTableScan::ScanDataDuckDB(GPUBufferManager* gpuBufferManager,
                                           string table_name) const
 {
-  SIRIUS_LOG_DEBUG("GPUPhysicalTableScan ScanDataDuckDB invoked");
+  RASTERDB_LOG_DEBUG("GPUPhysicalTableScan ScanDataDuckDB invoked");
 
   if (function.function) {
     bool has_more_output = true;
@@ -1585,7 +1585,7 @@ void GPUPhysicalTableScan::ScanDataDuckDB(GPUBufferManager* gpuBufferManager,
     ColumnDataScanState scan_state;
     uint64_t start_idx = 0;
 
-    SIRIUS_LOG_DEBUG("Converting duckdb format to Sirius format (this will take a while)");
+    RASTERDB_LOG_DEBUG("Converting duckdb format to Sirius format (this will take a while)");
     do {
       auto result = make_uniq<DataChunk>();
       collection->InitializeScanChunk(*result);
@@ -1676,7 +1676,7 @@ void GPUPhysicalTableScan::ScanDataDuckDB(GPUBufferManager* gpuBufferManager,
           gpuBufferManager->tables[up_table_name]->columns[column_idx]->data_wrapper =
             DataWrapper(column_type, d_ptr[col], collection->Count(), validity_mask);
         }
-        SIRIUS_LOG_DEBUG("Column {} cached in GPU at index {}", up_column_name, column_idx);
+        RASTERDB_LOG_DEBUG("Column {} cached in GPU at index {}", up_column_name, column_idx);
       }
     }
   } else {
@@ -1721,7 +1721,7 @@ unique_ptr<Expression> ConvertTableFiltersToExpression(const TableFilterSet& fil
 
 SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_relation) const
 {
-  SIRIUS_LOG_DEBUG("GPUPhysicalTableScan GetData invoked");
+  RASTERDB_LOG_DEBUG("GPUPhysicalTableScan GetData invoked");
   auto start = std::chrono::high_resolution_clock::now();
   if (output_relation.columns.size() != GetTypes().size())
     throw InvalidInputException("Mismatched column count");
@@ -1744,32 +1744,32 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
 
   shared_ptr<GPUIntermediateRelation> table;
   if (num_cols > 0) {
-    SIRIUS_LOG_DEBUG("Table Scanning {}", table_name);
+    RASTERDB_LOG_DEBUG("Table Scanning {}", table_name);
     auto it = gpuBufferManager->tables.find(table_name);
     if (it != gpuBufferManager->tables.end()) {
       // Key found, print the value
       table = it->second;
       for (int i = 0; i < table->column_names.size(); i++) {
-        SIRIUS_LOG_DEBUG("Cached Column name: {}", table->column_names[i]);
+        RASTERDB_LOG_DEBUG("Cached Column name: {}", table->column_names[i]);
       }
       for (int col = 0; col < num_cols; col++) {
         auto column_to_find = names[column_ids[col].GetPrimaryIndex()];
         transform(column_to_find.begin(), column_to_find.end(), column_to_find.begin(), ::toupper);
-        SIRIUS_LOG_DEBUG("Finding column {}", column_to_find);
+        RASTERDB_LOG_DEBUG("Finding column {}", column_to_find);
         auto column_it =
           find(table->column_names.begin(), table->column_names.end(), column_to_find);
         if (column_it == table->column_names.end()) {
           throw InvalidInputException("Column not found");
         }
         auto column_name = table->column_names[column_ids[col].GetPrimaryIndex()];
-        SIRIUS_LOG_DEBUG("Column found {}", column_name);
+        RASTERDB_LOG_DEBUG("Column found {}", column_name);
       }
     } else {
       // table not found
       throw InvalidInputException("Table not found");
     }
   }
-  SIRIUS_LOG_DEBUG("Finished checking GPU Buffer Manager with num cols of {}", num_cols);
+  RASTERDB_LOG_DEBUG("Finished checking GPU Buffer Manager with num cols of {}", num_cols);
 
   // If there is a filter: apply filter, and write to output_relation (late materialized)
   uint64_t* row_ids = nullptr;
@@ -1812,7 +1812,7 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
 
     if (all_constant_comparison && num_expr > 0) {
       // Fast path: fused CUDA kernel for constant comparisons
-      SIRIUS_LOG_DEBUG("Using fused kernel path for {} constant comparison filters", num_expr);
+      RASTERDB_LOG_DEBUG("Using fused kernel path for {} constant comparison filters", num_expr);
       ConstantFilter** filter_constants =
         gpuBufferManager->customCudaHostAlloc<ConstantFilter*>(num_expr);
       vector<shared_ptr<GPUColumn>> expression_columns(num_expr);
@@ -1848,7 +1848,7 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
         ConvertTableFiltersToExpression(*table_filters, column_ids, returned_types);
 
       if (filter_expr) {
-        SIRIUS_LOG_DEBUG("Converted table filters to expression: {}", filter_expr->ToString());
+        RASTERDB_LOG_DEBUG("Converted table filters to expression: {}", filter_expr->ToString());
 
         // Set up input columns for GpuExpressionExecutor
         // The BoundReferenceExpression uses column_index as index into input_columns
@@ -1859,7 +1859,7 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
         }
 
         // Create and execute the expression
-        sirius::GpuExpressionExecutor executor(*filter_expr, gpuBufferManager->mr);
+        rasterdb::GpuExpressionExecutor executor(*filter_expr, gpuBufferManager->mr);
         executor.SetInputColumns(filter_input_relation);
 
         // Execute the boolean filter expression
@@ -1873,33 +1873,33 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
 
         // Convert boolean bitmap to row_ids using DispatchSelect
         auto [selected_row_ids, selected_count] =
-          sirius::GpuDispatcher::DispatchSelect(bitmap->view(), gpuBufferManager->mr);
+          rasterdb::GpuDispatcher::DispatchSelect(bitmap->view(), gpuBufferManager->mr);
         row_ids  = selected_row_ids;
         count    = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
         count[0] = selected_count;
       }
     }
   }
-  SIRIUS_LOG_DEBUG("Finished processing table filters");
+  RASTERDB_LOG_DEBUG("Finished processing table filters");
 
   int index = 0;
   // projection id means that from this set of column ids that are being scanned, which index of
   // column ids are getting projected out
   if (function.filter_prune) {
-    SIRIUS_LOG_DEBUG("Running filter prune with args {}, {}, {}",
+    RASTERDB_LOG_DEBUG("Running filter prune with args {}, {}, {}",
                      projection_ids.size(),
                      column_ids.size(),
                      gen_row_id_column);
     if (projection_ids.size() == 0) {
-      SIRIUS_LOG_DEBUG("Projection ids size is 0 so we are projecting all columns");
+      RASTERDB_LOG_DEBUG("Projection ids size is 0 so we are projecting all columns");
       for (int col = 0; col < column_ids.size() - gen_row_id_column; col++) {
         auto column_id = column_ids[col];
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Reading column index (late materialized) {} and passing it to index in output relation "
           "{}",
           column_id.GetPrimaryIndex(),
           index);
-        SIRIUS_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
+        RASTERDB_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
         output_relation.columns[index] =
           make_shared_ptr<GPUColumn>(table->columns[column_id.GetPrimaryIndex()]);
         if (row_ids) { output_relation.columns[index]->row_ids = row_ids; }
@@ -1909,12 +1909,12 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
     } else {
       for (int col = 0; col < projection_ids.size() - gen_row_id_column; ++col) {
         auto projection_id = projection_ids[col];
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Reading column index (late materialized) {} and passing it to index in output relation "
           "{}",
           column_ids[projection_id].GetPrimaryIndex(),
           index);
-        SIRIUS_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
+        RASTERDB_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
         output_relation.columns[index] =
           make_shared_ptr<GPUColumn>(table->columns[column_ids[projection_id].GetPrimaryIndex()]);
         if (row_ids) { output_relation.columns[index]->row_ids = row_ids; }
@@ -1924,14 +1924,14 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
     }
   } else {
     // THIS IS FOR INDEX_SCAN
-    SIRIUS_LOG_DEBUG("Running Index Scan with args {}, {}", column_ids.size(), gen_row_id_column);
+    RASTERDB_LOG_DEBUG("Running Index Scan with args {}, {}", column_ids.size(), gen_row_id_column);
     for (int col = 0; col < column_ids.size() - gen_row_id_column; col++) {
       auto column_id = column_ids[col];
-      SIRIUS_LOG_DEBUG(
+      RASTERDB_LOG_DEBUG(
         "Reading column index (late materialized) {} and passing it to index in output relation {}",
         column_id.GetPrimaryIndex(),
         index);
-      SIRIUS_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
+      RASTERDB_LOG_DEBUG("Writing row IDs to output relation in index {}", index);
       output_relation.columns[index] =
         make_shared_ptr<GPUColumn>(table->columns[column_id.GetPrimaryIndex()]);
       if (row_ids) { output_relation.columns[index]->row_ids = row_ids; }
@@ -1941,7 +1941,7 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
   }
 
   // Create row id column if required
-  SIRIUS_LOG_DEBUG("Running with gen row id of {} and output relationship having {} cols",
+  RASTERDB_LOG_DEBUG("Running with gen row id of {} and output relationship having {} cols",
                    gen_row_id_column,
                    output_relation.columns.size());
   if (gen_row_id_column) {
@@ -1971,7 +1971,7 @@ SourceResultType GPUPhysicalTableScan::GetData(GPUIntermediateRelation& output_r
   // measure time
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Table Scan time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Table Scan time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 

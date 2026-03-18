@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 #include <memory>
 #include <string>
 
-namespace sirius {
+namespace rasterdb {
 namespace util {
 
 namespace {
@@ -152,16 +152,16 @@ void install_segfault_backtrace_handler()
 }
 
 }  // namespace util
-}  // namespace sirius
+}  // namespace rasterdb
 
 #else
 
-namespace sirius {
+namespace rasterdb {
 namespace util {
 
 void install_segfault_backtrace_handler() { (void)0; }
 
 }  // namespace util
-}  // namespace sirius
+}  // namespace rasterdb
 
 #endif

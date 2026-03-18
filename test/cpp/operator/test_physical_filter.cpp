@@ -26,13 +26,13 @@
 #include <op/sirius_physical_filter.hpp>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 }  // namespace
 
 TEMPLATE_TEST_CASE("sirius_physical_filter executes on data_batch for multiple numeric types",
@@ -50,7 +50,7 @@ TEMPLATE_TEST_CASE("sirius_physical_filter executes on data_batch for multiple n
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

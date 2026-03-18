@@ -82,7 +82,7 @@
 inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort = true)
 {
   if (code != cudaSuccess) {
-    SIRIUS_LOG_ERROR("GPUassert: {} {} {}\n", cudaGetErrorString(code), file, line);
+    RASTERDB_LOG_ERROR("GPUassert: {} {} {}\n", cudaGetErrorString(code), file, line);
     if (abort) exit(code);
   }
 }
@@ -120,7 +120,7 @@ inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort =
     cudaEventSynchronize(stop);                           \
     float elapsedTime = 0;                                \
     cudaEventElapsedTime(&elapsedTime, start, stop);      \
-    SIRIUS_LOG_DEBUG("{} : {}", timer_name, elapsedTime); \
+    RASTERDB_LOG_DEBUG("{} : {}", timer_name, elapsedTime); \
   }
 
 #define BLOCK_THREADS    128

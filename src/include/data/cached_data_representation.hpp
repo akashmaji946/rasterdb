@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 
 template <typename T>
 concept data_representation = std::derived_from<T, cucascade::idata_representation>;
@@ -100,4 +100,4 @@ using cached_host_parquet_representation =
 using cached_host_data_representation =
   cached_shared_representation<cucascade::host_data_representation>;
 
-}  // namespace sirius
+}  // namespace rasterdb

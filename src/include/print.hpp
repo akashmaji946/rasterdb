@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ void printGPUTable(GPUIntermediateRelation& table, ClientContext& context);
 
 }  // namespace duckdb
 
-namespace sirius {
+namespace rasterdb {
 
 /**
  * Print the contents of a cudf::table_view to stdout (printf).
@@ -48,4 +48,4 @@ void print_table_contents(cudf::table_view const& table, cudf::size_type max_row
  */
 void print_data_batch_contents(cucascade::data_batch const& batch, cudf::size_type max_rows = 20);
 
-}  // namespace sirius
+}  // namespace rasterdb

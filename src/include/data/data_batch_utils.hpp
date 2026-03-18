@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 #include <optional>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 
 /**
  * @brief Global atomic counter for generating unique data batch IDs.
@@ -87,4 +87,4 @@ inline std::shared_ptr<cucascade::data_batch> make_data_batch(
   return std::make_shared<cucascade::data_batch>(get_next_batch_id(), std::move(gpu_repr));
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

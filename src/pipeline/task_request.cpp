@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 #include "pipeline/task_request.hpp"
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 void task_request_queue::open()
@@ -59,4 +59,4 @@ std::unique_ptr<task_request> task_request_queue::pull()
 }
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

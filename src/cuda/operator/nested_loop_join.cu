@@ -211,11 +211,11 @@ void nestedLoopJoin(T** left_data,
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Nested Loop Join Kernel");
-  // SIRIUS_LOG_DEBUG("left size: {} right size : {}", left_size, right_size);
+  RASTERDB_LOG_DEBUG("Launching Nested Loop Join Kernel");
+  // RASTERDB_LOG_DEBUG("left size: {} right size : {}", left_size, right_size);
   int tile_items = BLOCK_THREADS * 1;
   count          = gpuBufferManager->customCudaMalloc<uint64_t>(1, 0, 0);
   cudaMemset(count, 0, sizeof(uint64_t));
@@ -238,7 +238,7 @@ void nestedLoopJoin(T** left_data,
   uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
   cudaMemcpy(h_count, count, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   assert(h_count[0] > 0);
-  SIRIUS_LOG_DEBUG("Nested Loop Join Result Count: {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("Nested Loop Join Result Count: {}", h_count[0]);
 
   row_ids_left  = gpuBufferManager->customCudaMalloc<uint64_t>(h_count[0], 0, 0);
   row_ids_right = gpuBufferManager->customCudaMalloc<uint64_t>(h_count[0], 0, 0);

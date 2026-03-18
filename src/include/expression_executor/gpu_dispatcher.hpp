@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 #include <tuple>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 enum class StringMatchingType : uint8_t { LIKE, NOT_LIKE, CONTAINS, PREFIX, SUFFIX };
 
@@ -63,5 +63,5 @@ struct GpuDispatcher {
     rmm::cuda_stream_view stream = rmm::cuda_stream_default);
 };
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

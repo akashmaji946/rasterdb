@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 #pragma once
 
-namespace sirius {
+namespace rasterdb {
 namespace util {
 
 /**
@@ -45,4 +45,4 @@ void disable_log_on_default_stream() noexcept;
 void set_stream_check_log_file(const char* path) noexcept;
 
 }  // namespace util
-}  // namespace sirius
+}  // namespace rasterdb

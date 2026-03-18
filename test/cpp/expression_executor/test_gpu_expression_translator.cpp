@@ -194,9 +194,9 @@ std::unique_ptr<cudf::table> make_float32_table(std::vector<float> const& values
 // Translator helper
 //===----------------------------------------------------------------------===//
 
-::sirius::gpu_expression_translator make_translator()
+::rasterdb::gpu_expression_translator make_translator()
 {
-  return ::sirius::gpu_expression_translator(stream, mr);
+  return ::rasterdb::gpu_expression_translator(stream, mr);
 }
 
 duckdb::JoinCondition make_reference_join_condition(duckdb::ExpressionType comparison)

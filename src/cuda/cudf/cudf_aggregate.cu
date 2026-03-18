@@ -48,7 +48,7 @@ void cudf_aggregate(vector<shared_ptr<GPUColumn>>& column,
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   cudf::set_current_device_resource(gpuBufferManager->mr);
   if (column[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     for (int agg_idx = 0; agg_idx < num_aggregates; agg_idx++) {
       if (agg_mode[agg_idx] == AggregationType::COUNT_STAR ||
           agg_mode[agg_idx] == AggregationType::COUNT ||
@@ -69,8 +69,8 @@ void cudf_aggregate(vector<shared_ptr<GPUColumn>>& column,
     return;
   }
 
-  SIRIUS_LOG_DEBUG("CUDF Aggregate");
-  SIRIUS_LOG_DEBUG("Input size: {}", column[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF Aggregate");
+  RASTERDB_LOG_DEBUG("Input size: {}", column[0]->column_length);
   SETUP_TIMING();
   START_TIMER();
 

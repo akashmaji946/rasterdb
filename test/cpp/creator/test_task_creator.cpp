@@ -33,15 +33,15 @@
 #include <thread>
 #include <vector>
 
-using namespace sirius::creator;
-using namespace sirius::exec;
-using namespace sirius::parallel;
-using namespace sirius::pipeline;
-using namespace sirius::op::scan;
+using namespace rasterdb::creator;
+using namespace rasterdb::exec;
+using namespace rasterdb::parallel;
+using namespace rasterdb::pipeline;
+using namespace rasterdb::op::scan;
 using namespace std::chrono_literals;
-using namespace sirius::op;
-using namespace sirius;
-using sirius::sirius_pipeline_hashmap;
+using namespace rasterdb::op;
+using namespace rasterdb;
+using rasterdb::sirius_pipeline_hashmap;
 
 //===----------------------------------------------------------------------===//
 // Mock GPU Physical Operator
@@ -67,7 +67,7 @@ class mock_sirius_physical_operator : public sirius_physical_operator {
    * When custom hint mode is enabled, get_next_task_hint() returns the
    * configured hint instead of computing one from ports.
    */
-  void set_custom_hint(std::optional<sirius::op::task_creation_hint> hint)
+  void set_custom_hint(std::optional<rasterdb::op::task_creation_hint> hint)
   {
     _use_custom_hint = true;
     _custom_hint     = std::move(hint);
@@ -90,7 +90,7 @@ class mock_sirius_physical_operator : public sirius_physical_operator {
 
  private:
   bool _use_custom_hint;
-  std::optional<sirius::op::task_creation_hint> _custom_hint;
+  std::optional<rasterdb::op::task_creation_hint> _custom_hint;
 };
 
 /**
@@ -101,7 +101,7 @@ class mock_sirius_physical_operator : public sirius_physical_operator {
  */
 class mock_gpu_pipeline : public sirius_pipeline {
  public:
-  explicit mock_gpu_pipeline(sirius_engine& engine) : sirius_pipeline(engine), _finished(false) {}
+  explicit mock_gpu_pipeline(rasterdb_engine& engine) : sirius_pipeline(engine), _finished(false) {}
 
   void set_finished(bool finished) { _finished = finished; }
 
@@ -114,7 +114,7 @@ class mock_gpu_pipeline : public sirius_pipeline {
 /**
  * @brief A mock GPU pipeline for testing.
  *
- * This requires a sirius_engine reference, so we use a factory pattern
+ * This requires a rasterdb_engine reference, so we use a factory pattern
  * to create test pipelines when we have the necessary context.
  */
 class mock_pipeline_builder {
@@ -122,7 +122,7 @@ class mock_pipeline_builder {
   /**
    * @brief Create a mock pipeline with specified source and operators.
    *
-   * Since sirius_pipeline requires sirius_engine, we set up ports directly
+   * Since sirius_pipeline requires rasterdb_engine, we set up ports directly
    * on operators to control get_next_task_hint() behavior.
    */
   static void setup_operator_with_pipeline_port(mock_sirius_physical_operator& op,
@@ -157,7 +157,7 @@ class testable_task_creator : public task_creator {
                         sirius_pipeline_hashmap& gpu_pipeline_map,
                         duckdb::ClientContext& client_context,
                         pipeline_executor& pipeline_executor,
-                        sirius::memory::sirius_memory_reservation_manager& mem_res_mgr)
+                        rasterdb::memory::sirius_memory_reservation_manager& mem_res_mgr)
     : task_creator(
         exec::thread_pool_config{.num_threads = num_threads, .thread_name_prefix = "task_creator"},
         mem_res_mgr)
@@ -239,7 +239,7 @@ class test_fixture {
 
         // Build configuration with topology detection
         auto space_configs = builder.build();
-        return std::make_unique<sirius::memory::sirius_memory_reservation_manager>(
+        return std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(
           std::move(space_configs));
       }()),
       pipeline_exec(exec::thread_pool_config{.num_threads = 1},
@@ -261,11 +261,11 @@ class test_fixture {
   duckdb::DuckDB db;
   duckdb::Connection con;
   sirius_interface sirius_iface;
-  std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> memory_manager;
-  sirius_engine engine;
+  std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> memory_manager;
+  rasterdb_engine engine;
   pipeline_executor pipeline_exec;
   duckdb::vector<duckdb::shared_ptr<sirius_pipeline>> empty_pipelines;
-  sirius::sirius_pipeline_hashmap pipeline_map;
+  rasterdb::sirius_pipeline_hashmap pipeline_map;
 };
 
 //===----------------------------------------------------------------------===//
@@ -443,7 +443,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //   // When hint is a pipeline, process_next_task should call itself with
 //   // pipeline->GetInnerOperators()[0]
 //   //
-//   // Since sirius_pipeline requires sirius_engine and complex setup, we test this
+//   // Since sirius_pipeline requires rasterdb_engine and complex setup, we test this
 //   // behavior indirectly by verifying that the source operator's
 //   // get_next_task_hint() is called and the scheduling logic follows through.
 
@@ -454,7 +454,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //   // Create an operator chain: source_op returns a custom hint that is monostate
 //   // (simulating the end of recursion)
 //   auto source_op = std::make_unique<mock_sirius_physical_operator>();
-//   source_op->set_custom_hint(sirius::creator::task_creation_hint(std::monostate{}));
+//   source_op->set_custom_hint(rasterdb::creator::task_creation_hint(std::monostate{}));
 
 //   // Call process_next_task - with monostate and no priority_scans, nothing scheduled
 //   creator.process_next_task(source_op.get());
@@ -469,7 +469,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //     *ready_op, "default", MemoryBarrierType::PIPELINE, data_repo.get(), nullptr, nullptr);
 
 //   // Configure ready_op to return itself as hint (all ports ready)
-//   ready_op->set_custom_hint(sirius::creator::task_creation_hint(ready_op.get()));
+//   ready_op->set_custom_hint(rasterdb::creator::task_creation_hint(ready_op.get()));
 
 //   creator.clear_scheduled();
 //   creator.process_next_task(ready_op.get());
@@ -501,7 +501,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //     *target_op, "default", MemoryBarrierType::PIPELINE, data_repo.get(), nullptr, nullptr);
 
 //   // Source returns target as hint
-//   source_op->set_custom_hint(sirius::creator::task_creation_hint(target_op.get()));
+//   source_op->set_custom_hint(rasterdb::creator::task_creation_hint(target_op.get()));
 
 //   creator.process_next_task(source_op.get());
 
@@ -532,7 +532,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //     *op2, "default", MemoryBarrierType::PIPELINE, data_repo.get(), nullptr, nullptr);
 
 //   // op1 returns op2 as hint
-//   op1->set_custom_hint(sirius::creator::task_creation_hint(op2.get()));
+//   op1->set_custom_hint(rasterdb::creator::task_creation_hint(op2.get()));
 
 //   creator.process_next_task(op1.get());
 
@@ -692,7 +692,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //   mock_sirius_physical_operator target_op;
 
 //   // Set custom hint to return target_op
-//   source_op.set_custom_hint(sirius::creator::task_creation_hint(&target_op));
+//   source_op.set_custom_hint(rasterdb::creator::task_creation_hint(&target_op));
 
 //   auto hint = source_op.get_next_task_hint();
 //   REQUIRE(std::holds_alternative<sirius_physical_operator*>(hint));
@@ -704,7 +704,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //   mock_sirius_physical_operator op;
 
 //   // Set custom hint to monostate
-//   op.set_custom_hint(sirius::creator::task_creation_hint(std::monostate{}));
+//   op.set_custom_hint(rasterdb::creator::task_creation_hint(std::monostate{}));
 
 //   auto hint = op.get_next_task_hint();
 //   REQUIRE(std::holds_alternative<std::monostate>(hint));
@@ -715,7 +715,7 @@ TEST_CASE("get_operator_for_next_task for operator with data returns the operato
 //   mock_sirius_physical_operator op;
 
 //   // Set and then clear custom hint
-//   op.set_custom_hint(sirius::creator::task_creation_hint(&op));
+//   op.set_custom_hint(rasterdb::creator::task_creation_hint(&op));
 //   op.clear_custom_hint();
 
 //   // With no ports and no custom hint, should return monostate (default behavior)

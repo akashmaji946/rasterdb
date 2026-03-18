@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 
 #include <string>
 
-namespace sirius {
+namespace rasterdb {
 
 class extension_lock {
  public:
@@ -38,4 +38,4 @@ class extension_lock {
   int fd_ = -1;
 };
 
-}  // namespace sirius
+}  // namespace rasterdb

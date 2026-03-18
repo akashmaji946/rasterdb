@@ -22,13 +22,13 @@
 #include <op/sirius_physical_projection.hpp>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 }  // namespace
 
 TEMPLATE_TEST_CASE("sirius_physical_projection executes on data_batch for multiple types",
@@ -46,7 +46,7 @@ TEMPLATE_TEST_CASE("sirius_physical_projection executes on data_batch for multip
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -106,7 +106,7 @@ TEMPLATE_TEST_CASE("sirius_physical_projection can drop columns",
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -148,7 +148,7 @@ TEMPLATE_TEST_CASE("sirius_physical_projection can duplicate/reorder columns",
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

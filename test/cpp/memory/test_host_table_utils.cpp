@@ -56,7 +56,7 @@
 #include <string>
 #include <vector>
 
-using namespace sirius::op::scan;
+using namespace rasterdb::op::scan;
 using namespace cucascade::memory;
 
 namespace {
@@ -68,7 +68,7 @@ std::filesystem::path get_test_config_path()
   return std::filesystem::path(__FILE__).parent_path() / "memory.cfg";
 }
 
-memory_space* get_memory_space(duckdb::shared_ptr<duckdb::SiriusContext> sirius_ctx,
+memory_space* get_memory_space(duckdb::shared_ptr<duckdb::RasterDBContext> sirius_ctx,
                                cucascade::memory::Tier tier,
                                int device_id)
 {
@@ -326,7 +326,7 @@ size_t estimate_packed_data_bytes(cudf::table_view const& view)
 }
 
 cucascade::host_data_representation const& convert_to_host_table(
-  duckdb::shared_ptr<duckdb::SiriusContext> sirius_ctx,
+  duckdb::shared_ptr<duckdb::RasterDBContext> sirius_ctx,
   std::shared_ptr<cucascade::data_batch> const& batch,
   rmm::cuda_stream_view stream)
 {
@@ -337,7 +337,7 @@ cucascade::host_data_representation const& convert_to_host_table(
 
   auto reservation =
     manager.request_reservation(any_memory_space_in_tier{Tier::HOST},
-                                estimate_packed_data_bytes(sirius::get_cudf_table_view(*batch)));
+                                estimate_packed_data_bytes(rasterdb::get_cudf_table_view(*batch)));
 
   if (!reservation) { throw std::runtime_error("Failed to reserve host memory for test"); }
 
@@ -345,7 +345,7 @@ cucascade::host_data_representation const& convert_to_host_table(
 
   if (!host_space) { throw std::runtime_error("Invalid host memory space in test"); }
 
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
   batch->convert_to<cucascade::host_data_representation>(registry, host_space, stream);
 
   data = batch->get_data();
@@ -358,8 +358,8 @@ cucascade::host_data_representation const& convert_to_host_table(
 TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
           "[memory][host_table_utils][shared_context]")
 {
-  auto [db_owner, con] = sirius::make_test_db_and_connection();
-  auto sirius_ctx      = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con] = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx      = rasterdb::get_rasterdb_context(con, get_test_config_path());
 
   auto* host_space = get_memory_space(sirius_ctx, Tier::HOST, 0);
   REQUIRE(host_space != nullptr);
@@ -375,7 +375,7 @@ TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
   size_t total_size     = 0;
   auto const block_size = allocator->get_block_size();
   while (true) {
-    mask_bytes = sirius::utils::ceil_div_8(num_rows);
+    mask_bytes = rasterdb::utils::ceil_div_8(num_rows);
     total_size = num_rows * sizeof(int32_t) + mask_bytes + (num_rows + 1) * sizeof(int64_t) +
                  num_rows * kDefaultVarcharSize + mask_bytes + num_rows * sizeof(int64_t) +
                  mask_bytes;
@@ -472,12 +472,12 @@ TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
   auto host_table =
     std::make_unique<cucascade::host_data_representation>(std::move(table_allocation), host_space);
   auto batch =
-    std::make_shared<cucascade::data_batch>(sirius::get_next_batch_id(), std::move(host_table));
+    std::make_shared<cucascade::data_batch>(rasterdb::get_next_batch_id(), std::move(host_table));
 
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
   batch->convert_to<cucascade::gpu_table_representation>(registry, gpu_space, stream);
 
-  cudf::table_view table_view = sirius::get_cudf_table_view(*batch);
+  cudf::table_view table_view = rasterdb::get_cudf_table_view(*batch);
   REQUIRE(table_view.num_rows() == static_cast<cudf::size_type>(num_rows));
   REQUIRE(table_view.num_columns() == 3);
   REQUIRE(table_view.column(0).type().id() == cudf::type_id::INT32);
@@ -492,8 +492,8 @@ TEST_CASE("host_table_utils - pack metadata with gaps across multiple blocks",
 TEST_CASE("host_table_utils - underfilled varchar column truncates rows",
           "[memory][host_table_utils][shared_context]")
 {
-  auto [db_owner, con] = sirius::make_test_db_and_connection();
-  auto sirius_ctx      = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con] = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx      = rasterdb::get_rasterdb_context(con, get_test_config_path());
 
   auto* host_space = get_memory_space(sirius_ctx, Tier::HOST, 0);
   REQUIRE(host_space != nullptr);
@@ -510,7 +510,7 @@ TEST_CASE("host_table_utils - underfilled varchar column truncates rows",
   size_t total_size                  = 0;
   auto const block_size              = allocator->get_block_size();
   while (true) {
-    mask_bytes = sirius::utils::ceil_div_8(num_rows_expected);
+    mask_bytes = rasterdb::utils::ceil_div_8(num_rows_expected);
     total_size = num_rows_expected * sizeof(int32_t) + mask_bytes +
                  (num_rows_expected + 1) * sizeof(int64_t) + num_rows_expected * kSmallVarcharSize +
                  mask_bytes;
@@ -597,12 +597,12 @@ TEST_CASE("host_table_utils - underfilled varchar column truncates rows",
   auto host_table =
     std::make_unique<cucascade::host_data_representation>(std::move(table_allocation), host_space);
   auto batch =
-    std::make_shared<cucascade::data_batch>(sirius::get_next_batch_id(), std::move(host_table));
+    std::make_shared<cucascade::data_batch>(rasterdb::get_next_batch_id(), std::move(host_table));
 
-  auto& registry = sirius::converter_registry::get();
+  auto& registry = rasterdb::converter_registry::get();
   batch->convert_to<cucascade::gpu_table_representation>(registry, gpu_space, stream);
 
-  cudf::table_view table_view = sirius::get_cudf_table_view(*batch);
+  cudf::table_view table_view = rasterdb::get_cudf_table_view(*batch);
   REQUIRE(table_view.num_rows() == static_cast<cudf::size_type>(rows_fit));
   REQUIRE(table_view.num_columns() == 2);
   REQUIRE(table_view.column(0).type().id() == cudf::type_id::INT32);
@@ -616,8 +616,8 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
           "[memory][host_table_utils][shared_context]")
 {
   constexpr size_t num_rows = 257;
-  auto [db_owner, con]      = sirius::make_test_db_and_connection();
-  auto sirius_ctx           = sirius::get_sirius_context(con, get_test_config_path());
+  auto [db_owner, con]      = rasterdb::make_test_db_and_connection();
+  auto sirius_ctx           = rasterdb::get_rasterdb_context(con, get_test_config_path());
 
   auto* gpu_space = get_memory_space(sirius_ctx, Tier::GPU, 0);
   REQUIRE(gpu_space != nullptr);
@@ -631,12 +631,12 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
     std::make_pair(0, 100), std::make_pair(1000, 2000), std::make_pair(0, 100)};
 
   auto table =
-    sirius::create_cudf_table_with_random_data(num_rows, column_types, ranges, stream, mr, true);
+    rasterdb::create_cudf_table_with_random_data(num_rows, column_types, ranges, stream, mr, true);
   auto int64_nulls  = build_null_indices(num_rows, {0, 7, 8, 63, 255});
   auto string_nulls = build_null_indices(num_rows, {1, 9, 64, 128, 256});
   apply_null_mask(table->get_column(1), int64_nulls, stream, mr);
   apply_null_mask(table->get_column(2), string_nulls, stream, mr);
-  auto batch = sirius::make_data_batch(std::move(table), *gpu_space);
+  auto batch = rasterdb::make_data_batch(std::move(table), *gpu_space);
 
   expected_table_data expected;
   std::vector<uint8_t> expected_int64_mask;
@@ -647,7 +647,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
     REQUIRE(lock_result.success);
     auto handle = std::move(lock_result.handle);
 
-    auto const gpu_view  = sirius::get_cudf_table_view(*batch);
+    auto const gpu_view  = rasterdb::get_cudf_table_view(*batch);
     expected             = extract_expected_data(gpu_view);
     expected_int64_mask  = extract_mask_bytes(gpu_view.column(1));
     expected_string_mask = extract_mask_bytes(gpu_view.column(2));
@@ -667,7 +667,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
   REQUIRE(cols[2].null_count == static_cast<cudf::size_type>(string_nulls.size()));
   REQUIRE(cols[2].has_null_mask);
 
-  sirius::memory::multiple_blocks_allocation_accessor<int32_t> int32_accessor;
+  rasterdb::memory::multiple_blocks_allocation_accessor<int32_t> int32_accessor;
   int32_accessor.initialize(cols[0].data_offset, allocation);
   std::vector<int32_t> actual_int32(num_rows);
   if (num_rows > 0) {
@@ -675,7 +675,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
   }
   REQUIRE(actual_int32 == expected.int32_values);
 
-  sirius::memory::multiple_blocks_allocation_accessor<int64_t> int64_accessor;
+  rasterdb::memory::multiple_blocks_allocation_accessor<int64_t> int64_accessor;
   int64_accessor.initialize(cols[1].data_offset, allocation);
   std::vector<int64_t> actual_int64(num_rows);
   if (num_rows > 0) {
@@ -683,7 +683,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
   }
   REQUIRE(actual_int64 == expected.int64_values);
 
-  sirius::memory::multiple_blocks_allocation_accessor<uint8_t> mask_accessor;
+  rasterdb::memory::multiple_blocks_allocation_accessor<uint8_t> mask_accessor;
   if (!expected_int64_mask.empty()) {
     std::vector<uint8_t> actual_int64_mask(expected_int64_mask.size(), 0);
     mask_accessor.initialize(cols[1].null_mask_offset, allocation);
@@ -696,7 +696,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
   REQUIRE(string_col.children.size() == 1);
   REQUIRE(string_col.children[0].type_id == cudf::type_id::INT64);
 
-  sirius::memory::multiple_blocks_allocation_accessor<int64_t> offset_accessor;
+  rasterdb::memory::multiple_blocks_allocation_accessor<int64_t> offset_accessor;
   offset_accessor.initialize(string_col.children[0].data_offset, allocation);
   std::vector<int64_t> actual_offsets(num_rows + 1);
   if (num_rows > 0) {
@@ -704,7 +704,7 @@ TEST_CASE("host_table_utils - metadata offsets match packed data",
   }
   REQUIRE(actual_offsets == expected.string_offsets);
 
-  sirius::memory::multiple_blocks_allocation_accessor<uint8_t> chars_accessor;
+  rasterdb::memory::multiple_blocks_allocation_accessor<uint8_t> chars_accessor;
   chars_accessor.initialize(string_col.data_offset, allocation);
   std::vector<char> actual_chars(expected.string_chars.size());
   if (!actual_chars.empty()) {

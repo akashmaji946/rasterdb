@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // standard library
 #include <atomic>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 
 //===----------------------------------------------------------------------===//
 // DuckDB Scan Task Queue
@@ -40,7 +40,7 @@ namespace sirius::op::scan {
  * default configuration for the underlying BlockingConcurrentQueue.
  *
  */
-class duckdb_scan_task_queue : public sirius::parallel::itask_queue {
+class duckdb_scan_task_queue : public rasterdb::parallel::itask_queue {
  public:
   //===----------Constructor & Destructor----------===//
   explicit duckdb_scan_task_queue(size_t num_threads) : _num_threads(num_threads), _queue() {}
@@ -51,7 +51,7 @@ class duckdb_scan_task_queue : public sirius::parallel::itask_queue {
   {
     _is_open.store(true, std::memory_order_release);
     // Drain any remaining items (including nullptr sentinels) from previous close()
-    std::unique_ptr<sirius::parallel::itask> task;
+    std::unique_ptr<rasterdb::parallel::itask> task;
     while (_queue.try_dequeue(task)) {
       // Discard old items
     }
@@ -66,14 +66,14 @@ class duckdb_scan_task_queue : public sirius::parallel::itask_queue {
     }
   }
 
-  void push(std::unique_ptr<sirius::parallel::itask> task) override
+  void push(std::unique_ptr<rasterdb::parallel::itask> task) override
   {
     _queue.enqueue(std::move(task));
   }
 
-  std::unique_ptr<sirius::parallel::itask> pull() override
+  std::unique_ptr<rasterdb::parallel::itask> pull() override
   {
-    std::unique_ptr<sirius::parallel::itask> task;
+    std::unique_ptr<rasterdb::parallel::itask> task;
     while (true) {
       if (_queue.try_dequeue(task)) { return task; }
 
@@ -90,8 +90,8 @@ class duckdb_scan_task_queue : public sirius::parallel::itask_queue {
   //===----------Fields----------===//
   size_t _num_threads;                ///< Number of worker threads (for proper cleanup on close)
   std::atomic<bool> _is_open{false};  ///< Whether the queue is open for pushing/pulling tasks
-  duckdb_moodycamel::BlockingConcurrentQueue<std::unique_ptr<sirius::parallel::itask>>
+  duckdb_moodycamel::BlockingConcurrentQueue<std::unique_ptr<rasterdb::parallel::itask>>
     _queue;  ///< The underlying concurrent queue
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan

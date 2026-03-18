@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ void GPUMetaPipeline::Build(GPUPhysicalOperator& op)
 {
   D_ASSERT(pipelines.size() == 1);
   D_ASSERT(children.empty());
-  // SIRIUS_LOG_DEBUG("op.type = {}", PhysicalOperatorToString(op.type));
+  // RASTERDB_LOG_DEBUG("op.type = {}", PhysicalOperatorToString(op.type));
   op.BuildPipelines(*pipelines.back(), *this);
 }
 

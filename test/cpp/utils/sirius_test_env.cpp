@@ -16,7 +16,7 @@
 
 #include "sirius_test_env.hpp"
 
-namespace sirius::test {
+namespace rasterdb::test {
 
 shared_test_env* g_shared_env      = nullptr;
 shared_test_env* g_integration_env = nullptr;
@@ -36,7 +36,7 @@ shared_test_env::shared_test_env(const std::filesystem::path& config_path)
 
 shared_test_env::~shared_test_env()
 {
-  // Destroy DuckDB — this releases the SiriusContext and the extension lock
+  // Destroy DuckDB — this releases the RasterDBContext and the extension lock
   db_.reset();
 
   // Restore original environment
@@ -53,12 +53,12 @@ void shared_test_env::create_db()
   setenv("SIRIUS_CONFIG_FILE", config_path_.string().c_str(), 1);
 
   // Creating DuckDB triggers the extension load callback, which reads the config,
-  // acquires the extension lock, and creates + initializes the SiriusContext.
+  // acquires the extension lock, and creates + initializes the RasterDBContext.
   db_ = std::make_unique<duckdb::DuckDB>(nullptr);
 
   // Point SIRIUS_CONFIG_FILE to a non-existent path so that any other DuckDB
   // instances created by tests (e.g. operator tests that use their own memory
-  // manager) will NOT attempt to acquire the lock or create a SiriusContext.
+  // manager) will NOT attempt to acquire the lock or create a RasterDBContext.
   // The extension callback's read_config_file_if_exists() returns early when
   // the config file doesn't exist.
   setenv("SIRIUS_CONFIG_FILE", "/nonexistent/sirius_test_shared_env_active.cfg", 1);
@@ -70,15 +70,15 @@ duckdb::DuckDB& shared_test_env::database() { return *db_; }
 
 void shared_test_env::pause()
 {
-  // Destroy DuckDB — releases SiriusContext and extension lock so isolated tests
+  // Destroy DuckDB — releases RasterDBContext and extension lock so isolated tests
   // can create their own DuckDB with a different config.
   db_.reset();
 }
 
 void shared_test_env::resume()
 {
-  // Recreate DuckDB with the shared config — reacquires lock and SiriusContext.
+  // Recreate DuckDB with the shared config — reacquires lock and RasterDBContext.
   create_db();
 }
 
-}  // namespace sirius::test
+}  // namespace rasterdb::test

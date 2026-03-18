@@ -28,7 +28,7 @@
 // standard library
 #include <memory>
 
-using namespace sirius::memory;
+using namespace rasterdb::memory;
 using namespace cucascade::memory;
 
 // Standalone memory resource for testing with custom block size

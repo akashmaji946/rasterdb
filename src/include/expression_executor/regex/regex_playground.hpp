@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 
 #include <rmm/cuda_stream_view.hpp>
 
-namespace sirius {
+namespace rasterdb {
 namespace expression {
 
 class regex_playground {
@@ -32,4 +32,4 @@ class regex_playground {
 };
 
 }  // namespace expression
-}  // namespace sirius
+}  // namespace rasterdb

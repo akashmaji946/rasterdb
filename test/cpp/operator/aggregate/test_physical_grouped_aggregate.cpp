@@ -28,13 +28,13 @@
 #include <algorithm>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 
 }  // namespace
 
@@ -51,7 +51,7 @@ TEMPLATE_TEST_CASE(
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -61,9 +61,9 @@ TEMPLATE_TEST_CASE(
 
   // Create test data with single group key column
   auto [input_table, expected_table] =
-    sirius::test::make_test_data_for_grouped_aggregate<Traits>(num_groups, 1, stream, mr);
+    rasterdb::test::make_test_data_for_grouped_aggregate<Traits>(num_groups, 1, stream, mr);
 
-  std::shared_ptr<data_batch> input_batch = sirius::make_data_batch(std::move(input_table), *space);
+  std::shared_ptr<data_batch> input_batch = rasterdb::make_data_batch(std::move(input_table), *space);
 
   // Create DuckDB context for aggregate function binding
   duckdb::DuckDB db(nullptr);
@@ -71,7 +71,7 @@ TEMPLATE_TEST_CASE(
   auto& context = *con.context;
 
   // Create aggregate expressions: GROUP BY column 0, SUM(column 1)
-  auto agg_result = sirius::test::create_aggregate_expressions<Traits>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<Traits>(
     {0},                      // group_indexes: GROUP BY column 0
     {"min", "max", "count"},  // aggregations: MIN, MAX, COUNT
     {1, 1, 1}                 // agg_indexes: MIN(column 1), MAX(column 1), COUNT(column 1)
@@ -91,7 +91,7 @@ TEMPLATE_TEST_CASE(
 
   // Compare output with expected using the validation utility
   // Sort both tables before comparison since aggregation order is not guaranteed
-  bool tables_match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool tables_match = rasterdb::test::expect_data_batch_equivalent_to_table(
     outputs->get_data_batches()[0], expected_table->view(), true);
   REQUIRE(tables_match);
 }
@@ -107,7 +107,7 @@ TEMPLATE_TEST_CASE("sirius_physical_grouped_aggregate grouped aggregates with AV
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -116,16 +116,16 @@ TEMPLATE_TEST_CASE("sirius_physical_grouped_aggregate grouped aggregates with AV
   std::size_t num_groups = 100;
 
   auto [input_table, expected_table] =
-    sirius::test::make_test_data_for_grouped_aggregate_with_avg<Traits>(num_groups, 1, stream, mr);
+    rasterdb::test::make_test_data_for_grouped_aggregate_with_avg<Traits>(num_groups, 1, stream, mr);
 
-  std::shared_ptr<data_batch> input_batch = sirius::make_data_batch(std::move(input_table), *space);
+  std::shared_ptr<data_batch> input_batch = rasterdb::make_data_batch(std::move(input_table), *space);
 
   duckdb::DuckDB db(nullptr);
   duckdb::Connection con(db);
   auto& context = *con.context;
 
   // AVG is decomposed into SUM + COUNT_VALID internally
-  auto agg_result = sirius::test::create_aggregate_expressions<Traits>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<Traits>(
     {0},                             // GROUP BY column 0
     {"min", "max", "count", "avg"},  // aggregations including AVG
     {1, 1, 1, 1}                     // all on column 1
@@ -165,7 +165,7 @@ TEMPLATE_TEST_CASE(
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space != nullptr);
 
@@ -175,9 +175,9 @@ TEMPLATE_TEST_CASE(
 
   // Create test data with two group key columns
   auto [input_table, expected_table] =
-    sirius::test::make_test_data_for_grouped_aggregate<Traits>(num_groups, 2, stream, mr);
+    rasterdb::test::make_test_data_for_grouped_aggregate<Traits>(num_groups, 2, stream, mr);
 
-  std::shared_ptr<data_batch> input_batch = sirius::make_data_batch(std::move(input_table), *space);
+  std::shared_ptr<data_batch> input_batch = rasterdb::make_data_batch(std::move(input_table), *space);
 
   // Create DuckDB context for aggregate function binding
   duckdb::DuckDB db(nullptr);
@@ -185,7 +185,7 @@ TEMPLATE_TEST_CASE(
   auto& context = *con.context;
 
   // Create aggregate expressions: GROUP BY column 0, SUM(column 1)
-  auto agg_result = sirius::test::create_aggregate_expressions<Traits>(
+  auto agg_result = rasterdb::test::create_aggregate_expressions<Traits>(
     {0, 1},                   // group_indexes: GROUP BY column 0 and 1
     {"min", "max", "count"},  // aggregations: MIN, MAX, COUNT
     {2, 2, 2}                 // agg_indexes: MIN(column 2), MAX(column 2), COUNT(column 2)
@@ -205,7 +205,7 @@ TEMPLATE_TEST_CASE(
 
   // Compare output with expected using the validation utility
   // Sort both tables before comparison since aggregation order is not guaranteed
-  bool tables_match = sirius::test::expect_data_batch_equivalent_to_table(
+  bool tables_match = rasterdb::test::expect_data_batch_equivalent_to_table(
     outputs->get_data_batches()[0], expected_table->view(), true);
   REQUIRE(tables_match);
 }

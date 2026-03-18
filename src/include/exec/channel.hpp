@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 
 #include <memory>
 
-namespace sirius::exec {
+namespace rasterdb::exec {
 
 // Forward declaration
 template <smart_pointer T>
@@ -131,4 +131,4 @@ class channel {
   std::shared_ptr<interruptible_mpmc<T>> _queue;
 };
 
-}  // namespace sirius::exec
+}  // namespace rasterdb::exec

@@ -46,16 +46,16 @@
 #include <thread>
 #include <vector>
 
-using namespace sirius::parallel;
+using namespace rasterdb::parallel;
 using namespace std::chrono_literals;
 
 namespace {
 
 const auto GPU_SPACE_ID = cucascade::memory::memory_space_id(cucascade::memory::Tier::GPU, 0);
 
-std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> make_test_memory_manager()
+std::unique_ptr<rasterdb::memory::sirius_memory_reservation_manager> make_test_memory_manager()
 {
-  sirius::converter_registry::reset_for_testing();
+  rasterdb::converter_registry::reset_for_testing();
 
   cucascade::memory::reservation_manager_configurator builder;
   const size_t gpu_capacity  = 2ull << 30;
@@ -71,14 +71,14 @@ std::unique_ptr<sirius::memory::sirius_memory_reservation_manager> make_test_mem
 
   auto space_configs = builder.build();
   auto manager =
-    std::make_unique<sirius::memory::sirius_memory_reservation_manager>(std::move(space_configs));
+    std::make_unique<rasterdb::memory::sirius_memory_reservation_manager>(std::move(space_configs));
 
-  sirius::converter_registry::initialize();
+  rasterdb::converter_registry::initialize();
   return manager;
 }
 
 cucascade::memory::memory_space* get_gpu_space(
-  sirius::memory::sirius_memory_reservation_manager& mgr)
+  rasterdb::memory::sirius_memory_reservation_manager& mgr)
 {
   auto* space = mgr.get_memory_space(cucascade::memory::Tier::GPU, 0);
   if (space) return space;
@@ -96,9 +96,9 @@ std::shared_ptr<cucascade::data_batch> make_gpu_batch(cucascade::memory::memory_
   std::vector<cudf::data_type> col_types                 = {cudf::data_type{cudf::type_id::INT32}};
   std::vector<std::optional<std::pair<int, int>>> ranges = {std::make_pair(0, 100000)};
 
-  auto table = sirius::create_cudf_table_with_random_data(num_rows, col_types, ranges, stream, mr);
+  auto table = rasterdb::create_cudf_table_with_random_data(num_rows, col_types, ranges, stream, mr);
 
-  return sirius::make_data_batch(std::move(table), gpu_space);
+  return rasterdb::make_data_batch(std::move(table), gpu_space);
 }
 
 /**
@@ -108,7 +108,7 @@ std::shared_ptr<cucascade::data_batch> make_gpu_batch(cucascade::memory::memory_
  */
 downgrade_executor make_test_executor(cucascade::shared_data_repository_manager& repo_mgr,
                                       cucascade::memory::memory_space* gpu_space,
-                                      sirius::memory::sirius_memory_reservation_manager& mem_mgr)
+                                      rasterdb::memory::sirius_memory_reservation_manager& mem_mgr)
 {
   task_executor_config config{1, false};
   return downgrade_executor(config, repo_mgr, GPU_SPACE_ID, gpu_space, mem_mgr);
@@ -154,7 +154,7 @@ TEST_CASE("Single downgrade task executes correctly", "[downgrade_executor]")
   REQUIRE(gpu_space != nullptr);
 
   cucascade::shared_data_repository_manager repo_mgr;
-  sirius::task_completion_message_queue msg_queue;
+  rasterdb::task_completion_message_queue msg_queue;
 
   auto batch = make_gpu_batch(*gpu_space);
   REQUIRE(batch->get_memory_space()->get_tier() == cucascade::memory::Tier::GPU);
@@ -393,7 +393,7 @@ TEST_CASE("run_downgrade_pass skips batches already on HOST", "[downgrade_execut
   repo.add_data_batch(gpu_batch2);
 
   // Pre-downgrade one batch to HOST manually
-  auto& registry   = sirius::converter_registry::get();
+  auto& registry   = rasterdb::converter_registry::get();
   auto* host_space = mem_mgr->get_memory_space(cucascade::memory::Tier::HOST, 0);
   if (!host_space) {
     auto host_spaces = mem_mgr->get_memory_spaces_for_tier(cucascade::memory::Tier::HOST);

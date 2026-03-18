@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ void GPUExecutor::Reset()
 
 void GPUExecutor::Initialize(unique_ptr<GPUPhysicalOperator> plan)
 {
-  SIRIUS_LOG_DEBUG("Initializing GPUExecutor");
+  RASTERDB_LOG_DEBUG("Initializing GPUExecutor");
   Reset();
   gpu_owned_plan = std::move(plan);
   InitializeInternal(*gpu_owned_plan);
@@ -68,7 +68,7 @@ void GPUExecutor::Execute()
   // Execution starts here.
   int initial_idx = 0;
 
-  SIRIUS_LOG_DEBUG("Total meta pipelines {}", scheduled.size());
+  RASTERDB_LOG_DEBUG("Total meta pipelines {}", scheduled.size());
 
   for (const auto& pipeline : scheduled) {
     // TODO: This is temporary solution
@@ -82,7 +82,7 @@ void GPUExecutor::Execute()
     intermediate_relations.reserve(pipeline->operators.size());
     // intermediate_states.reserve(pipeline->operators.size());
 
-    // SIRIUS_LOG_DEBUG("Executing pipeline op size {}", pipeline->operators.size());
+    // RASTERDB_LOG_DEBUG("Executing pipeline op size {}", pipeline->operators.size());
     for (idx_t i = 0; i < pipeline->operators.size(); i++) {
       auto& prev_operator    = i == 0 ? *(pipeline->source) : pipeline->operators[i - 1].get();
       auto& current_operator = pipeline->operators[i].get();
@@ -113,7 +113,7 @@ void GPUExecutor::Execute()
 
     // pipeline->Reset();
     // auto prop = pipeline->executor.context.GetClientProperties();
-    // SIRIUS_LOG_DEBUG("Properties: {}", prop.time_zone);
+    // RASTERDB_LOG_DEBUG("Properties: {}", prop.time_zone);
     auto& source_relation =
       pipeline->operators.empty() ? final_relation : intermediate_relations[0];
     // auto source_result = FetchFromSource(source_chunk);
@@ -125,7 +125,7 @@ void GPUExecutor::Execute()
     // *local_source_state, interrupt_state}; pipeline->source->GetData(exec_context,
     // source_relation, source_input);
     auto source_type = pipeline->source.get()->type;
-    SIRIUS_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
+    RASTERDB_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
     if (source_type == PhysicalOperatorType::TABLE_SCAN) {
       // initialize pipeline
       Pipeline duckdb_pipeline(*executor);
@@ -135,20 +135,20 @@ void GPUExecutor::Execute()
       table_scan.GetDataDuckDB(exec_context);
     }
     pipeline->source->GetData(*source_relation);
-    // SIRIUS_LOG_DEBUG("source relation size {}", source_relation->columns.size());
+    // RASTERDB_LOG_DEBUG("source relation size {}", source_relation->columns.size());
     // for (auto col : source_relation->columns) {
-    // 	SIRIUS_LOG_DEBUG("source relation column size {} column name {}", col->column_length,
+    // 	RASTERDB_LOG_DEBUG("source relation column size {} column name {}", col->column_length,
     // col->name);
     // }
     // EndOperator(*pipeline.source, &result);
 
     // call source
-    //  SIRIUS_LOG_DEBUG("{}", pipeline->source.get()->GetName());
+    //  RASTERDB_LOG_DEBUG("{}", pipeline->source.get()->GetName());
     for (int current_idx = 1; current_idx <= pipeline->operators.size(); current_idx++) {
       auto op      = pipeline->operators[current_idx - 1];
       auto op_type = op.get().type;
-      SIRIUS_LOG_DEBUG("pipeline operator type {}", PhysicalOperatorToString(op_type));
-      // SIRIUS_LOG_DEBUG("{}", op.get().GetName());
+      RASTERDB_LOG_DEBUG("pipeline operator type {}", PhysicalOperatorToString(op_type));
+      // RASTERDB_LOG_DEBUG("{}", op.get().GetName());
       // call operator
 
       auto current_intermediate = current_idx;
@@ -176,16 +176,16 @@ void GPUExecutor::Execute()
     }
     if (pipeline->sink) {
       auto sink_type = pipeline->sink.get()->type;
-      SIRIUS_LOG_DEBUG("pipeline sink type {}", PhysicalOperatorToString(sink_type));
-      // SIRIUS_LOG_DEBUG("{}", pipeline->sink.get()->GetName());
+      RASTERDB_LOG_DEBUG("pipeline sink type {}", PhysicalOperatorToString(sink_type));
+      // RASTERDB_LOG_DEBUG("{}", pipeline->sink.get()->GetName());
       // call sink
       auto& sink_relation = final_relation;
-      // SIRIUS_LOG_DEBUG("sink relation size {}", final_relation->columns.size());
+      // RASTERDB_LOG_DEBUG("sink relation size {}", final_relation->columns.size());
       // int i = 0;
       // for (auto col : final_relation->columns) {
-      // 	if (col == nullptr) SIRIUS_LOG_DEBUG("{}", i);
+      // 	if (col == nullptr) RASTERDB_LOG_DEBUG("{}", i);
       // 	i++;
-      // 	// SIRIUS_LOG_DEBUG("sink relation column size {}", col->column_length);
+      // 	// RASTERDB_LOG_DEBUG("sink relation column size {}", col->column_length);
       // }
       // auto interrupt_state = InterruptState();
       // auto local_sink_state = pipeline->sink->GetLocalSinkState(exec_context);
@@ -233,7 +233,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator& plan)
     // set it here
     total_pipelines = to_schedule.size();
 
-    SIRIUS_LOG_DEBUG("Total meta pipelines {}", to_schedule.size());
+    RASTERDB_LOG_DEBUG("Total meta pipelines {}", to_schedule.size());
     int schedule_count = 0;
     int meta           = 0;
     while (schedule_count < to_schedule.size()) {
@@ -287,7 +287,7 @@ void GPUExecutor::InitializeInternal(GPUPhysicalOperator& plan)
     // collect all pipelines from the root pipelines (recursively) for the progress bar and verify
     // them
     root_pipeline->GetPipelines(pipelines, true);
-    SIRIUS_LOG_DEBUG("total_pipelines = {}", pipelines.size());
+    RASTERDB_LOG_DEBUG("total_pipelines = {}", pipelines.size());
   }
 }
 

@@ -44,13 +44,13 @@ using namespace duckdb;
 using namespace duckdb::sirius;
 using namespace cucascade;
 using namespace cucascade::memory;
-using memory_mgr = ::sirius::memory::sirius_memory_reservation_manager;
+using memory_mgr = ::rasterdb::memory::sirius_memory_reservation_manager;
 
 namespace {
 
 std::unique_ptr<memory_mgr> initialize_memory_manager()
 {
-  ::sirius::converter_registry::reset_for_testing();
+  ::rasterdb::converter_registry::reset_for_testing();
   reservation_manager_configurator builder;
   auto constexpr gpu_capacity  = 256ull << 20;  // 256MB
   auto constexpr host_capacity = 512ull << 20;  // 512MB
@@ -63,7 +63,7 @@ std::unique_ptr<memory_mgr> initialize_memory_manager()
     .set_reservation_fraction_per_host(limit_ratio);
   auto configs = builder.build();
   auto manager = std::make_unique<memory_mgr>(std::move(configs));
-  ::sirius::converter_registry::initialize();
+  ::rasterdb::converter_registry::initialize();
   return manager;
 }
 
@@ -136,10 +136,10 @@ std::shared_ptr<data_batch> make_input_batch(
   const std::vector<std::optional<std::pair<int, int>>>& ranges)
 {
   auto mr    = get_resource_ref(space);
-  auto table = ::sirius::create_cudf_table_with_random_data(
+  auto table = ::rasterdb::create_cudf_table_with_random_data(
     128, column_types, ranges, cudf::get_default_stream(), mr);
   auto gpu_repr = std::make_unique<gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<data_batch>(batch_id, std::move(gpu_repr));
 }
 
@@ -174,7 +174,7 @@ std::shared_ptr<data_batch> make_int32_batch_with_nulls(memory_space& space,
   auto table = std::make_unique<cudf::table>(std::move(cols));
 
   auto gpu_repr = std::make_unique<gpu_table_representation>(std::move(table), space);
-  auto batch_id = ::sirius::get_next_batch_id();
+  auto batch_id = ::rasterdb::get_next_batch_id();
   return std::make_shared<data_batch>(batch_id, std::move(gpu_repr));
 }
 

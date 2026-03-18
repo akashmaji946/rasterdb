@@ -112,7 +112,7 @@ unique_ptr<FunctionData> PlanCheckBind(ClientContext& context,
     resolver.VisitOperator(*plan);
 
     // 5. Translate to Sirius physical plan
-    sirius::planner::sirius_physical_plan_generator gen(context);
+    rasterdb::planner::sirius_physical_plan_generator gen(context);
     auto sirius_plan = gen.create_plan(std::move(plan));
 
     result->success = true;

@@ -31,10 +31,10 @@ void combineColumns(T* a, T* b, T*& c, uint64_t N_a, uint64_t N_b)
 {
   CHECK_ERROR();
   if (N_a == 0 || N_b == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Combine Columns Kernel");
+  RASTERDB_LOG_DEBUG("Launching Combine Columns Kernel");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   c                                  = gpuBufferManager->customCudaMalloc<T>(N_a + N_b, 0, 0);
   cudaMemcpyAsync(
@@ -68,10 +68,10 @@ void combineMasks(
 {
   CHECK_ERROR();
   if (N_a == 0 || N_b == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Combine Columns Kernel");
+  RASTERDB_LOG_DEBUG("Launching Combine Columns Kernel");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   auto size_a                        = getMaskBytesSize(N_a) / sizeof(cudf::bitmask_type);
   auto size_c                        = getMaskBytesSize(N_a + N_b) / sizeof(cudf::bitmask_type);
@@ -135,7 +135,7 @@ void combineStrings(uint8_t* a,
 {
   CHECK_ERROR();
   if (N_a == 0 || N_b == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
@@ -172,7 +172,7 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
                   idx_t estimated_output_groups)
 {
   if (keys[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     for (idx_t group = 0; group < num_keys; group++) {
       bool old_unique = keys[group]->is_unique;
       if (keys[group]->data_wrapper.type.id() == GPUColumnTypeId::VARCHAR) {
@@ -207,8 +207,8 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
     }
     return;
   }
-  SIRIUS_LOG_DEBUG("CUDF Group By");
-  SIRIUS_LOG_DEBUG("Input size: {}", keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF Group By");
+  RASTERDB_LOG_DEBUG("Input size: {}", keys[0]->column_length);
 
   SETUP_TIMING();
   START_TIMER();
@@ -248,7 +248,7 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
     }
 
     if (num_cd == num_aggregates && num_cd > 0) {
-      SIRIUS_LOG_DEBUG("Two-phase COUNT DISTINCT: {} aggregates", num_cd);
+      RASTERDB_LOG_DEBUG("Two-phase COUNT DISTINCT: {} aggregates", num_cd);
       for (int agg = 0; agg < num_aggregates; agg++) {
         auto value_view = aggregate_keys[agg]->convertToCudfColumn();
         std::vector<cudf::column_view> dedup_columns;
@@ -280,7 +280,7 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
                                               rmm::cuda_stream_default,
                                               gpuBufferManager->mr);
 
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Two-phase COUNT DISTINCT: {} -> {} after distinct", size, distinct_result->num_rows());
 
         std::vector<cudf::column_view> dedup_keys_views;
@@ -320,7 +320,7 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
                                                          validity_mask);
       }
       STOP_TIMER();
-      SIRIUS_LOG_DEBUG("CUDF Groupby (two-phase COUNT DISTINCT) result count: {}",
+      RASTERDB_LOG_DEBUG("CUDF Groupby (two-phase COUNT DISTINCT) result count: {}",
                        keys[0]->column_length);
       return;
     }
@@ -445,7 +445,7 @@ void cudf_groupby(vector<shared_ptr<GPUColumn>>& keys,
   }
 
   STOP_TIMER();
-  SIRIUS_LOG_DEBUG("CUDF Groupby result count: {}", keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF Groupby result count: {}", keys[0]->column_length);
 }
 
 template void combineColumns<int32_t>(

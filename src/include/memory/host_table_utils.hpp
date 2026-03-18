@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 
 /**
  * @brief Metadata node structure for serializing cudf column metadata.
@@ -242,4 +242,4 @@ inline std::vector<metadata_node> unpack_metadata_to_nodes(
   return nodes;
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

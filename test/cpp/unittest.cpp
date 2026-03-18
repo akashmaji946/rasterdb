@@ -34,7 +34,7 @@ using namespace duckdb;
  * Only one shared environment can be active at a time (each owns the extension
  * lock).  The listener uses a transition-based design: it pauses the wrong
  * environment and resumes the right one in testCaseStarting, so consecutive
- * tests of the same type share a single DuckDB/SiriusContext instance without
+ * tests of the same type share a single DuckDB/RasterDBContext instance without
  * any intermediate teardown.
  *
  *   [shared_context]  → g_shared_env      (scan/operator unit tests)
@@ -60,23 +60,23 @@ struct shared_env_listener : Catch::TestEventListenerBase {
     auto needs = classify(info);
 
     // Pause environments that should not be active for this test
-    if (needs != env_need::SHARED && sirius::test::g_shared_env &&
-        sirius::test::g_shared_env->is_active()) {
-      sirius::test::g_shared_env->pause();
+    if (needs != env_need::SHARED && rasterdb::test::g_shared_env &&
+        rasterdb::test::g_shared_env->is_active()) {
+      rasterdb::test::g_shared_env->pause();
     }
-    if (needs != env_need::INTEGRATION && sirius::test::g_integration_env &&
-        sirius::test::g_integration_env->is_active()) {
-      sirius::test::g_integration_env->pause();
+    if (needs != env_need::INTEGRATION && rasterdb::test::g_integration_env &&
+        rasterdb::test::g_integration_env->is_active()) {
+      rasterdb::test::g_integration_env->pause();
     }
 
     // Resume the environment this test needs
-    if (needs == env_need::SHARED && sirius::test::g_shared_env &&
-        !sirius::test::g_shared_env->is_active()) {
-      sirius::test::g_shared_env->resume();
+    if (needs == env_need::SHARED && rasterdb::test::g_shared_env &&
+        !rasterdb::test::g_shared_env->is_active()) {
+      rasterdb::test::g_shared_env->resume();
     }
-    if (needs == env_need::INTEGRATION && sirius::test::g_integration_env &&
-        !sirius::test::g_integration_env->is_active()) {
-      sirius::test::g_integration_env->resume();
+    if (needs == env_need::INTEGRATION && rasterdb::test::g_integration_env &&
+        !rasterdb::test::g_integration_env->is_active()) {
+      rasterdb::test::g_integration_env->resume();
     }
   }
 };
@@ -86,7 +86,7 @@ CATCH_REGISTER_LISTENER(shared_env_listener)
 int main(int argc, char* argv[])
 {
   // Initialize the logger
-  std::string log_dir = SIRIUS_UNITTEST_LOG_DIR;
+  std::string log_dir = RASTERDB_UNITTEST_LOG_DIR;
   InitGlobalLogger(log_dir + "/sirius_unittest.log");
 
   // Create shared test environments. Both start PAUSED and are only activated
@@ -94,23 +94,23 @@ int main(int argc, char* argv[])
   // conflicts with operator tests that use their own memory managers.
   // Only one environment can be active at a time (each owns the extension lock).
   auto scan_config_path =
-    std::filesystem::path(SIRIUS_PROJECT_ROOT) / "test" / "cpp" / "scan" / "memory.cfg";
-  sirius::test::shared_test_env scan_env(scan_config_path);
+    std::filesystem::path(RASTERDB_PROJECT_ROOT) / "test" / "cpp" / "scan" / "memory.cfg";
+  rasterdb::test::shared_test_env scan_env(scan_config_path);
   scan_env.pause();
-  sirius::test::g_shared_env = &scan_env;
+  rasterdb::test::g_shared_env = &scan_env;
 
   auto integration_config_path =
-    std::filesystem::path(SIRIUS_PROJECT_ROOT) / "test" / "cpp" / "integration" / "integration.cfg";
-  sirius::test::shared_test_env integration_env(integration_config_path);
+    std::filesystem::path(RASTERDB_PROJECT_ROOT) / "test" / "cpp" / "integration" / "integration.cfg";
+  rasterdb::test::shared_test_env integration_env(integration_config_path);
   integration_env.pause();
-  sirius::test::g_integration_env = &integration_env;
+  rasterdb::test::g_integration_env = &integration_env;
 
   Catch::Session session;
   session.applyCommandLine(argc, argv);
   int result = session.run();
 
-  sirius::test::g_integration_env = nullptr;
-  sirius::test::g_shared_env      = nullptr;
+  rasterdb::test::g_integration_env = nullptr;
+  rasterdb::test::g_shared_env      = nullptr;
 
   std::fflush(stdout);
   std::fflush(stderr);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,14 +28,14 @@ void HandleAggregateExpressionCuDF(vector<shared_ptr<GPUColumn>>& aggregate_keys
 {
   AggregationType* agg_mode =
     gpuBufferManager->customCudaHostAlloc<AggregationType>(aggregates.size());
-  SIRIUS_LOG_DEBUG("Handling ungrouped aggregate expression");
+  RASTERDB_LOG_DEBUG("Handling ungrouped aggregate expression");
   for (int agg_idx = 0; agg_idx < aggregates.size(); agg_idx++) {
     auto& expr = aggregates[agg_idx]->Cast<BoundAggregateExpression>();
     if (expr.IsDistinct()) {
       if (expr.function.name.compare("count") == 0) {
         agg_mode[agg_idx] = AggregationType::COUNT_DISTINCT;
       } else {
-        SIRIUS_LOG_DEBUG("Aggregate function (distinct)  not supported: {}", expr.function.name);
+        RASTERDB_LOG_DEBUG("Aggregate function (distinct)  not supported: {}", expr.function.name);
         throw NotImplementedException("Aggregate function (distinct) not supported");
       }
     } else {
@@ -58,7 +58,7 @@ void HandleAggregateExpressionCuDF(vector<shared_ptr<GPUColumn>>& aggregate_keys
                  aggregate_keys[agg_idx]->data_wrapper.data != nullptr) {
         agg_mode[agg_idx] = AggregationType::SUM;
         if (aggregate_keys[agg_idx]->data_wrapper.type.id() == GPUColumnTypeId::INT32) {
-          SIRIUS_LOG_DEBUG("Converting INT32 to INT64 for sum_no_overflow");
+          RASTERDB_LOG_DEBUG("Converting INT32 to INT64 for sum_no_overflow");
           uint64_t* temp = gpuBufferManager->customCudaMalloc<uint64_t>(
             aggregate_keys[agg_idx]->column_length, 0, 0);
           convertInt32ToInt64(aggregate_keys[agg_idx]->data_wrapper.data,
@@ -90,7 +90,7 @@ void HandleAggregateExpressionCuDF(vector<shared_ptr<GPUColumn>>& aggregate_keys
       } else if (expr.function.name.compare("first") == 0) {
         agg_mode[agg_idx] = AggregationType::FIRST;
       } else {
-        SIRIUS_LOG_DEBUG("Aggregate function (not distinct) not supported: {}", expr.function.name);
+        RASTERDB_LOG_DEBUG("Aggregate function (not distinct) not supported: {}", expr.function.name);
         throw NotImplementedException("Aggregate function (not distinct) not supported");
       }
     }
@@ -131,7 +131,7 @@ GPUPhysicalUngroupedAggregate::GPUPhysicalUngroupedAggregate(
 
 SinkResultType GPUPhysicalUngroupedAggregate::Sink(GPUIntermediateRelation& input_relation) const
 {
-  SIRIUS_LOG_DEBUG("Performing ungrouped aggregation");
+  RASTERDB_LOG_DEBUG("Performing ungrouped aggregation");
   auto start = std::chrono::high_resolution_clock::now();
   vector<shared_ptr<GPUColumn>> aggregate_column(aggregates.size());
   for (int aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
@@ -169,18 +169,18 @@ SinkResultType GPUPhysicalUngroupedAggregate::Sink(GPUIntermediateRelation& inpu
 
     if (aggregate.filter) {
       auto& bound_ref_expr = aggregate.filter->Cast<BoundReferenceExpression>();
-      SIRIUS_LOG_DEBUG("Reading filter column from index {}", bound_ref_expr.index);
+      RASTERDB_LOG_DEBUG("Reading filter column from index {}", bound_ref_expr.index);
     }
 
     idx_t payload_cnt = 0;
 
-    SIRIUS_LOG_DEBUG("Aggregate type: {}", aggregate.function.name);
+    RASTERDB_LOG_DEBUG("Aggregate type: {}", aggregate.function.name);
     if (aggregate.children.size() > 1)
       throw NotImplementedException("Aggregates with multiple children not supported yet");
     for (idx_t i = 0; i < aggregate.children.size(); ++i) {
       for (auto& child_expr : aggregate.children) {
         D_ASSERT(child_expr->type == ExpressionType::BOUND_REF);
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Reading aggregation column from index {} and passing it to index {} in aggregation "
           "result",
           payload_idx + payload_cnt,
@@ -196,7 +196,7 @@ SinkResultType GPUPhysicalUngroupedAggregate::Sink(GPUIntermediateRelation& inpu
     auto& aggregate = aggregates[aggr_idx]->Cast<BoundAggregateExpression>();
     // here we probably have count(*) or sum(*) or something like that
     if (aggregate.children.size() == 0) {
-      SIRIUS_LOG_DEBUG("Passing * aggregate to index {} in aggregation result", aggr_idx);
+      RASTERDB_LOG_DEBUG("Passing * aggregate to index {} in aggregation result", aggr_idx);
       aggregate_column[aggr_idx] = make_shared_ptr<GPUColumn>(
         column_size, GPUColumnType(GPUColumnTypeId::INT64), nullptr, nullptr);
     }
@@ -211,7 +211,7 @@ SinkResultType GPUPhysicalUngroupedAggregate::Sink(GPUIntermediateRelation& inpu
   for (int aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
     // TODO: has to fix this for columns with partially NULL values
     if (aggregation_result->columns[aggr_idx] == nullptr) {
-      SIRIUS_LOG_DEBUG(
+      RASTERDB_LOG_DEBUG(
         "Passing aggregate column {} to aggregation result column {}", aggr_idx, aggr_idx);
       aggregation_result->columns[aggr_idx]               = aggregate_column[aggr_idx];
       aggregation_result->columns[aggr_idx]->row_ids      = nullptr;
@@ -222,20 +222,20 @@ SinkResultType GPUPhysicalUngroupedAggregate::Sink(GPUIntermediateRelation& inpu
         throw NotImplementedException("Combine not implemented yet for ungrouped aggregate");
       } else if (aggregate_column[aggr_idx]->data_wrapper.data != nullptr &&
                  aggregation_result->columns[aggr_idx]->data_wrapper.data == nullptr) {
-        SIRIUS_LOG_DEBUG(
+        RASTERDB_LOG_DEBUG(
           "Passing aggregate column {} to aggregation result column {}", aggr_idx, aggr_idx);
         aggregation_result->columns[aggr_idx]               = aggregate_column[aggr_idx];
         aggregation_result->columns[aggr_idx]->row_ids      = nullptr;
         aggregation_result->columns[aggr_idx]->row_id_count = 0;
       } else {
-        SIRIUS_LOG_DEBUG("Aggregate column {} is null, skipping", aggr_idx);
+        RASTERDB_LOG_DEBUG("Aggregate column {} is null, skipping", aggr_idx);
       }
     }
   }
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Ungrouped aggregate Sink time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Ungrouped aggregate Sink time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 
@@ -244,7 +244,7 @@ SourceResultType GPUPhysicalUngroupedAggregate::GetData(
 {
   auto start = std::chrono::high_resolution_clock::now();
   for (int col = 0; col < aggregation_result->columns.size(); col++) {
-    SIRIUS_LOG_DEBUG("Writing aggregation result to column {}", col);
+    RASTERDB_LOG_DEBUG("Writing aggregation result to column {}", col);
     // output_relation.columns[col] =
     // make_shared_ptr<GPUColumn>(aggregation_result->columns[col]->column_length,
     // aggregation_result->columns[col]->data_wrapper.type,
@@ -254,7 +254,7 @@ SourceResultType GPUPhysicalUngroupedAggregate::GetData(
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Ungrouped aggregate GetData time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Ungrouped aggregate GetData time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 
@@ -273,13 +273,13 @@ void GPUPhysicalUngroupedAggregate::MaterializeDistinctInput(
 
     if (aggregate.filter) {
       auto& bound_ref_expr = aggregate.filter->Cast<BoundReferenceExpression>();
-      SIRIUS_LOG_DEBUG("Reading filter column from index {}", bound_ref_expr.index);
+      RASTERDB_LOG_DEBUG("Reading filter column from index {}", bound_ref_expr.index);
     }
 
     for (idx_t child_idx = 0; child_idx < aggregate.children.size(); child_idx++) {
       auto& child     = aggregate.children[child_idx];
       auto& bound_ref = child->Cast<BoundReferenceExpression>();
-      SIRIUS_LOG_DEBUG(
+      RASTERDB_LOG_DEBUG(
         "Reading aggregation column from index {} and passing it to index {} in groupby result",
         bound_ref.index,
         bound_ref.index);

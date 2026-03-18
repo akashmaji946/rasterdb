@@ -32,14 +32,14 @@
 #include <vector>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
-using sirius::op::operator_data;
+using rasterdb::op::operator_data;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 
 //===----------------------------------------------------------------------===//
 // Hash join fixture for constructing sirius_physical_concat
@@ -110,7 +110,7 @@ hash_join_test_fixture create_test_hash_join(duckdb::JoinType join_type,
  */
 memory_space* get_shared_mem_space()
 {
-  static auto manager = sirius::test::operator_utils::initialize_memory_manager();
+  static auto manager = rasterdb::test::operator_utils::initialize_memory_manager();
   return manager->get_memory_space(Tier::GPU, 0);
 }
 

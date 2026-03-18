@@ -57,10 +57,10 @@
 #include <numeric>
 #include <vector>
 
-using namespace sirius;
+using namespace rasterdb;
 using namespace cucascade::memory;
 using hybrid_scan_reader                = cudf::io::parquet::experimental::hybrid_scan_reader;
-using sirius_memory_reservation_manager = sirius::memory::sirius_memory_reservation_manager;
+using sirius_memory_reservation_manager = rasterdb::memory::sirius_memory_reservation_manager;
 
 //===----------------------------------------------------------------------===//
 // Test Helpers
@@ -469,7 +469,7 @@ TEST_CASE("host_parquet_representation converts to gpu_table_representation",
   REQUIRE(host_space != nullptr);
   REQUIRE(gpu_space != nullptr);
 
-  // This test runs without a SiriusContext so cuDF's global pinned memory resource
+  // This test runs without a RasterDBContext so cuDF's global pinned memory resource
   // may be unset or point to a stale allocator from a previously-paused context.
   // Explicitly install a slab allocator backed by the test's own fixed_size_host_memory_resource
   // so cuDF internal host allocations (e.g. hostdevice_vector) always succeed.

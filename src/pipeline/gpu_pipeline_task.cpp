@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,11 +27,11 @@
 #include <cucascade/memory/memory_space.hpp>
 #include <cucascade/memory/reservation_aware_resource_adaptor.hpp>
 #include <data/data_batch_utils.hpp>
-#include <data/sirius_converter_registry.hpp>
+#include <data/rasterdb_converter_registry.hpp>
 
 #include <optional>
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 namespace {
@@ -55,7 +55,7 @@ std::optional<cucascade::data_batch_processing_handle> lock_or_prepare_batch(
 
   if (!lock_result.success && needs_conversion) {
     try {
-      auto& registry = sirius::converter_registry::get();
+      auto& registry = rasterdb::converter_registry::get();
       switch (requested_memory_space->get_tier()) {
         case cucascade::memory::Tier::GPU: {
           auto prev_state = batch->get_state();
@@ -108,7 +108,7 @@ std::optional<cucascade::data_batch_processing_handle> lock_or_prepare_batch(
 }
 
 void validate_operator_output_types(const op::operator_data* data,
-                                    const op::sirius_physical_operator& op)
+                                    const op::rasterdb_physical_operator& op)
 {
   if (data == nullptr) { return; }
   const auto& expected_types = op.get_types();
@@ -120,7 +120,7 @@ void validate_operator_output_types(const op::operator_data* data,
     if (static_cast<size_t>(tbl.num_columns()) != expected_types.size()) {
       // bobbi (todo): delim join will return this warning for now, but there is no bug here, so we
       // can ignore it. we can do something about this after gtc
-      SIRIUS_LOG_WARN(
+      RASTERDB_LOG_WARN(
         "gpu_pipeline_task: operator '{}' (id={}) output batch {} column count mismatch: got "
         "{}, expected {}",
         op.get_name(),
@@ -134,7 +134,7 @@ void validate_operator_output_types(const op::operator_data* data,
       cudf::data_type expected_cudf = duckdb::GetCudfType(expected_types[c]);
       cudf::data_type actual        = tbl.column(c).type();
       if (actual != expected_cudf) {
-        SIRIUS_LOG_WARN(
+        RASTERDB_LOG_WARN(
           "gpu_pipeline_task: operator '{}' (id={}) output batch {} column {} datatype "
           "mismatch: got {}, expected {}",
           op.get_name(),
@@ -149,10 +149,10 @@ void validate_operator_output_types(const op::operator_data* data,
   }
 }
 
-std::unique_ptr<op::operator_data> run_one_operator(op::sirius_physical_operator& op,
+std::unique_ptr<op::operator_data> run_one_operator(op::rasterdb_physical_operator& op,
                                                     const op::operator_data& operator_input_data,
                                                     rmm::cuda_stream_view stream,
-                                                    const sirius_pipeline* pipeline,
+                                                    const rasterdb_pipeline* pipeline,
                                                     size_t op_index,
                                                     size_t num_operators,
                                                     std::string& batch_sizes)
@@ -167,7 +167,7 @@ std::unique_ptr<op::operator_data> run_one_operator(op::sirius_physical_operator
     auto view = get_cudf_table_view(*batch);
     batch_sizes += std::to_string(view.num_rows()) + "  ";
   }
-  SIRIUS_LOG_TRACE(
+  RASTERDB_LOG_TRACE(
     "Pipeline {}: operator {} (id={}) produced {} batches with num rows: {}, execution time: "
     "{:.2f} ms",
     pipeline->get_pipeline_id(),
@@ -185,9 +185,9 @@ std::unique_ptr<op::operator_data> run_one_operator(op::sirius_physical_operator
 gpu_pipeline_task::gpu_pipeline_task(
   uint64_t task_id,
   std::vector<cucascade::shared_data_repository*> data_repos,
-  std::unique_ptr<sirius_pipeline_task_local_state> local_state,
-  std::shared_ptr<sirius_pipeline_task_global_state> global_state)
-  : sirius_pipeline_itask(std::move(local_state), std::move(global_state)),
+  std::unique_ptr<rasterdb_pipeline_task_local_state> local_state,
+  std::shared_ptr<rasterdb_pipeline_task_global_state> global_state)
+  : rasterdb_pipeline_itask(std::move(local_state), std::move(global_state)),
     _task_id(task_id),
     _data_repos(std::move(data_repos))
 {
@@ -205,7 +205,7 @@ gpu_pipeline_task::~gpu_pipeline_task()
 
 uint64_t gpu_pipeline_task::get_task_id() const { return _task_id; }
 
-const sirius_pipeline* gpu_pipeline_task::get_pipeline() const
+const rasterdb_pipeline* gpu_pipeline_task::get_pipeline() const
 {
   return _global_state->cast<gpu_pipeline_task_global_state>().get_pipeline();
 }
@@ -219,7 +219,7 @@ std::unique_ptr<op::operator_data> gpu_pipeline_task::compute_task(rmm::cuda_str
   auto start_index                = local_state._start_operator_index;
 
   if (start_index > 0) {
-    SIRIUS_LOG_INFO("Pipeline {}: resuming task {} from operator index {} (of {})",
+    RASTERDB_LOG_INFO("Pipeline {}: resuming task {} from operator index {} (of {})",
                     pipeline->get_pipeline_id(),
                     _task_id,
                     start_index,
@@ -233,7 +233,7 @@ std::unique_ptr<op::operator_data> gpu_pipeline_task::compute_task(rmm::cuda_str
   }
   for (size_t i = start_index; i < operators.size(); i++) {
     auto& op = operators[i].get();
-    SIRIUS_LOG_TRACE("Pipeline {}: operator {} (id={}) executing on {} batches with num row: {}",
+    RASTERDB_LOG_TRACE("Pipeline {}: operator {} (id={}) executing on {} batches with num row: {}",
                      pipeline->get_pipeline_id(),
                      op.get_name(),
                      op.get_operator_id(),
@@ -243,14 +243,14 @@ std::unique_ptr<op::operator_data> gpu_pipeline_task::compute_task(rmm::cuda_str
       operator_input_output_data = run_one_operator(
         op, *operator_input_output_data, stream, pipeline, i, operators.size(), batch_sizes);
     } catch (const rmm::out_of_memory&) {
-      SIRIUS_LOG_WARN("Pipeline {}: OOM at operator {} (id={}, index {}/{}), retrying once",
+      RASTERDB_LOG_WARN("Pipeline {}: OOM at operator {} (id={}, index {}/{}), retrying once",
                       pipeline->get_pipeline_id(),
                       op.get_name(),
                       op.get_operator_id(),
                       i,
                       operators.size());
       try {
-        SIRIUS_LOG_WARN(
+        RASTERDB_LOG_WARN(
           "Pipeline {}: OOM again at operator {} (id={}, index {}/{}), trimming memory pool and "
           "retrying operator)",
           pipeline->get_pipeline_id(),
@@ -269,7 +269,7 @@ std::unique_ptr<op::operator_data> gpu_pipeline_task::compute_task(rmm::cuda_str
         operator_input_output_data = run_one_operator(
           op, *operator_input_output_data, stream, pipeline, i, operators.size(), batch_sizes);
       } catch (const rmm::out_of_memory&) {
-        SIRIUS_LOG_WARN(
+        RASTERDB_LOG_WARN(
           "Pipeline {}: OOM again at operator {} (id={}, index {}/{}), rescheduling task {}",
           pipeline->get_pipeline_id(),
           op.get_name(),
@@ -297,7 +297,7 @@ void gpu_pipeline_task::publish_output(op::operator_data& output_data, rmm::cuda
     auto const sink_end = std::chrono::high_resolution_clock::now();
     auto const sink_duration =
       std::chrono::duration_cast<std::chrono::microseconds>(sink_end - sink_start);
-    SIRIUS_LOG_TRACE("Pipeline {}: operator {} (id={}) sink execution time: {:.2f} ms",
+    RASTERDB_LOG_TRACE("Pipeline {}: operator {} (id={}) sink execution time: {:.2f} ms",
                      pipeline->get_pipeline_id(),
                      sink_operators->get_name(),
                      sink_operators->get_operator_id(),
@@ -334,7 +334,7 @@ void gpu_pipeline_task::execute(rmm::cuda_stream_view stream)
     auto* resident_space = batch->get_memory_space();
     if (requested_memory_space && resident_space &&
         resident_space->get_id() != requested_memory_space->get_id()) {
-      SIRIUS_LOG_TRACE(
+      RASTERDB_LOG_TRACE(
         "Pipeline {}: fetching batch {} from tier {} to tier {} for operator {} (id={})",
         pipeline->get_pipeline_id(),
         batch->get_batch_id(),
@@ -354,7 +354,7 @@ void gpu_pipeline_task::execute(rmm::cuda_stream_view stream)
   auto const prepare_end = std::chrono::high_resolution_clock::now();
   auto const prepare_duration =
     std::chrono::duration_cast<std::chrono::microseconds>(prepare_end - prepare_start);
-  SIRIUS_LOG_TRACE("Pipeline {}: operator {} (id={}) prepare execution time: {:.2f} ms",
+  RASTERDB_LOG_TRACE("Pipeline {}: operator {} (id={}) prepare execution time: {:.2f} ms",
                    pipeline->get_pipeline_id(),
                    first_op.get_name(),
                    first_op.get_operator_id(),
@@ -392,9 +392,9 @@ std::size_t gpu_pipeline_task::get_estimated_reservation_size() const
   return get_input_size() * 1;
 }
 
-std::vector<op::sirius_physical_operator*> gpu_pipeline_task::get_output_consumers()
+std::vector<op::rasterdb_physical_operator*> gpu_pipeline_task::get_output_consumers()
 {
-  std::vector<op::sirius_physical_operator*> output_consumers;
+  std::vector<op::rasterdb_physical_operator*> output_consumers;
   if (_global_state == nullptr ||
       _global_state->cast<gpu_pipeline_task_global_state>().get_pipeline() == nullptr) {
     return output_consumers;
@@ -405,11 +405,11 @@ std::vector<op::sirius_physical_operator*> gpu_pipeline_task::get_output_consume
 }
 
 std::unique_ptr<gpu_pipeline_task> gpu_pipeline_task::create_rescheduled_task(
-  uint64_t task_id, std::unique_ptr<sirius_pipeline_task_local_state> local_state)
+  uint64_t task_id, std::unique_ptr<rasterdb_pipeline_task_local_state> local_state)
 {
   return std::make_unique<gpu_pipeline_task>(
     task_id, _data_repos, std::move(local_state), get_shared_global_state());
 }
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

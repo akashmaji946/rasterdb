@@ -271,12 +271,12 @@ void materializeWithoutNull(T* a, T*& result, uint64_t* row_ids, uint64_t result
 {
   CHECK_ERROR();
   if (result_len == 0) {
-    SIRIUS_LOG_DEBUG("result_len is 0");
+    RASTERDB_LOG_DEBUG("result_len is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching Materialize Kernel");
+  RASTERDB_LOG_DEBUG("Launching Materialize Kernel");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   result                             = gpuBufferManager->customCudaMalloc<T>(result_len, 0, 0);
   int tile_items                     = BLOCK_THREADS * ITEMS_PER_THREAD;
@@ -299,12 +299,12 @@ void materializeExpression(T* a,
 {
   CHECK_ERROR();
   if (result_len == 0) {
-    SIRIUS_LOG_DEBUG("result_len is 0");
+    RASTERDB_LOG_DEBUG("result_len is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching Materialize Kernel");
+  RASTERDB_LOG_DEBUG("Launching Materialize Kernel");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   result                             = gpuBufferManager->customCudaMalloc<T>(result_len, 0, 0);
 
@@ -338,12 +338,12 @@ void materializeExpression(T* a,
 // &result_offset, uint64_t* row_ids, uint64_t* &result_bytes, uint64_t result_len) {
 //     CHECK_ERROR();
 //     if (result_len == 0) {
-//         SIRIUS_LOG_DEBUG("result_len is 0");
+//         RASTERDB_LOG_DEBUG("result_len is 0");
 //         return;
 //     }
 //     SETUP_TIMING();
 //     START_TIMER();
-//     SIRIUS_LOG_DEBUG("Launching Materialize String Kernel");
+//     RASTERDB_LOG_DEBUG("Launching Materialize String Kernel");
 //     GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
 //     //allocate temp memory and copying keys
 //     uint64_t* temp_len = gpuBufferManager->customCudaMalloc<uint64_t>(result_len + 1, 0, 0);
@@ -402,12 +402,12 @@ void materializeString(uint8_t* data,
 {
   CHECK_ERROR();
   if (result_len == 0) {
-    SIRIUS_LOG_DEBUG("result_len is 0");
+    RASTERDB_LOG_DEBUG("result_len is 0");
     return;
   }
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching Materialize String Kernel");
+  RASTERDB_LOG_DEBUG("Launching Materialize String Kernel");
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   // allocate temp memory and copying keys
   uint64_t* temp_len = gpuBufferManager->customCudaMalloc<uint64_t>(result_len + 1, 0, 0);
@@ -518,7 +518,7 @@ void materializeStringColumnToDuckdbFormat(shared_ptr<GPUColumn> column,
                                            string_t* column_string_write_buffer)
 {
   // First copy the characters from the GPU to the CPU
-  SIRIUS_LOG_DEBUG("Materialize String Column to Duckdb format");
+  RASTERDB_LOG_DEBUG("Materialize String Column to Duckdb format");
   SETUP_TIMING();
   START_TIMER();
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());

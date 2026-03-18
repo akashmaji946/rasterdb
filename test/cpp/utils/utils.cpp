@@ -29,7 +29,7 @@ template <typename T>
 T rand_int(T low, T high)
 {
   std::uniform_int_distribution<T> dist(low, high);
-  return dist(sirius::global_rng());
+  return dist(rasterdb::global_rng());
 }
 
 std::string rand_str(int len)
@@ -39,7 +39,7 @@ std::string rand_str(int len)
   std::string result;
   result.reserve(len);
   for (std::size_t i = 0; i < len; ++i) {
-    result += chars[dist(sirius::global_rng())];
+    result += chars[dist(rasterdb::global_rng())];
   }
   return result;
 }
@@ -334,7 +334,7 @@ shared_ptr<GPUColumn> create_column_with_random_data(GPUColumnTypeId col_type,
 
 }  // namespace duckdb
 
-namespace sirius {
+namespace rasterdb {
 
 std::mt19937_64& global_rng()
 {
@@ -444,4 +444,4 @@ std::unique_ptr<cudf::table> create_cudf_table_with_random_data(
   return std::make_unique<cudf::table>(std::move(cols));
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

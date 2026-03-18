@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
 #include "cucascade/memory/stream_pool.hpp"
 #include "cuda_runtime_api.h"
 #include "log/logging.hpp"
-#include "op/sirius_physical_operator.hpp"
-#include "op/sirius_physical_operator_type.hpp"
+#include "op/rasterdb_physical_operator.hpp"
+#include "op/rasterdb_physical_operator_type.hpp"
 #include "pipeline/completion_handler.hpp"
 #include "pipeline/oom_reschedule_exception.hpp"
 #include "pipeline/task_request.hpp"
@@ -30,7 +30,7 @@
 
 #include <util/stream_check_wrapper.hpp>
 
-namespace sirius {
+namespace rasterdb {
 namespace pipeline {
 
 gpu_pipeline_executor::gpu_pipeline_executor(
@@ -47,7 +47,7 @@ gpu_pipeline_executor::gpu_pipeline_executor(
 
 gpu_pipeline_executor::~gpu_pipeline_executor() { stop(); }
 
-void gpu_pipeline_executor::schedule(std::unique_ptr<sirius::parallel::itask> task)
+void gpu_pipeline_executor::schedule(std::unique_ptr<rasterdb::parallel::itask> task)
 {
   _task_queue.push(std::move(task));
 }
@@ -62,7 +62,7 @@ void gpu_pipeline_executor::start()
                                         _config.cpu_affinity_list,
                                         [device_id = _memory_space->get_device_id()]() noexcept {
                                           cudaSetDevice(device_id);
-                                          sirius::util::enable_log_on_default_stream();
+                                          rasterdb::util::enable_log_on_default_stream();
                                         });
   _manager_thread = std::thread(&gpu_pipeline_executor::manager_loop, this);
 }
@@ -81,26 +81,26 @@ void gpu_pipeline_executor::stop()
 void gpu_pipeline_executor::manager_loop()
 {
   rmm::cuda_set_device_raii set_device_guard(rmm::cuda_device_id{_memory_space->get_device_id()});
-  sirius::util::enable_log_on_default_stream();
+  rasterdb::util::enable_log_on_default_stream();
   while (_running.load()) {
     auto ticket = _kiosk.acquire();  // block till a thread is available
     if (!ticket.is_valid()) {
-      SIRIUS_LOG_INFO("GPU Pipeline Executor: Kiosk interrupted, stopping manager loop");
+      RASTERDB_LOG_INFO("GPU Pipeline Executor: Kiosk interrupted, stopping manager loop");
       break;
     }
     if (!_task_request_publisher.send(
           std::make_unique<pipeline::task_request>(_memory_space->get_device_id(), false))) {
-      SIRIUS_LOG_INFO("GPU Pipeline Executor: Failed to send task request, channel is closed");
+      RASTERDB_LOG_INFO("GPU Pipeline Executor: Failed to send task request, channel is closed");
       break;
     }
     auto pipeline_task = _task_queue.pop();  // block till a task is available
     if (!pipeline_task) {
-      SIRIUS_LOG_INFO("GPU Pipeline Executor: task queue interrupted, stopping manager loop");
+      RASTERDB_LOG_INFO("GPU Pipeline Executor: task queue interrupted, stopping manager loop");
       break;
     }
     auto* gpu_task = cast_to_gpu_pipeline_task(pipeline_task.get());
     if (!gpu_task) {
-      SIRIUS_LOG_ERROR("GPU Pipeline Executor: Failed to cast pipeline task to gpu_pipeline_task");
+      RASTERDB_LOG_ERROR("GPU Pipeline Executor: Failed to cast pipeline task to gpu_pipeline_task");
       _completion_handler->report_error(
         "GPU Pipeline Executor: Failed to cast pipeline task to gpu_pipeline_task");
       break;
@@ -108,18 +108,18 @@ void gpu_pipeline_executor::manager_loop()
     auto bytes_needs = gpu_task->get_estimated_reservation_size();
     auto reservation = _memory_space->make_reservation(bytes_needs);
     if (!reservation) {
-      SIRIUS_LOG_ERROR("GPU Pipeline Executor: Failed to acquire memory reservation for task {}",
+      RASTERDB_LOG_ERROR("GPU Pipeline Executor: Failed to acquire memory reservation for task {}",
                        gpu_task->get_task_id());
       _completion_handler->report_error(
         "GPU Pipeline Executor: Failed to acquire memory reservation for task " +
         std::to_string(gpu_task->get_task_id()));
       break;
     }
-    if (auto* local_state = dynamic_cast<sirius::pipeline::sirius_pipeline_task_local_state*>(
+    if (auto* local_state = dynamic_cast<rasterdb::pipeline::rasterdb_pipeline_task_local_state*>(
           gpu_task->local_state())) {
       local_state->set_reservation(std::move(reservation));
     } else {
-      SIRIUS_LOG_ERROR("GPU Pipeline Executor: Failed to cast local state for task {}",
+      RASTERDB_LOG_ERROR("GPU Pipeline Executor: Failed to cast local state for task {}",
                        gpu_task->get_task_id());
       _completion_handler->report_error(
         "GPU Pipeline Executor: Failed to cast local state for task " +
@@ -139,12 +139,12 @@ void gpu_pipeline_executor::manager_loop()
       try {
         task->execute(exc_stream);
       } catch (oom_reschedule_exception& oom) {
-        SIRIUS_LOG_WARN("GPU Pipeline Executor: OOM reschedule, resuming from operator index {}",
+        RASTERDB_LOG_WARN("GPU Pipeline Executor: OOM reschedule, resuming from operator index {}",
                         oom.get_resume_operator_index());
 
         auto* gpu_task = cast_to_gpu_pipeline_task(task.get());
         if (!gpu_task) {
-          SIRIUS_LOG_ERROR("GPU Pipeline Executor: Failed to cast task for OOM reschedule");
+          RASTERDB_LOG_ERROR("GPU Pipeline Executor: Failed to cast task for OOM reschedule");
           if (_completion_handler) {
             _completion_handler->report_error(
               "GPU Pipeline Executor: Failed to cast task for OOM reschedule");
@@ -183,11 +183,11 @@ void gpu_pipeline_executor::manager_loop()
         this->schedule(std::move(new_task));
         return;
       } catch (const std::exception& e) {
-        SIRIUS_LOG_ERROR("GPU Pipeline Executor: Exception during task execution: {}", e.what());
+        RASTERDB_LOG_ERROR("GPU Pipeline Executor: Exception during task execution: {}", e.what());
         if (_completion_handler) { _completion_handler->report_error(std::current_exception()); }
         return;
       } catch (...) {
-        SIRIUS_LOG_ERROR("GPU Pipeline Executor: unknown error during task execution");
+        RASTERDB_LOG_ERROR("GPU Pipeline Executor: unknown error during task execution");
         if (_completion_handler) { _completion_handler->report_error(std::current_exception()); }
         return;
       }
@@ -200,7 +200,7 @@ void gpu_pipeline_executor::manager_loop()
       bool query_complete = false;
       if (_completion_handler && pipeline) {
         auto sink = pipeline->get_sink();
-        if (sink && sink->type == op::SiriusPhysicalOperatorType::RESULT_COLLECTOR) {
+        if (sink && sink->type == op::RasterDBPhysicalOperatorType::RESULT_COLLECTOR) {
           query_complete = pipeline->is_pipeline_finished();
         }
       }
@@ -220,13 +220,13 @@ void gpu_pipeline_executor::manager_loop()
   }
 }
 
-gpu_pipeline_task* gpu_pipeline_executor::cast_to_gpu_pipeline_task(sirius::parallel::itask* task)
+gpu_pipeline_task* gpu_pipeline_executor::cast_to_gpu_pipeline_task(rasterdb::parallel::itask* task)
 {
   // Safely cast to gpu_pipeline_task
   return dynamic_cast<gpu_pipeline_task*>(task);
 }
 
-void gpu_pipeline_executor::set_task_creator(sirius::creator::task_creator* task_creator)
+void gpu_pipeline_executor::set_task_creator(rasterdb::creator::task_creator* task_creator)
 {
   _task_creator = task_creator;
 }
@@ -239,4 +239,4 @@ void gpu_pipeline_executor::set_completion_handler(completion_handler* handler) 
 }
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

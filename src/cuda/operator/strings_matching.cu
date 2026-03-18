@@ -195,7 +195,7 @@ void StringMatching(char* char_data,
   CHECK_ERROR();
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (num_strings == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
@@ -204,7 +204,7 @@ void StringMatching(char* char_data,
 
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching single term string matching kernel");
+  RASTERDB_LOG_DEBUG("Launching single term string matching kernel");
   // Get the data from the metadata
   uint64_t workers_needed = (num_chars + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
@@ -249,7 +249,7 @@ void StringMatching(char* char_data,
   uint64_t last_char = num_chars - 1;
   uint64_t preprocess_blocks_needed =
     (workers_needed + THREADS_PER_BLOCK_STRINGS - 1) / THREADS_PER_BLOCK_STRINGS;
-  SIRIUS_LOG_DEBUG("Sirius running preprocessing for {} workers with {} strings and {} chars",
+  RASTERDB_LOG_DEBUG("Sirius running preprocessing for {} workers with {} strings and {} chars",
                    workers_needed,
                    num_strings,
                    num_chars);
@@ -309,7 +309,7 @@ void StringMatching(char* char_data,
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(d_answers), 0);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(count), 0);
   count = h_count;
-  SIRIUS_LOG_DEBUG("String Matching Result Count = {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("String Matching Result Count = {}", h_count[0]);
 
   STOP_TIMER();
 }
@@ -437,7 +437,7 @@ void MultiStringMatching(char* char_data,
   CHECK_ERROR();
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (num_strings == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
@@ -446,7 +446,7 @@ void MultiStringMatching(char* char_data,
 
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching multi term string matching kernel");
+  RASTERDB_LOG_DEBUG("Launching multi term string matching kernel");
   // Get the data from the metadata
   uint64_t workers_needed = (num_chars + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
@@ -590,7 +590,7 @@ void MultiStringMatching(char* char_data,
   for (int i = 0; i < num_terms; i++) {
     gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(d_all_automatos[i]), 0);
   }
-  SIRIUS_LOG_DEBUG("Multi String Matching Result Count = {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("Multi String Matching Result Count = {}", h_count[0]);
   STOP_TIMER();
 
   count = h_count;
@@ -660,7 +660,7 @@ void PrefixMatching(char* char_data,
   // Allocate the necessary buffers on the GPU
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (num_strings == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
@@ -669,7 +669,7 @@ void PrefixMatching(char* char_data,
 
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Launching Prefix Matching kernel");
+  RASTERDB_LOG_DEBUG("Launching Prefix Matching kernel");
 
   count                     = gpuBufferManager->customCudaMalloc<uint64_t>(1, 0, 0);
   uint64_t num_prefix_chars = match_prefix.length();
@@ -712,7 +712,7 @@ void PrefixMatching(char* char_data,
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(count), 0);
 
   count = h_count;
-  SIRIUS_LOG_DEBUG("PrefixMatching Result Count {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("PrefixMatching Result Count {}", h_count[0]);
   STOP_TIMER();
 }
 

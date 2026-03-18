@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@
 #include <variant>
 #include <vector>
 
-namespace sirius {
+namespace rasterdb {
 namespace config {
 
 // Concepts to identify different types of configuration options
@@ -794,4 +794,4 @@ void config_value_exporter<ValueType>::write(libconfig::Setting& cfg, const Valu
 }
 
 }  // namespace config
-}  // namespace sirius
+}  // namespace rasterdb

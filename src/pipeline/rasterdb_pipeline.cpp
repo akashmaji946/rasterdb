@@ -1,0 +1,335 @@
+/*
+ * Copyright 2025, RasterDB Contributors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "pipeline/rasterdb_pipeline.hpp"
+
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/settings.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
+#include "log/logging.hpp"
+#include "op/rasterdb_physical_parquet_scan.hpp"
+#include "pipeline/rasterdb_meta_pipeline.hpp"
+#include "rasterdb_engine.hpp"
+
+namespace rasterdb {
+namespace pipeline {
+
+rasterdb_pipeline::rasterdb_pipeline(rasterdb_engine& engine)
+  : engine(engine), ready(false), initialized(false), source(nullptr), sink(nullptr)
+{
+}
+
+duckdb::ClientContext& rasterdb_pipeline::get_client_context() { return engine.context; }
+
+bool rasterdb_pipeline::is_order_dependent() const
+{
+  if (source) {
+    auto source_order = source->source_order();
+    if (source_order == duckdb::OrderPreservationType::FIXED_ORDER) { return true; }
+    if (source_order == duckdb::OrderPreservationType::NO_ORDER) { return false; }
+  }
+  for (auto& op_ref : operators) {
+    auto& op = op_ref.get();
+    if (op.operator_order() == duckdb::OrderPreservationType::NO_ORDER) { return false; }
+    if (op.operator_order() == duckdb::OrderPreservationType::FIXED_ORDER) { return true; }
+  }
+  if (!duckdb::DBConfig::GetSetting<duckdb::PreserveInsertionOrderSetting>(engine.context)) {
+    return false;
+  }
+  if (sink && sink->sink_order_dependent()) { return true; }
+  return false;
+}
+
+void rasterdb_pipeline::reset_sink()
+{
+  if (sink) {
+    if (!sink->is_sink()) {
+      throw duckdb::InternalException("Sink of pipeline does not have is_sink set");
+    }
+    std::lock_guard<std::mutex> guard(sink->lock);
+    // if (!sink->sink_state) { sink->sink_state =
+    // sink->get_global_sink_state(get_client_context()); }
+  }
+}
+
+void rasterdb_pipeline::reset()
+{
+  reset_sink();
+  for (auto& op_ref : operators) {
+    auto& op = op_ref.get();
+    std::lock_guard<std::mutex> guard(op.lock);
+    // if (!op.op_state) { op.op_state = op.get_global_operator_state(get_client_context()); }
+  }
+  reset_source(false);
+  // we no longer reset source here because this function is no longer guaranteed to be called by
+  // the main thread source reset needs to be called by the main thread because resetting a source
+  // may call into clients like R
+  initialized = true;
+}
+
+void rasterdb_pipeline::reset_source(bool force)
+{
+  if (source && !source->is_source()) {
+    throw duckdb::InternalException("Source of pipeline does not have is_source set");
+  }
+  if (force || !source_state) {
+    // source_state = source->get_global_source_state(get_client_context());
+  }
+}
+
+void rasterdb_pipeline::is_ready()
+{
+  if (ready) { return; }
+  ready = true;
+  std::reverse(operators.begin(), operators.end());
+}
+
+void rasterdb_pipeline::add_dependency(duckdb::shared_ptr<rasterdb_pipeline>& pipeline)
+{
+  D_ASSERT(pipeline);
+  // dependencies.push_back(std::weak_ptr<rasterdb_pipeline>(pipeline));
+  dependencies.push_back(pipeline);
+  pipeline->parents.push_back(duckdb::weak_ptr<rasterdb_pipeline>(shared_from_this()));
+}
+
+// std::string rasterdb_pipeline::to_string() const {
+// 	TreeRenderer renderer;
+// 	return renderer.ToString(*this);
+// }
+
+// void rasterdb_pipeline::print() const {
+// 	duckdb::Printer::Print(to_string());
+// }
+
+// void rasterdb_pipeline::print_dependencies() const {
+// 	for (auto &dep : dependencies) {
+// 		std::shared_ptr<rasterdb_pipeline>(dep)->print();
+// 	}
+// }
+
+// duckdb::vector<duckdb::reference<op::rasterdb_physical_operator>>
+// rasterdb_pipeline::get_all_operators()
+// {
+//   duckdb::vector<duckdb::reference<op::rasterdb_physical_operator>> result;
+//   D_ASSERT(source);
+//   result.push_back(*source);
+//   for (auto& op : operators) {
+//     result.push_back(op.get());
+//   }
+//   if (sink) { result.push_back(*sink); }
+//   return result;
+// }
+
+// duckdb::vector<duckdb::const_reference<op::rasterdb_physical_operator>>
+// rasterdb_pipeline::get_all_operators() const
+// {
+//   duckdb::vector<duckdb::const_reference<op::rasterdb_physical_operator>> result;
+//   D_ASSERT(source);
+//   result.push_back(*source);
+//   for (auto& op : operators) {
+//     result.push_back(op.get());
+//   }
+//   if (sink) { result.push_back(*sink); }
+//   return result;
+// }
+
+duckdb::vector<duckdb::reference<op::rasterdb_physical_operator>> rasterdb_pipeline::get_operators()
+{
+  return operators;
+}
+
+duckdb::vector<duckdb::const_reference<op::rasterdb_physical_operator>>
+rasterdb_pipeline::get_operators() const
+{
+  duckdb::vector<duckdb::const_reference<op::rasterdb_physical_operator>> result;
+  result.reserve(operators.size());
+  for (const auto& ref : operators) {
+    result.push_back(ref.get());
+  }
+  return result;
+}
+
+std::vector<rasterdb_pipeline*> rasterdb_pipeline::get_parents() const
+{
+  std::vector<rasterdb_pipeline*> result;
+  for (auto& weak_parent : parents) {
+    if (auto parent = weak_parent.lock()) { result.push_back(parent.get()); }
+  }
+  return result;
+}
+
+void rasterdb_pipeline::clear_source()
+{
+  source_state.reset();
+  batch_indexes.clear();
+}
+
+duckdb::idx_t rasterdb_pipeline::register_new_batch_index()
+{
+  std::lock_guard<std::mutex> l(batch_lock);
+  duckdb::idx_t minimum = batch_indexes.empty() ? base_batch_index : *batch_indexes.begin();
+  batch_indexes.insert(minimum);
+  return minimum;
+}
+
+duckdb::idx_t rasterdb_pipeline::update_batch_index(duckdb::idx_t old_index, duckdb::idx_t new_index)
+{
+  std::lock_guard<std::mutex> l(batch_lock);
+  if (new_index < *batch_indexes.begin()) {
+    throw duckdb::InternalException(
+      "Processing batch index %llu, but previous min batch index was %llu",
+      new_index,
+      *batch_indexes.begin());
+  }
+  auto entry = batch_indexes.find(old_index);
+  if (entry == batch_indexes.end()) {
+    throw duckdb::InternalException("Batch index %llu was not found in set of active batch indexes",
+                                    old_index);
+  }
+  batch_indexes.erase(entry);
+  batch_indexes.insert(new_index);
+  return *batch_indexes.begin();
+}
+
+//===--------------------------------------------------------------------===//
+// GPU Pipeline Build State
+//===--------------------------------------------------------------------===//
+void rasterdb_pipeline_build_state::set_pipeline_source(rasterdb_pipeline& pipeline,
+                                                      op::rasterdb_physical_operator& op)
+{
+  RASTERDB_LOG_DEBUG("Setting pipeline source {}", op::RasterdbPhysicalOperatorToString(op.type));
+  pipeline.source = &op;
+}
+
+void rasterdb_pipeline_build_state::set_pipeline_sink(
+  rasterdb_pipeline& pipeline,
+  duckdb::optional_ptr<op::rasterdb_physical_operator> op,
+  duckdb::idx_t sink_pipeline_count)
+{
+  pipeline.sink = op;
+  if (pipeline.sink)
+    RASTERDB_LOG_DEBUG("Setting pipeline sink {}",
+                     op::RasterdbPhysicalOperatorToString((*pipeline.sink).type));
+  // set the base batch index of this pipeline based on how many other pipelines have this node as
+  // their sink
+  pipeline.base_batch_index = BATCH_INCREMENT * sink_pipeline_count;
+}
+
+void rasterdb_pipeline_build_state::add_pipeline_operator(rasterdb_pipeline& pipeline,
+                                                        op::rasterdb_physical_operator& op)
+{
+  RASTERDB_LOG_DEBUG("Adding operator to pipeline {}", op::RasterdbPhysicalOperatorToString(op.type));
+  pipeline.operators.push_back(op);
+}
+
+duckdb::optional_ptr<op::rasterdb_physical_operator> rasterdb_pipeline_build_state::get_pipeline_source(
+  rasterdb_pipeline& pipeline)
+{
+  return pipeline.source;
+}
+
+duckdb::optional_ptr<op::rasterdb_physical_operator> rasterdb_pipeline_build_state::get_pipeline_sink(
+  rasterdb_pipeline& pipeline)
+{
+  return pipeline.sink;
+}
+
+void rasterdb_pipeline_build_state::set_pipeline_operators(
+  rasterdb_pipeline& pipeline,
+  duckdb::vector<duckdb::reference<op::rasterdb_physical_operator>> operators)
+{
+  pipeline.operators = std::move(operators);
+}
+
+duckdb::shared_ptr<rasterdb_pipeline> rasterdb_pipeline_build_state::create_child_pipeline(
+  rasterdb_engine& engine, rasterdb_pipeline& pipeline, op::rasterdb_physical_operator& op)
+{
+  return engine.create_child_pipeline(pipeline, op);
+}
+
+duckdb::vector<duckdb::reference<op::rasterdb_physical_operator>>
+rasterdb_pipeline_build_state::get_pipeline_operators(rasterdb_pipeline& pipeline)
+{
+  return pipeline.operators;
+}
+
+bool rasterdb_pipeline::is_pipeline_finished() const
+{
+  // todo (amin): there is a potential race condition between scan executor and gpu pipeline
+  // executor
+  return pipeline_finished.load();
+}
+
+void rasterdb_pipeline::update_pipeline_status()
+{
+  if (get_source()->type == op::RasterDBPhysicalOperatorType::DUCKDB_SCAN) {
+    auto& table_scan = get_source()->Cast<op::rasterdb_physical_duckdb_scan>();
+    if (table_scan.exhausted) {  // WSM amin TODO: can we use exhausted? how about we use
+                                 // get_next_task_hint() to check if the source is ready?
+      pipeline_finished.store(true);
+      return;
+    }
+  } else if (get_source()->type == op::RasterDBPhysicalOperatorType::PARQUET_SCAN) {
+    auto& parquet_scan = get_source()->Cast<op::rasterdb_physical_parquet_scan>();
+    if (!parquet_scan.has_more_partitions) {
+      if (tasks_created.load() == tasks_completed.load()) { pipeline_finished = true; }
+      return;
+    }
+  } else {
+    op::rasterdb_physical_operator* first_node =
+      operators.size() > 0 ? &operators[0].get() : (sink ? sink.get() : nullptr);
+    if (first_node == nullptr) {
+      throw duckdb::InternalException("First node of pipeline is nullptr");
+    }
+    // Check if any operator has exhausted its limit — this allows the pipeline to finish
+    // early without waiting for the source pipeline to drain all remaining batches.
+    bool limit_exhausted = false;
+    for (auto& op_ref : operators) {
+      if (op_ref.get().is_limit_exhausted()) {
+        limit_exhausted = true;
+        break;
+      }
+    }
+    // WSM TODO need to increment task created before pulling data?
+    // Lets fix this by putting task creation as a method in the pipeline class so that it can be
+    // done atomically.
+    if (limit_exhausted ||
+        (first_node->is_source_pipeline_finished() && first_node->all_ports_empty())) {
+      if (tasks_created.load() == tasks_completed.load()) { pipeline_finished = true; }
+    }
+  }
+}
+
+void rasterdb_pipeline::mark_task_created() { tasks_created++; }
+
+void rasterdb_pipeline::mark_task_completed()
+{
+  tasks_completed++;
+  update_pipeline_status();
+}
+
+std::vector<op::rasterdb_physical_operator*> rasterdb_pipeline::get_output_consumers() const
+{
+  auto parents = get_parents();
+  std::vector<op::rasterdb_physical_operator*> result;
+  for (auto& parent : parents) {
+    if (auto src = parent->get_source(); src) { result.push_back(src.get()); }
+  }
+  return result;
+}
+
+}  // namespace pipeline
+}  // namespace rasterdb

@@ -28,7 +28,7 @@
 #include <memory>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 #define SPLIT_DELIMITER "%"
 
@@ -112,5 +112,5 @@ INSTANTIATE_STR_MATCHING(SUFFIX)
 #undef SPLIT_DELIMITER
 #undef INSTANTIATE_STR_MATCHING
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

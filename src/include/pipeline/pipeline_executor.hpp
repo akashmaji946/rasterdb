@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,10 @@
 #include "exec/channel.hpp"
 #include "exec/config.hpp"
 #include "exec/interruptible_mpmc.hpp"
-#include "memory/sirius_memory_reservation_manager.hpp"
+#include "memory/rasterdb_memory_reservation_manager.hpp"
 #include "op/scan/config.hpp"
-#include "op/sirius_physical_duckdb_scan.hpp"
-#include "op/sirius_physical_operator.hpp"
+#include "op/rasterdb_physical_duckdb_scan.hpp"
+#include "op/rasterdb_physical_operator.hpp"
 #include "parallel/task.hpp"
 #include "pipeline/completion_handler.hpp"
 #include "pipeline/gpu_pipeline_task.hpp"
@@ -36,11 +36,11 @@
 #include <queue>
 #include <unordered_map>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 class duckdb_scan_executor;
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan
 
-namespace sirius {
+namespace rasterdb {
 
 namespace creator {
 class task_creator;
@@ -69,7 +69,7 @@ class pipeline_executor {
    */
   explicit pipeline_executor(const exec::thread_pool_config& gpu_executor_config,
                              const exec::thread_pool_config& scan_executor_config,
-                             sirius::memory::sirius_memory_reservation_manager& mem_mgr,
+                             rasterdb::memory::rasterdb_memory_reservation_manager& mem_mgr,
                              const cucascade::memory::system_topology_info* sys_topology = nullptr);
 
   /**
@@ -92,7 +92,7 @@ class pipeline_executor {
    *
    * @param task The task to schedule (must be a gpu_pipeline_task)
    */
-  void schedule(std::unique_ptr<sirius::parallel::itask> task);
+  void schedule(std::unique_ptr<rasterdb::parallel::itask> task);
 
   /**
    * @brief Starts the executor and initializes worker threads
@@ -116,23 +116,23 @@ class pipeline_executor {
    *
    * @param task_creator Reference to the task creator
    */
-  void set_task_creator(sirius::creator::task_creator& task_creator);
+  void set_task_creator(rasterdb::creator::task_creator& task_creator);
 
   /**
    * @brief Get the scan executor reference
    *
    * @return Reference to the duckdb scan executor
    */
-  [[nodiscard]] sirius::op::scan::duckdb_scan_executor& get_scan_executor() noexcept;
+  [[nodiscard]] rasterdb::op::scan::duckdb_scan_executor& get_scan_executor() noexcept;
 
-  [[nodiscard]] const sirius::op::scan::duckdb_scan_executor& get_scan_executor() const noexcept;
+  [[nodiscard]] const rasterdb::op::scan::duckdb_scan_executor& get_scan_executor() const noexcept;
 
   /**
    * @brief Configure scan result caching level
    *
    * @param level The cache level to use
    */
-  void set_scan_caching_config(sirius::op::scan::cache_level level);
+  void set_scan_caching_config(rasterdb::op::scan::cache_level level);
 
   /**
    * @brief Set the priority scan operators
@@ -169,9 +169,9 @@ class pipeline_executor {
   void schedule_next_scan_tasks();
 
   std::mutex _priority_scans_mutex;
-  std::queue<op::sirius_physical_operator*> _priority_scans;
+  std::queue<op::rasterdb_physical_operator*> _priority_scans;
 
-  exec::interruptible_mpmc<std::unique_ptr<sirius::parallel::itask>>
+  exec::interruptible_mpmc<std::unique_ptr<rasterdb::parallel::itask>>
     _task_queue;  ///< Queue for GPU pipeline tasks
   exec::channel<std::unique_ptr<task_request>> _task_request_channel;
   std::thread _management_thread;
@@ -180,10 +180,10 @@ class pipeline_executor {
   std::unordered_map<int, std::unique_ptr<gpu_pipeline_executor>>
     _gpu_executors;  ///< Map of device_id to GPU executor
 
-  sirius::creator::task_creator* _task_creator{nullptr};
-  std::unique_ptr<sirius::op::scan::duckdb_scan_executor> _scan_executor;
+  rasterdb::creator::task_creator* _task_creator{nullptr};
+  std::unique_ptr<rasterdb::op::scan::duckdb_scan_executor> _scan_executor;
   std::unique_ptr<completion_handler> _completion_handler;
 };
 
 }  // namespace pipeline
-}  // namespace sirius
+}  // namespace rasterdb

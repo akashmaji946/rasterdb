@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 #include "duckdb/main/query_result.hpp"
 #include "duckdb/planner/planner.hpp"
 #include "log/logging.hpp"
-#include "sirius_extension.hpp"
+#include "rasterdb_extension.hpp"
 
 namespace duckdb {
 
@@ -96,7 +96,7 @@ unique_ptr<PendingQueryResult> GPUContext::GPUPendingStatementInternal(
 
   unique_ptr<GPUExecutor> temp = make_uniq<GPUExecutor>(context, *this);
   auto prop                    = temp->context.GetClientProperties();
-  // SIRIUS_LOG_DEBUG("Properties: {}", prop.time_zone);
+  // RASTERDB_LOG_DEBUG("Properties: {}", prop.time_zone);
   gpu_active_query->gpu_executor = std::move(temp);
   auto& gpu_executor             = GetGPUExecutor();
   // auto stream_result = parameters.allow_stream_result &&
@@ -113,7 +113,7 @@ unique_ptr<PendingQueryResult> GPUContext::GPUPendingStatementInternal(
   auto types = gpu_collector->GetTypes();
   D_ASSERT(types == statement.types);
   gpu_executor.Initialize(std::move(gpu_collector));
-  // SIRIUS_LOG_DEBUG("type {}", gpu_executor.gpu_physical_plan.get()->type);
+  // RASTERDB_LOG_DEBUG("type {}", gpu_executor.gpu_physical_plan.get()->type);
 
   D_ASSERT(!gpu_active_query->HasOpenResult());
 
@@ -159,7 +159,7 @@ unique_ptr<QueryResult> GPUContext::GPUExecutePendingQueryResult(PendingQueryRes
     gpu_executor.Execute();
   } catch (std::exception& e) {
     ErrorData error(e);
-    SIRIUS_LOG_ERROR("Error in GPUExecutePendingQueryResult: {}", error.RawMessage());
+    RASTERDB_LOG_ERROR("Error in GPUExecutePendingQueryResult: {}", error.RawMessage());
     gpu_executor.gpuBufferManager->ResetBuffer();
     return GPUErrorResult<MaterializedQueryResult>(error);
   }
@@ -168,7 +168,7 @@ unique_ptr<QueryResult> GPUContext::GPUExecutePendingQueryResult(PendingQueryRes
     ErrorData error = pending.GetErrorObject();
     return make_uniq<MaterializedQueryResult>(error);
   }
-  SIRIUS_LOG_DEBUG("Done ExecutePendingQueryResult");
+  RASTERDB_LOG_DEBUG("Done ExecutePendingQueryResult");
   auto result = FetchResultInternal(pending);
   // context.reset();
   return result;
@@ -191,7 +191,7 @@ unique_ptr<QueryResult> GPUContext::GPUExecuteQuery(
   } else {
     current_result = GPUExecutePendingQueryResult(*pending_query);
   }
-  SIRIUS_LOG_DEBUG("Done GPUExecuteQuery");
+  RASTERDB_LOG_DEBUG("Done GPUExecuteQuery");
   return current_result;
 }
 
@@ -230,9 +230,9 @@ unique_ptr<QueryResult> GPUContext::FetchResultInternal(PendingQueryResult& pend
   unique_ptr<QueryResult> result;
   D_ASSERT(gpu_executor.HasResultCollector());
   // we have a result collector - fetch the result directly from the result collector
-  // SIRIUS_LOG_DEBUG("Getting result");
+  // RASTERDB_LOG_DEBUG("Getting result");
   result = gpu_executor.GetResult();
-  // SIRIUS_LOG_DEBUG("Fetching result");
+  // RASTERDB_LOG_DEBUG("Fetching result");
   // if (!create_stream_result) {
   CleanupInternal(result.get(), false);
   // } else {
@@ -247,7 +247,7 @@ void GPUContext::CleanupInternal(BaseQueryResult* result, bool invalidate_transa
     // no query currently active
     return;
   }
-  // SIRIUS_LOG_DEBUG("Cleaning up");
+  // RASTERDB_LOG_DEBUG("Cleaning up");
   if (gpu_active_query->gpu_executor) { gpu_active_query->gpu_executor->CancelTasks(); }
   gpu_active_query->progress_bar.reset();
 
@@ -274,7 +274,7 @@ ErrorData GPUContext::EndQueryInternal(bool success, bool invalidate_transaction
   gpu_active_query.reset();
   // query_progress.Initialize();
   ErrorData error;
-  // SIRIUS_LOG_DEBUG("Ending query");
+  // RASTERDB_LOG_DEBUG("Ending query");
   // try {
   // 	if (transaction.HasActiveTransaction()) {
   // 		transaction.ResetActiveQuery();
@@ -335,21 +335,21 @@ ErrorData GPUContext::EndQueryInternal(bool success, bool invalidate_transaction
 
 //   GPUBindPreparedStatementParameters(statement, parameters);
 
-//   unique_ptr<::sirius::sirius_engine> temp = make_uniq<::sirius::sirius_engine>(context, *this);
+//   unique_ptr<::rasterdb::rasterdb_engine> temp = make_uniq<::rasterdb::rasterdb_engine>(context, *this);
 //   auto prop                                = temp->context.GetClientProperties();
 //   gpu_active_query->engine                 = std::move(temp);
-//   auto& engine                             = GetSiriusEngine();
+//   auto& engine                             = GetRasterdbEngine();
 //   bool stream_result                       = false;
 
-//   unique_ptr<::sirius::op::sirius_physical_result_collector> sirius_collector =
-//     make_uniq_base<::sirius::op::sirius_physical_result_collector,
-//                    ::sirius::op::sirius_physical_materialized_collector>(*statement_p,
+//   unique_ptr<::rasterdb::op::rasterdb_physical_result_collector> sirius_collector =
+//     make_uniq_base<::rasterdb::op::rasterdb_physical_result_collector,
+//                    ::rasterdb::op::rasterdb_physical_materialized_collector>(*statement_p,
 //                                                                          client_context);
-//   if (sirius_collector->type != ::sirius::op::SiriusPhysicalOperatorType::RESULT_COLLECTOR) {
+//   if (sirius_collector->type != ::rasterdb::op::RasterDBPhysicalOperatorType::RESULT_COLLECTOR) {
 //     return GPUErrorResult<PendingQueryResult>(ErrorData("Error in
 //     SiriusPendingStatementInternal"));
 //   }
-//   D_ASSERT(sirius_collector->type == ::sirius::op::SiriusPhysicalOperatorType::RESULT_COLLECTOR);
+//   D_ASSERT(sirius_collector->type == ::rasterdb::op::RasterDBPhysicalOperatorType::RESULT_COLLECTOR);
 //   auto types = sirius_collector->get_types();
 //   D_ASSERT(types == statement.types);
 //   engine.initialize(std::move(sirius_collector));
@@ -368,19 +368,19 @@ ErrorData GPUContext::EndQueryInternal(bool success, bool invalidate_transaction
 // {
 //   D_ASSERT(gpu_active_query->IsOpenResult(pending));
 //   CheckExecutableInternal(pending);
-//   auto& engine = GetSiriusEngine();
+//   auto& engine = GetRasterdbEngine();
 //   try {
 //     engine.execute();
 //   } catch (std::exception& e) {
 //     ErrorData error(e);
-//     SIRIUS_LOG_ERROR("Error in SiriusExecutePendingQueryResult: {}", error.RawMessage());
+//     RASTERDB_LOG_ERROR("Error in SiriusExecutePendingQueryResult: {}", error.RawMessage());
 //     return GPUErrorResult<MaterializedQueryResult>(error);
 //   }
 //   if (pending.HasError()) {
 //     ErrorData error = pending.GetErrorObject();
 //     return make_uniq<MaterializedQueryResult>(error);
 //   }
-//   SIRIUS_LOG_DEBUG("Done ExecutePendingQueryResult");
+//   RASTERDB_LOG_DEBUG("Done ExecutePendingQueryResult");
 //   auto result = FetchResultInternal(pending);
 //   return result;
 // }
@@ -401,11 +401,11 @@ ErrorData GPUContext::EndQueryInternal(bool success, bool invalidate_transaction
 //   } else {
 //     current_result = SiriusExecutePendingQueryResult(*pending_query);
 //   }
-//   SIRIUS_LOG_DEBUG("Done SiriusExecuteQuery");
+//   RASTERDB_LOG_DEBUG("Done SiriusExecuteQuery");
 //   return current_result;
 // };
 
-// sirius::sirius_engine& GPUContext::GetSiriusEngine()
+// rasterdb::rasterdb_engine& GPUContext::GetRasterdbEngine()
 // {
 //   D_ASSERT(gpu_active_query);
 //   D_ASSERT(gpu_active_query->engine);

@@ -23,13 +23,13 @@
 #include <numeric>
 
 using namespace duckdb;
-using namespace sirius::op;
+using namespace rasterdb::op;
 using namespace cucascade;
 using namespace cucascade::memory;
 
 namespace {
 
-using namespace sirius::test::operator_utils;
+using namespace rasterdb::test::operator_utils;
 }  // namespace
 
 TEMPLATE_TEST_CASE("sirius_physical_streaming_limit limits rows in data_batch",
@@ -47,7 +47,7 @@ TEMPLATE_TEST_CASE("sirius_physical_streaming_limit limits rows in data_batch",
 {
   using Traits = gpu_type_traits<TestType>;
 
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -115,7 +115,7 @@ static std::shared_ptr<data_batch> make_range_batch(memory_space& space,
 {
   std::vector<int64_t> values(count);
   std::iota(values.begin(), values.end(), start);
-  return sirius::test::operator_utils::make_numeric_batch<int64_t>(
+  return rasterdb::test::operator_utils::make_numeric_batch<int64_t>(
     space, values, cudf::type_id::INT64);
 }
 
@@ -126,7 +126,7 @@ static std::vector<int64_t> collect_all_rows(
   std::vector<int64_t> all_rows;
   for (auto const& b : batches) {
     auto table = b->get_data()->cast<gpu_table_representation>().get_table();
-    auto col   = sirius::test::operator_utils::copy_column_to_host<int64_t>(table.view().column(0));
+    auto col   = rasterdb::test::operator_utils::copy_column_to_host<int64_t>(table.view().column(0));
     all_rows.insert(all_rows.end(), col.begin(), col.end());
   }
   return all_rows;
@@ -135,7 +135,7 @@ static std::vector<int64_t> collect_all_rows(
 TEST_CASE("streaming_limit caps total rows across multiple batches",
           "[physical_limit][multi_batch]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -162,7 +162,7 @@ TEST_CASE("streaming_limit caps total rows across multiple batches",
 TEST_CASE("streaming_limit spans across two batches returning correct data",
           "[physical_limit][multi_batch]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -193,7 +193,7 @@ TEST_CASE("streaming_limit spans across two batches returning correct data",
 
 TEST_CASE("streaming_limit offset spans across multiple batches", "[physical_limit][multi_batch]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 
@@ -224,7 +224,7 @@ TEST_CASE("streaming_limit offset spans across multiple batches", "[physical_lim
 TEST_CASE("streaming_limit with separate execute calls enforces global limit",
           "[physical_limit][multi_batch]")
 {
-  auto memory_manager = sirius::test::operator_utils::initialize_memory_manager();
+  auto memory_manager = rasterdb::test::operator_utils::initialize_memory_manager();
   auto* space         = memory_manager->get_memory_space(cucascade::memory::Tier::GPU, 0);
   REQUIRE(space);
 

@@ -33,15 +33,15 @@ void cudf_hash_inner_join(vector<shared_ptr<GPUColumn>>& probe_keys,
 {
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (build_keys[0]->column_length == 0 || probe_keys[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     count    = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     count[0] = 0;
     return;
   }
 
-  SIRIUS_LOG_DEBUG("CUDF hash inner join");
-  SIRIUS_LOG_DEBUG("Build Input size: {}", build_keys[0]->column_length);
-  SIRIUS_LOG_DEBUG("Probe Input size: {}", probe_keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF hash inner join");
+  RASTERDB_LOG_DEBUG("Build Input size: {}", build_keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("Probe Input size: {}", probe_keys[0]->column_length);
   SETUP_TIMING();
   START_TIMER();
 
@@ -130,7 +130,7 @@ void cudf_hash_inner_join(vector<shared_ptr<GPUColumn>>& probe_keys,
   }
 
   STOP_TIMER();
-  SIRIUS_LOG_DEBUG("CUDF Inner join result count: {}", count[0]);
+  RASTERDB_LOG_DEBUG("CUDF Inner join result count: {}", count[0]);
 }
 
 void cudf_mixed_or_conditional_inner_join(vector<shared_ptr<GPUColumn>>& probe_columns,
@@ -143,15 +143,15 @@ void cudf_mixed_or_conditional_inner_join(vector<shared_ptr<GPUColumn>>& probe_c
 {
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (build_columns[0]->column_length == 0 || probe_columns[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     count    = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     count[0] = 0;
     return;
   }
 
-  SIRIUS_LOG_DEBUG("CUDF mixed or conditional inner join");
-  SIRIUS_LOG_DEBUG("Build Input size: {}", build_columns[0]->column_length);
-  SIRIUS_LOG_DEBUG("Probe Input size: {}", probe_columns[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF mixed or conditional inner join");
+  RASTERDB_LOG_DEBUG("Build Input size: {}", build_columns[0]->column_length);
+  RASTERDB_LOG_DEBUG("Probe Input size: {}", probe_columns[0]->column_length);
   SETUP_TIMING();
   START_TIMER();
 
@@ -259,7 +259,7 @@ void cudf_mixed_or_conditional_inner_join(vector<shared_ptr<GPUColumn>>& probe_c
   count[0] = result_count;
 
   STOP_TIMER();
-  SIRIUS_LOG_DEBUG("CUDF Mixed join result count: {}", count[0]);
+  RASTERDB_LOG_DEBUG("CUDF Mixed join result count: {}", count[0]);
 }
 
 void cudf_hash_left_join(vector<shared_ptr<GPUColumn>>& probe_keys,
@@ -272,15 +272,15 @@ void cudf_hash_left_join(vector<shared_ptr<GPUColumn>>& probe_keys,
 {
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
   if (build_keys[0]->column_length == 0 || probe_keys[0]->column_length == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     count    = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     count[0] = 0;
     return;
   }
 
-  SIRIUS_LOG_DEBUG("CUDF hash left join");
-  SIRIUS_LOG_DEBUG("Build Input size: {}", build_keys[0]->column_length);
-  SIRIUS_LOG_DEBUG("Probe Input size: {}", probe_keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("CUDF hash left join");
+  RASTERDB_LOG_DEBUG("Build Input size: {}", build_keys[0]->column_length);
+  RASTERDB_LOG_DEBUG("Probe Input size: {}", probe_keys[0]->column_length);
   SETUP_TIMING();
   START_TIMER();
 
@@ -348,7 +348,7 @@ void cudf_hash_left_join(vector<shared_ptr<GPUColumn>>& probe_keys,
   count[0] = result_count;
 
   STOP_TIMER();
-  SIRIUS_LOG_DEBUG("CUDF Inner join result count: {}", count[0]);
+  RASTERDB_LOG_DEBUG("CUDF Inner join result count: {}", count[0]);
 }
 
 }  // namespace duckdb

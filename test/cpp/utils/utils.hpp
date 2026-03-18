@@ -19,7 +19,7 @@
 #include "catch.hpp"
 #include "gpu_buffer_manager.hpp"
 #include "gpu_columns.hpp"
-#include "sirius_context.hpp"
+#include "rasterdb_context.hpp"
 #include "sirius_test_env.hpp"
 
 #include <data/sirius_converter_registry.hpp>
@@ -76,7 +76,7 @@ shared_ptr<GPUColumn> create_column_with_random_data(GPUColumnTypeId col_type,
 
 }  // namespace duckdb
 
-namespace sirius {
+namespace rasterdb {
 
 std::mt19937_64& global_rng();
 
@@ -98,8 +98,8 @@ std::unique_ptr<cudf::table> create_cudf_table_with_random_data(
  */
 inline std::pair<std::unique_ptr<duckdb::DuckDB>, duckdb::Connection> make_test_db_and_connection()
 {
-  if (sirius::test::g_shared_env && sirius::test::g_shared_env->is_active()) {
-    return {nullptr, sirius::test::g_shared_env->make_connection()};
+  if (rasterdb::test::g_shared_env && rasterdb::test::g_shared_env->is_active()) {
+    return {nullptr, rasterdb::test::g_shared_env->make_connection()};
   }
   auto db  = std::make_unique<duckdb::DuckDB>(nullptr);
   auto con = duckdb::Connection(*db);
@@ -107,25 +107,25 @@ inline std::pair<std::unique_ptr<duckdb::DuckDB>, duckdb::Connection> make_test_
 }
 
 /**
- * @brief Get or create a SiriusContext for the given connection.
+ * @brief Get or create a RasterDBContext for the given connection.
  *
- * When a shared test environment is active, the SiriusContext is already registered
+ * When a shared test environment is active, the RasterDBContext is already registered
  * in the connection by the extension callback's OnConnectionOpened. In that case,
  * the config_path is ignored.
  *
  * When no shared environment is active (isolated tests), creates and initializes
- * a new SiriusContext from the given config file.
+ * a new RasterDBContext from the given config file.
  */
-inline duckdb::shared_ptr<duckdb::SiriusContext> get_sirius_context(
+inline duckdb::shared_ptr<duckdb::RasterDBContext> get_rasterdb_context(
   duckdb::Connection& con, const std::filesystem::path& config_path)
 {
   auto& client_ctx = *con.context;
-  auto sirius_ctx  = client_ctx.registered_state->Get<duckdb::SiriusContext>("sirius_state");
+  auto sirius_ctx  = client_ctx.registered_state->Get<duckdb::RasterDBContext>("sirius_state");
   if (!sirius_ctx) {
-    sirius::converter_registry::initialize();
-    ::sirius::sirius_config config;
+    rasterdb::converter_registry::initialize();
+    ::rasterdb::rasterdb_config config;
     config.load_from_file(config_path);
-    auto new_ctx = duckdb::make_shared_ptr<duckdb::SiriusContext>();
+    auto new_ctx = duckdb::make_shared_ptr<duckdb::RasterDBContext>();
     new_ctx->initialize(config);
     client_ctx.registered_state->Insert("sirius_state", new_ctx);
     sirius_ctx = std::move(new_ctx);
@@ -134,4 +134,4 @@ inline duckdb::shared_ptr<duckdb::SiriusContext> get_sirius_context(
   return sirius_ctx;
 }
 
-}  // namespace sirius
+}  // namespace rasterdb

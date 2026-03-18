@@ -49,8 +49,8 @@
 #include <string>
 #include <thread>
 
-using namespace sirius;
-using namespace sirius::scan_test_utils;
+using namespace rasterdb;
+using namespace rasterdb::scan_test_utils;
 using namespace cucascade::memory;
 
 using table_creator_t = void (*)(duckdb::Connection&,
@@ -62,7 +62,7 @@ using batch_validator_t = void (*)(const std::vector<std::shared_ptr<cucascade::
                                    cucascade::memory::memory_reservation_manager&,
                                    rmm::cuda_stream_view);
 
-static std::unique_ptr<sirius::op::sirius_physical_parquet_scan> make_parquet_scan(
+static std::unique_ptr<rasterdb::op::sirius_physical_parquet_scan> make_parquet_scan(
   duckdb::ClientContext& ctx,
   std::string const& parquet_path,
   duckdb::vector<duckdb::idx_t> projection_ids = {})
@@ -122,7 +122,7 @@ static std::unique_ptr<sirius::op::sirius_physical_parquet_scan> make_parquet_sc
     }
   }
 
-  return std::make_unique<sirius::op::sirius_physical_parquet_scan>(output_types,
+  return std::make_unique<rasterdb::op::sirius_physical_parquet_scan>(output_types,
                                                                     table_function,
                                                                     std::move(bind_data),
                                                                     return_types,
@@ -261,13 +261,13 @@ static void run_parquet_scan_test(std::string const& table_name,
                                   batch_validator_t validator   = validate_scanned_batches,
                                   table_creator_t table_creator = create_synthetic_table)
 {
-  auto [db_owner, con] = sirius::make_test_db_and_connection();
+  auto [db_owner, con] = rasterdb::make_test_db_and_connection();
 
   table_creator(con, table_name, num_rows);
   auto parquet_path = write_parquet_from_table(con, table_name, row_group_size);
 
   auto& client_ctx = *con.context;
-  auto sirius_ctx  = sirius::get_sirius_context(con, get_test_config_path());
+  auto sirius_ctx  = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto& mem_mgr    = sirius_ctx->get_memory_manager();
   auto* mem_space  = get_space(mem_mgr, Tier::HOST);
   REQUIRE(mem_space != nullptr);
@@ -286,10 +286,10 @@ static void run_parquet_scan_test(std::string const& table_name,
 
   cucascade::shared_data_repository data_repo;
 
-  sirius::parallel::task_executor_config executor_config{num_threads, false};
+  rasterdb::parallel::task_executor_config executor_config{num_threads, false};
   auto task_queue =
-    std::make_unique<sirius::op::scan::duckdb_scan_task_queue>(executor_config.num_threads);
-  sirius::parallel::itask_executor executor(std::move(task_queue), std::move(executor_config));
+    std::make_unique<rasterdb::op::scan::duckdb_scan_task_queue>(executor_config.num_threads);
+  rasterdb::parallel::itask_executor executor(std::move(task_queue), std::move(executor_config));
 
   auto run_scan = [&]() -> std::vector<std::shared_ptr<cucascade::data_batch>> {
     executor.start();
@@ -345,7 +345,7 @@ static void run_multi_file_parquet_scan_test(std::string const& table_prefix,
 {
   REQUIRE(!file_row_counts.empty());
 
-  auto [db_owner, con] = sirius::make_test_db_and_connection();
+  auto [db_owner, con] = rasterdb::make_test_db_and_connection();
 
   auto parquet_dir = std::filesystem::temp_directory_path() / (table_prefix + "_multi_file");
   std::filesystem::remove_all(parquet_dir);
@@ -367,7 +367,7 @@ static void run_multi_file_parquet_scan_test(std::string const& table_prefix,
   }
 
   auto& client_ctx = *con.context;
-  auto sirius_ctx  = sirius::get_sirius_context(con, get_test_config_path());
+  auto sirius_ctx  = rasterdb::get_rasterdb_context(con, get_test_config_path());
   auto& mem_mgr    = sirius_ctx->get_memory_manager();
   auto* mem_space  = get_space(mem_mgr, Tier::HOST);
   REQUIRE(mem_space != nullptr);
@@ -385,10 +385,10 @@ static void run_multi_file_parquet_scan_test(std::string const& table_prefix,
 
   cucascade::shared_data_repository data_repo;
 
-  sirius::parallel::task_executor_config executor_config{num_threads, false};
+  rasterdb::parallel::task_executor_config executor_config{num_threads, false};
   auto task_queue =
-    std::make_unique<sirius::op::scan::duckdb_scan_task_queue>(executor_config.num_threads);
-  sirius::parallel::itask_executor executor(std::move(task_queue), std::move(executor_config));
+    std::make_unique<rasterdb::op::scan::duckdb_scan_task_queue>(executor_config.num_threads);
+  rasterdb::parallel::itask_executor executor(std::move(task_queue), std::move(executor_config));
 
   auto run_scan = [&]() -> std::vector<std::shared_ptr<cucascade::data_batch>> {
     executor.start();

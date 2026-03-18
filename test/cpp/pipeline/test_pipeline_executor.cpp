@@ -28,10 +28,10 @@
 #include <mutex>
 #include <thread>
 
-using namespace sirius::pipeline;
-using namespace sirius::parallel;
+using namespace rasterdb::pipeline;
+using namespace rasterdb::parallel;
 using namespace std::chrono_literals;
-using namespace sirius::op;
+using namespace rasterdb::op;
 
 /**
  * Mock GPU pipeline task for testing.
@@ -96,8 +96,8 @@ class mock_gpu_pipeline_task : public gpu_pipeline_task {
 TEST_CASE("Pipeline executor can start and stop gracefully", "[pipeline_executor]")
 {
   auto manager = initialize_memory_manager(1);
-  sirius::exec::thread_pool_config gpu_config{2};
-  sirius::exec::thread_pool_config scan_config{2};
+  rasterdb::exec::thread_pool_config gpu_config{2};
+  rasterdb::exec::thread_pool_config scan_config{2};
   pipeline_executor executor(gpu_config, scan_config, *manager);
 
   REQUIRE_NOTHROW(executor.start());
@@ -107,8 +107,8 @@ TEST_CASE("Pipeline executor can start and stop gracefully", "[pipeline_executor
 TEST_CASE("Pipeline executor executes tasks through pipeline_queue", "[pipeline_executor]")
 {
   auto manager = initialize_memory_manager(1);
-  sirius::exec::thread_pool_config gpu_config{2};
-  sirius::exec::thread_pool_config scan_config{2};
+  rasterdb::exec::thread_pool_config gpu_config{2};
+  rasterdb::exec::thread_pool_config scan_config{2};
   pipeline_executor executor(gpu_config, scan_config, *manager);
 
   auto global_state = std::make_shared<mock_gpu_pipeline_task_global_state>();
@@ -141,8 +141,8 @@ TEST_CASE("Pipeline executor executes tasks through pipeline_queue", "[pipeline_
 TEST_CASE("Task queue handles empty queue gracefully", "[pipeline_queue]")
 {
   auto manager = initialize_memory_manager(1);
-  sirius::exec::thread_pool_config gpu_config{2};
-  sirius::exec::thread_pool_config scan_config{2};
+  rasterdb::exec::thread_pool_config gpu_config{2};
+  rasterdb::exec::thread_pool_config scan_config{2};
   pipeline_executor executor(gpu_config, scan_config, *manager);
 
   auto global_state = std::make_shared<mock_gpu_pipeline_task_global_state>();

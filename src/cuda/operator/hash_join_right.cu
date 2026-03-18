@@ -189,10 +189,10 @@ void scanHashTableRight(unsigned long long* ht,
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
-    SIRIUS_LOG_DEBUG("Input size is 0");
+    RASTERDB_LOG_DEBUG("Input size is 0");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Scan Kernel");
+  RASTERDB_LOG_DEBUG("Launching Scan Kernel");
   SETUP_TIMING();
   START_TIMER();
   count = gpuBufferManager->customCudaMalloc<uint64_t>(1, 0, 0);
@@ -216,7 +216,7 @@ void scanHashTableRight(unsigned long long* ht,
       ht, (unsigned long long*)count, ht_len, row_ids, num_keys, join_mode, 0);
   CHECK_ERROR();
   cudaDeviceSynchronize();
-  SIRIUS_LOG_DEBUG("Scan Count: {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("Scan Count: {}", h_count[0]);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(count), 0);
   count = h_count;
 
@@ -237,10 +237,10 @@ void probeHashTableRightSemiAnti(uint8_t** keys,
 {
   CHECK_ERROR();
   if (N == 0 || ht_len == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Probe Kernel");
+  RASTERDB_LOG_DEBUG("Launching Probe Kernel");
   SETUP_TIMING();
   START_TIMER();
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
@@ -269,7 +269,7 @@ void probeHashTableRightSemiAnti(uint8_t** keys,
   CHECK_ERROR();
   cudaDeviceSynchronize();
 
-  SIRIUS_LOG_DEBUG("Finished probe right");
+  RASTERDB_LOG_DEBUG("Finished probe right");
   STOP_TIMER();
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(keys_dev), 0);
   gpuBufferManager->customCudaFree(reinterpret_cast<uint8_t*>(condition_mode_dev), 0);

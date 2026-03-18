@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,7 +78,7 @@ SinkResultType GPUPhysicalTopN::Sink(GPUIntermediateRelation& input_relation) co
   // throw NotImplementedException("Top N Sink not implemented");
   if (dynamic_filter) {
     // `dynamic_filter` is currently not leveraged
-    SIRIUS_LOG_WARN("`dynamic_filter` is currently not leveraged in `GPUPhysicalTopN`");
+    RASTERDB_LOG_WARN("`dynamic_filter` is currently not leveraged in `GPUPhysicalTopN`");
   }
 
   vector<shared_ptr<GPUColumn>> order_by_keys(orders.size());
@@ -130,7 +130,7 @@ SinkResultType GPUPhysicalTopN::Sink(GPUIntermediateRelation& input_relation) co
   // return SinkResultType::NEED_MORE_INPUT;
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Top N Sink time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Top N Sink time: {:.2f} ms", duration.count() / 1000.0);
   return SinkResultType::FINISHED;
 }
 
@@ -141,7 +141,7 @@ SourceResultType GPUPhysicalTopN::GetData(GPUIntermediateRelation& output_relati
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
 
   for (int col = 0; col < sort_result->columns.size(); col++) {
-    SIRIUS_LOG_DEBUG("Writing top n result to column {}", col);
+    RASTERDB_LOG_DEBUG("Writing top n result to column {}", col);
     if (offset >= sort_result->columns[col]->column_length) {
       output_relation.columns[col] =
         make_shared_ptr<GPUColumn>(0,
@@ -199,7 +199,7 @@ SourceResultType GPUPhysicalTopN::GetData(GPUIntermediateRelation& output_relati
   // return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("Top N GetData time: {:.2f} ms", duration.count() / 1000.0);
+  RASTERDB_LOG_DEBUG("Top N GetData time: {:.2f} ms", duration.count() / 1000.0);
   return SourceResultType::FINISHED;
 }
 

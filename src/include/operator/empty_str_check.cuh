@@ -26,7 +26,7 @@
 #include <memory>
 
 namespace duckdb {
-namespace sirius {
+namespace rasterdb {
 
 // Returns a BOOL8 column where result[i] = true iff the string at position i is non-empty.
 // Computed via offset arithmetic: result[i] = (offsets[i+1] - offsets[i]) > 0.
@@ -37,5 +37,5 @@ std::unique_ptr<cudf::column> EmptyStrCheck(const uint64_t* offsets,
                                             rmm::cuda_stream_view stream,
                                             rmm::device_async_resource_ref mr);
 
-}  // namespace sirius
+}  // namespace rasterdb
 }  // namespace duckdb

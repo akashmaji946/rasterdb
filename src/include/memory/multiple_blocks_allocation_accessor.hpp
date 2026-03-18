@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 #include <memory>
 #include <stdexcept>
 
-namespace sirius::memory {
+namespace rasterdb::memory {
 
 /**
  * @brief Accessor for multiple blocks allocation from fixed_size_host_memory_resource.
@@ -291,4 +291,4 @@ struct multiple_blocks_allocation_accessor {
   }
 };
 
-}  // namespace sirius::memory
+}  // namespace rasterdb::memory

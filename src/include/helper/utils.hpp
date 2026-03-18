@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 // standard library
 #include <type_traits>
 
-namespace sirius::utils {
+namespace rasterdb::utils {
 
 template <typename T>
 inline constexpr T ceil_div(T a, T b)
@@ -70,4 +70,4 @@ inline constexpr S make_mask(T num_bits)
   return static_cast<S>((static_cast<S>(1) << num_bits) - 1);
 }
 
-}  // namespace sirius::utils
+}  // namespace rasterdb::utils

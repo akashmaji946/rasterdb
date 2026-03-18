@@ -251,13 +251,13 @@ void buildHashTable(uint8_t** keys,
 {
   CHECK_ERROR();
   if (N == 0 || ht_len == 0) {
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Build Kernel");
+  RASTERDB_LOG_DEBUG("Launching Build Kernel");
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Input size: {} ht len: {}", N, ht_len);
+  RASTERDB_LOG_DEBUG("Input size: {} ht len: {}", N, ht_len);
   GPUBufferManager* gpuBufferManager = &(GPUBufferManager::GetInstance());
 
   // reinterpret cast the keys to type T
@@ -308,13 +308,13 @@ void probeHashTable(uint8_t** keys,
     uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
     h_count[0]        = 0;
     count             = h_count;
-    SIRIUS_LOG_DEBUG("Input size is 0 or hash table is empty");
+    RASTERDB_LOG_DEBUG("Input size is 0 or hash table is empty");
     return;
   }
-  SIRIUS_LOG_DEBUG("Launching Probe Kernel");
+  RASTERDB_LOG_DEBUG("Launching Probe Kernel");
   SETUP_TIMING();
   START_TIMER();
-  SIRIUS_LOG_DEBUG("Input size: {}", N);
+  RASTERDB_LOG_DEBUG("Input size: {}", N);
   int tile_items = BLOCK_THREADS * ITEMS_PER_THREAD;
   count          = gpuBufferManager->customCudaMalloc<uint64_t>(1, 0, 0);
   cudaMemset(count, 0, sizeof(uint64_t));
@@ -361,7 +361,7 @@ void probeHashTable(uint8_t** keys,
   uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
   cudaMemcpy(h_count, count, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   assert(h_count[0] > 0);
-  SIRIUS_LOG_DEBUG("Probe Hash Table Result Count: {}", h_count[0]);
+  RASTERDB_LOG_DEBUG("Probe Hash Table Result Count: {}", h_count[0]);
   row_ids_left  = gpuBufferManager->customCudaMalloc<uint64_t>(h_count[0], 0, 0);
   row_ids_right = gpuBufferManager->customCudaMalloc<uint64_t>(h_count[0], 0, 0);
   probe_multikey<BLOCK_THREADS, ITEMS_PER_THREAD, T>
@@ -381,7 +381,7 @@ void probeHashTable(uint8_t** keys,
   // uint64_t* h_count = gpuBufferManager->customCudaHostAlloc<uint64_t>(1);
   // cudaMemcpy(h_count, count, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   // assert(h_count[0] > 0);
-  // SIRIUS_LOG_DEBUG("Count: {}", h_count[0]);
+  // RASTERDB_LOG_DEBUG("Count: {}", h_count[0]);
   // gpuBufferManager->gpuProcessingPointer[0] = (reinterpret_cast<uint8_t*>(row_ids_left +
   // h_count[0]) - gpuBufferManager->gpuProcessing[0]);
   // cudaMemmove(reinterpret_cast<uint8_t*>(row_ids_left + h_count[0]),

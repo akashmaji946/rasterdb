@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, Sirius Contributors.
+ * Copyright 2025, RasterDB Contributors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,15 +21,15 @@
 
 #include <config.hpp>
 #include <memory/multiple_blocks_allocation_accessor.hpp>
-#include <op/sirius_physical_duckdb_scan.hpp>
-#include <op/sirius_physical_table_scan.hpp>
+#include <op/rasterdb_physical_duckdb_scan.hpp>
+#include <op/rasterdb_physical_table_scan.hpp>
 #include <parallel/task.hpp>
 #include <pipeline/pipeline_executor.hpp>
-#include <pipeline/sirius_pipeline.hpp>
-#include <pipeline/sirius_pipeline_itask.hpp>
-#include <pipeline/sirius_pipeline_task_states.hpp>
-#include <sirius_config.hpp>
-#include <sirius_context.hpp>
+#include <pipeline/rasterdb_pipeline.hpp>
+#include <pipeline/rasterdb_pipeline_itask.hpp>
+#include <pipeline/rasterdb_pipeline_task_states.hpp>
+#include <rasterdb_config.hpp>
+#include <rasterdb_context.hpp>
 
 // cucascade
 #include <cucascade/data/data_batch.hpp>
@@ -51,7 +51,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace sirius::op::scan {
+namespace rasterdb::op::scan {
 //===----------------------------------------------------------------------===//
 // DuckDB Scan Task Global State
 //===----------------------------------------------------------------------===//
@@ -59,7 +59,7 @@ namespace sirius::op::scan {
 /**
  * @brief The global state for a duckdb_scan_task.
  */
-class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_global_state,
+class duckdb_scan_task_global_state : public pipeline::rasterdb_pipeline_task_global_state,
                                       public duckdb::GlobalSourceState {
   friend class duckdb_scan_task;
   friend class duckdb_scan_task_local_state;
@@ -74,10 +74,10 @@ class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_glob
    * @param[in] client_ctx The DuckDB client context
    * @param[in] gpu_pts The GPU physical table scan being executed
    */
-  duckdb_scan_task_global_state(duckdb::shared_ptr<pipeline::sirius_pipeline> pipeline,
+  duckdb_scan_task_global_state(duckdb::shared_ptr<pipeline::rasterdb_pipeline> pipeline,
                                 pipeline::pipeline_executor& pipeline_exec,
                                 duckdb::ClientContext& client_ctx,
-                                sirius_physical_duckdb_scan* scan_op);
+                                rasterdb_physical_duckdb_scan* scan_op);
 
   //===----------Methods----------===//
   /**
@@ -103,7 +103,7 @@ class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_glob
     _source_drained.store(true, std::memory_order_release);
     if (get_pipeline()) {
       auto* scan_op =
-        dynamic_cast<sirius_physical_duckdb_scan*>(&get_pipeline()->get_operators().at(0).get());
+        dynamic_cast<rasterdb_physical_duckdb_scan*>(&get_pipeline()->get_operators().at(0).get());
 
       if (scan_op) { scan_op->exhausted.store(true, std::memory_order_release); }
     }
@@ -129,9 +129,9 @@ class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_glob
     if (remaining == 0) { set_source_drained(); }
   }
 
-  std::vector<sirius_physical_operator*> get_output_consumers() const noexcept
+  std::vector<rasterdb_physical_operator*> get_output_consumers() const noexcept
   {
-    std::vector<sirius_physical_operator*> output_consumers;
+    std::vector<rasterdb_physical_operator*> output_consumers;
     auto ports = _op.get_next_port_after_sink();
     for (auto& [child, port_id] : ports) {
       output_consumers.push_back(child);
@@ -147,12 +147,12 @@ class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_glob
  private:
   std::atomic<std::size_t> _total_task_count{0};
   //===----------Fields----------===//
-  duckdb::SiriusContext* _sirius_ctx;  ///< The Sirius context
+  duckdb::RasterDBContext* _sirius_ctx;  ///< The Sirius context
   std::unique_ptr<duckdb::GlobalTableFunctionState>
     _global_tf_state;  ///< Global state for the table function
   pipeline::pipeline_executor&
     _pipeline_executor;                      ///< The pipeline executor for scheduling scan tasks
-  sirius_physical_duckdb_scan& _op;          ///< The physical table scan being executed
+  rasterdb_physical_duckdb_scan& _op;          ///< The physical table scan being executed
   std::atomic<bool> _source_drained{false};  ///< Whether the table scan source is fully drained
   std::atomic<int64_t> _active_local_states{0};  ///< Number of active local table function states
   uint64_t _max_threads;                         ///< Maximum number of threads for this scan task
@@ -170,7 +170,7 @@ class duckdb_scan_task_global_state : public pipeline::sirius_pipeline_task_glob
  * DuckDB data chunks into those buffers.
  *
  */
-class duckdb_scan_task_local_state : public sirius::pipeline::sirius_pipeline_task_local_state {
+class duckdb_scan_task_local_state : public rasterdb::pipeline::rasterdb_pipeline_task_local_state {
   using data_batch = cucascade::data_batch;
 
  public:
@@ -301,8 +301,8 @@ class duckdb_scan_task_local_state : public sirius::pipeline::sirius_pipeline_ta
   duckdb_scan_task_local_state(
     duckdb_scan_task_global_state& g_state,
     duckdb::ExecutionContext& exec_ctx,
-    size_t approximate_batch_size = sirius::config::DEFAULT_SCAN_TASK_BATCH_SIZE,
-    size_t default_varchar_size   = sirius::config::DEFAULT_SCAN_TASK_VARCHAR_SIZE,
+    size_t approximate_batch_size = rasterdb::config::DEFAULT_SCAN_TASK_BATCH_SIZE,
+    size_t default_varchar_size   = rasterdb::config::DEFAULT_SCAN_TASK_VARCHAR_SIZE,
     std::unique_ptr<duckdb::LocalTableFunctionState> existing_local_tf_state = nullptr);
 
   [[nodiscard]] std::size_t get_estimated_reservation_size() const noexcept
@@ -357,7 +357,7 @@ class duckdb_scan_task_local_state : public sirius::pipeline::sirius_pipeline_ta
    *
    * @param[in] op The physical table scan operator being executed.
    */
-  void estimate_rows_per_batch(sirius_physical_duckdb_scan const& op);
+  void estimate_rows_per_batch(rasterdb_physical_duckdb_scan const& op);
 
   /**
    * @brief Initializes the column builders.
@@ -371,7 +371,7 @@ class duckdb_scan_task_local_state : public sirius::pipeline::sirius_pipeline_ta
    * @param[in] exec_ctx The duckdb execution context.
    * @param[in] global_tf_state The duckdb table function global state.
    */
-  void initialize_local_table_function_state(sirius_physical_duckdb_scan const& op,
+  void initialize_local_table_function_state(rasterdb_physical_duckdb_scan const& op,
                                              duckdb::ExecutionContext& exec_ctx,
                                              duckdb::GlobalTableFunctionState* global_tf_state);
 };
@@ -388,7 +388,7 @@ class duckdb_scan_task_local_state : public sirius::pipeline::sirius_pipeline_ta
  * the batch to the data repository and notifying the task creator. If the table scan is
  * incomplete upon task completion, the task will push a new scan_task onto the task queue.
  */
-class duckdb_scan_task : public sirius::pipeline::sirius_pipeline_itask {
+class duckdb_scan_task : public rasterdb::pipeline::rasterdb_pipeline_itask {
   using shared_data_repository = cucascade::shared_data_repository;
   // Friend declaration for test access
   friend class test_scan_task;
@@ -407,7 +407,7 @@ class duckdb_scan_task : public sirius::pipeline::sirius_pipeline_itask {
                    shared_data_repository* data_repo,
                    std::unique_ptr<duckdb_scan_task_local_state> l_state,
                    std::shared_ptr<duckdb_scan_task_global_state> g_state)
-    : sirius::pipeline::sirius_pipeline_itask(std::move(l_state), g_state),
+    : rasterdb::pipeline::rasterdb_pipeline_itask(std::move(l_state), g_state),
       _task_id(task_id),
       _data_repo(data_repo)
   {
@@ -495,7 +495,7 @@ class duckdb_scan_task : public sirius::pipeline::sirius_pipeline_itask {
   }
 
   /// @brief Get the output consumer operators for this task.
-  std::vector<op::sirius_physical_operator*> get_output_consumers() override
+  std::vector<op::rasterdb_physical_operator*> get_output_consumers() override
   {
     return this->_global_state->cast<duckdb_scan_task_global_state>().get_output_consumers();
   }
@@ -511,4 +511,4 @@ class duckdb_scan_task : public sirius::pipeline::sirius_pipeline_itask {
   uint64_t _task_id;                   ///< The unique id of this scan task
 };
 
-}  // namespace sirius::op::scan
+}  // namespace rasterdb::op::scan
