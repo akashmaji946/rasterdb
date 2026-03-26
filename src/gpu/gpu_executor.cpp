@@ -19,6 +19,8 @@
 #include <rasterdf/sorting.hpp>
 #include <rasterdf/copying.hpp>
 #include <rasterdf/stream_compaction.hpp>
+#include <rasterdf/join.hpp>
+#include <rasterdf/groupby.hpp>
 
 #include <duckdb/common/exception.hpp>
 #include <duckdb/common/types/data_chunk.hpp>
@@ -90,6 +92,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_operator(duckdb::LogicalOperato
       return execute_order(op.Cast<duckdb::LogicalOrder>());
     case duckdb::LogicalOperatorType::LOGICAL_LIMIT:
       return execute_limit(op.Cast<duckdb::LogicalLimit>());
+    case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+      return execute_join(op.Cast<duckdb::LogicalComparisonJoin>());
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported operator %s",
@@ -561,8 +565,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_aggregate(duckdb::LogicalAggreg
   auto input = execute_operator(*op.children[0]);
 
   if (!op.groups.empty()) {
-    throw duckdb::NotImplementedException(
-      "RasterDB GPU: GROUP BY not yet implemented");
+    auto result = std::make_unique<gpu_table>();
+    // op.types may be empty in unoptimized plans — compute output count manually
+    size_t out_cols = op.groups.size() + op.expressions.size();
+    result->columns.resize(out_cols);
+    // Build duckdb_types: group key types + aggregate result types
+    // For now, leave duckdb_types empty — to_query_result will infer from gpu_columns
+    execute_grouped_aggregate(*input, op.groups, op.expressions, op.types, *result);
+    return result;
   }
 
   auto result = std::make_unique<gpu_table>();
@@ -674,6 +684,126 @@ void gpu_executor::execute_ungrouped_aggregate(
         static_cast<int>(out_type.id));
     }
   }
+}
+
+// ============================================================================
+// GROUP BY aggregate — hash-based groupby via rasterdf
+// ============================================================================
+
+void gpu_executor::execute_grouped_aggregate(
+  const gpu_table& input,
+  const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& groups,
+  const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
+  const duckdb::vector<duckdb::LogicalType>& result_types,
+  gpu_table& output)
+{
+  RASTERDB_LOG_DEBUG("GPU execute_grouped_aggregate: {} groups, {} aggs",
+                     groups.size(), aggregates.size());
+
+  // Currently support single group-by column (INT32)
+  if (groups.size() != 1) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: only single-column GROUP BY supported");
+  }
+
+  auto& group_expr = *groups[0];
+  if (group_expr.type != duckdb::ExpressionType::BOUND_REF) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: GROUP BY expression must be a column reference");
+  }
+
+  auto group_col_idx = group_expr.Cast<duckdb::BoundReferenceExpression>().index;
+  auto& group_col = input.col(group_col_idx);
+
+  // Build table_view for group key
+  auto group_key_view = group_col.view();
+  std::vector<rasterdf::column_view> key_views = {group_key_view};
+  rasterdf::table_view keys_tv(key_views);
+
+  // Process each aggregate expression using rasterdf::groupby
+  // Result layout: [group_key_col, agg1_col, agg2_col, ...]
+  // Column index 0 = group key, 1..N = aggregates
+
+  // We process one aggregate at a time since rasterdf::groupby reinitializes
+  // the hash table per aggregate() call.
+  // First, handle the first aggregate to get the keys.
+
+  bool keys_set = false;
+  rasterdf::size_type num_groups = 0;
+
+  for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
+    auto& expr = aggregates[i]->Cast<duckdb::BoundAggregateExpression>();
+    auto& fname = expr.function.name;
+
+    bool is_count_star = false;
+    duckdb::idx_t val_col_idx = 0;
+
+    if (expr.children.empty()) {
+      is_count_star = (fname == "count" || fname == "count_star");
+      if (!is_count_star) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: grouped aggregate '%s' with no children", fname.c_str());
+      }
+    } else if (expr.children[0]->type == duckdb::ExpressionType::BOUND_REF) {
+      val_col_idx = expr.children[0]->Cast<duckdb::BoundReferenceExpression>().index;
+    } else {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: grouped aggregate with complex child expression");
+    }
+
+    // Map aggregate name to rasterdf kind
+    rasterdf::aggregation_kind kind;
+    if (fname == "sum" || fname == "sum_no_overflow") {
+      kind = rasterdf::aggregation_kind::SUM;
+    } else if (fname == "min") {
+      kind = rasterdf::aggregation_kind::MIN;
+    } else if (fname == "max") {
+      kind = rasterdf::aggregation_kind::MAX;
+    } else if (fname == "count" || fname == "count_star") {
+      kind = rasterdf::aggregation_kind::COUNT_ALL;
+    } else if (fname == "avg" || fname == "mean") {
+      kind = rasterdf::aggregation_kind::MEAN;
+    } else {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: unsupported grouped aggregate '%s'", fname.c_str());
+    }
+
+    // Build aggregation request
+    rasterdf::groupby gb(keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+
+    std::vector<rasterdf::aggregation_request> requests;
+    rasterdf::aggregation_request req;
+
+    if (is_count_star) {
+      // For count(*), use the group key column as values (counts rows per group)
+      req.values = group_col.view();
+    } else {
+      req.values = input.col(val_col_idx).view();
+    }
+    req.aggregations.push_back(std::make_unique<rasterdf::groupby_aggregation>(kind));
+    requests.push_back(std::move(req));
+
+    auto agg_result = gb.aggregate(std::move(requests));
+
+    // On first aggregate, extract the keys
+    if (!keys_set) {
+      auto key_cols = agg_result.keys->extract();
+      if (!key_cols.empty()) {
+        num_groups = key_cols[0]->size();
+        output.columns[0] = gpu_column_from_rdf(std::move(*key_cols[0]));
+      }
+      keys_set = true;
+    }
+
+    // Store aggregate result (column index = groups.size() + i)
+    size_t out_col_idx = groups.size() + i;
+    if (!agg_result.results.empty() && agg_result.results[0]) {
+      output.columns[out_col_idx] = gpu_column_from_rdf(std::move(*agg_result.results[0]));
+    }
+  }
+
+  RASTERDB_LOG_DEBUG("GROUP BY result: {} groups, {} output cols",
+                     num_groups, output.columns.size());
 }
 
 // ============================================================================
@@ -795,6 +925,109 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
     disp.dispatch_gather_indices(gc, ng);
   }
 
+  return result;
+}
+
+// ============================================================================
+// JOIN — hash join via rasterdf
+// ============================================================================
+
+std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
+{
+  RASTERDB_LOG_DEBUG("GPU execute_join");
+  D_ASSERT(op.children.size() == 2);
+
+  if (op.join_type != duckdb::JoinType::INNER) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: only INNER JOIN supported, got %s",
+      duckdb::JoinTypeToString(op.join_type).c_str());
+  }
+
+  if (op.conditions.size() != 1) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: only single-condition JOIN supported");
+  }
+
+  auto& cond = op.conditions[0];
+  if (cond.comparison != duckdb::ExpressionType::COMPARE_EQUAL) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: only equi-join supported");
+  }
+
+  // Execute both children
+  auto left_table = execute_operator(*op.children[0]);
+  auto right_table = execute_operator(*op.children[1]);
+
+  RASTERDB_LOG_DEBUG("JOIN: left {} rows x {} cols, right {} rows x {} cols",
+                     left_table->num_rows(), left_table->num_columns(),
+                     right_table->num_rows(), right_table->num_columns());
+
+  // Get join key column indices from conditions
+  auto& left_expr = unwrap_cast(*cond.left);
+  auto& right_expr = unwrap_cast(*cond.right);
+
+  if (left_expr.type != duckdb::ExpressionType::BOUND_REF ||
+      right_expr.type != duckdb::ExpressionType::BOUND_REF) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: join conditions must be column references");
+  }
+
+  auto left_key_idx = left_expr.Cast<duckdb::BoundReferenceExpression>().index;
+  auto right_key_idx = right_expr.Cast<duckdb::BoundReferenceExpression>().index;
+
+  // Build table_views for join keys (single-column INT32 keys)
+  auto left_key_view = left_table->col(left_key_idx).view();
+  auto right_key_view = right_table->col(right_key_idx).view();
+  std::vector<rasterdf::column_view> lk = {left_key_view};
+  std::vector<rasterdf::column_view> rk = {right_key_view};
+  rasterdf::table_view left_keys_tv(lk);
+  rasterdf::table_view right_keys_tv(rk);
+
+  // Perform hash join — builds on right (build), probes with left (probe)
+  auto [left_indices, right_indices] = rasterdf::inner_join(
+    left_keys_tv, right_keys_tv,
+    _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+
+  rasterdf::size_type match_count = left_indices->size();
+  RASTERDB_LOG_DEBUG("JOIN: {} matches", match_count);
+
+  if (match_count == 0) {
+    auto result = std::make_unique<gpu_table>();
+    result->duckdb_types = op.types;
+    result->columns.resize(op.types.size());
+    for (size_t i = 0; i < op.types.size(); i++) {
+      result->columns[i].type = to_rdf_type(op.types[i]);
+      result->columns[i].num_rows = 0;
+    }
+    return result;
+  }
+
+  auto left_idx_view = left_indices->view();
+  auto right_idx_view = right_indices->view();
+
+  // Gather from both tables using the matched indices
+  auto left_gathered = rasterdf::gather(left_table->view(), left_idx_view,
+    _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+  auto right_gathered = rasterdf::gather(right_table->view(), right_idx_view,
+    _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+
+  // Build result: left columns then right columns
+  auto result = std::make_unique<gpu_table>();
+  result->duckdb_types = op.types;
+
+  auto left_cols = left_gathered->extract();
+  auto right_cols = right_gathered->extract();
+
+  size_t total_cols = left_cols.size() + right_cols.size();
+  result->columns.resize(total_cols);
+  for (size_t i = 0; i < left_cols.size(); i++) {
+    result->columns[i] = gpu_column_from_rdf(std::move(*left_cols[i]));
+  }
+  for (size_t i = 0; i < right_cols.size(); i++) {
+    result->columns[left_cols.size() + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
+  }
+
+  RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} cols", match_count, total_cols);
   return result;
 }
 

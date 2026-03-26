@@ -58,6 +58,7 @@ private:
   std::unique_ptr<gpu_table> execute_aggregate(duckdb::LogicalAggregate& op);
   std::unique_ptr<gpu_table> execute_order(duckdb::LogicalOrder& op);
   std::unique_ptr<gpu_table> execute_limit(duckdb::LogicalLimit& op);
+  std::unique_ptr<gpu_table> execute_join(duckdb::LogicalComparisonJoin& op);
 
   // Expression evaluation helpers
   gpu_column evaluate_comparison(const gpu_table& input, duckdb::Expression& expr);
@@ -70,6 +71,11 @@ private:
   void execute_ungrouped_aggregate(const gpu_table& input,
                                     const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
                                     gpu_table& output);
+  void execute_grouped_aggregate(const gpu_table& input,
+                                  const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& groups,
+                                  const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
+                                  const duckdb::vector<duckdb::LogicalType>& result_types,
+                                  gpu_table& output);
 };
 
 } // namespace gpu
