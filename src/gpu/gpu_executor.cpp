@@ -292,6 +292,37 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
   std::string scan_query = "SELECT " + col_list + " FROM \"" + table_name + "\"";
 
+  // Optimization: push down filters to Parquet scanner (requires optimizer)
+  if (!op.table_filters.filters.empty()) {
+    std::string where_clause = " WHERE ";
+    bool first_filter = true;
+    for (auto& entry : op.table_filters.filters) {
+      if (!first_filter) where_clause += " AND ";
+      
+      idx_t absolute_col_idx = entry.first;
+      std::string filter_col_name = "unknown";
+      
+      if (absolute_col_idx < op.names.size()) {
+          filter_col_name = op.names[absolute_col_idx];
+      } else {
+          // If for some reason names is missing the absolute column,
+          // try to match it through projected column_ids 
+          for (size_t i = 0; i < col_ids.size(); i++) {
+              if (col_ids[i].GetPrimaryIndex() == absolute_col_idx) {
+                  if (i < op.names.size()) {
+                      filter_col_name = op.names[i];
+                  }
+                  break;
+              }
+          }
+      }
+      
+      where_clause += entry.second->ToString("\"" + filter_col_name + "\"");
+      first_filter = false;
+    }
+    scan_query += where_clause;
+  }
+
   // Optimization: LIMIT pushdown — add LIMIT to SQL scan if no filter/order
   if (_scan_limit > 0) {
     scan_query += " LIMIT " + std::to_string(_scan_limit);
@@ -365,14 +396,13 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
 // ============================================================================
 // FILTER — evaluate WHERE clause predicates on GPU
-// ============================================================================
-
 std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& op)
 {
-  stage_timer t("  filter (total)");
   RASTERDB_LOG_DEBUG("GPU execute_filter");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  filter (total)");
 
   if (input->num_rows() == 0) return input;
 

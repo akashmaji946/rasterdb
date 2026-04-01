@@ -178,16 +178,26 @@ static void GPUExecutionFunction(ClientContext& context,
                 data.query.c_str(), data.query.size() > 60 ? "..." : "");
 
         auto t0 = std::chrono::high_resolution_clock::now();
-        // Parse + plan + optimize the query
+        // Parse + plan the query
         Parser parser(context.GetParserOptions());
         parser.ParseQuery(data.query);
         Planner planner(context);
         planner.CreatePlan(std::move(parser.statements[0]));
 
-        // Skip DuckDB optimizer — it pushes filters into scans and removes
-        // filter nodes. We want the unoptimized plan so the GPU executor
-        // can handle scan → filter → project → aggregate itself.
-        auto& plan = *planner.plan;
+        // Enable optimizer to match Sirius (push down filters, join reordering, etc)
+        auto original_disabled = DBConfig::GetConfig(context).options.disabled_optimizers;
+        auto disabled_optimizers = original_disabled;
+        disabled_optimizers.insert(OptimizerType::IN_CLAUSE);
+        disabled_optimizers.insert(OptimizerType::COMPRESSED_MATERIALIZATION);
+        disabled_optimizers.insert(OptimizerType::COLUMN_LIFETIME);
+        DBConfig::GetConfig(context).options.disabled_optimizers = disabled_optimizers;
+
+        Optimizer optimizer(*planner.binder, context);
+        auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
+        
+        DBConfig::GetConfig(context).options.disabled_optimizers = original_disabled;
+        
+        auto& plan = *optimized_plan;
 
         // Resolve column bindings to flat indices (BoundColumnRef -> BoundRef)
         ColumnBindingResolver resolver;
