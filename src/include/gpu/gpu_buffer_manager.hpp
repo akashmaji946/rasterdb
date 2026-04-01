@@ -98,6 +98,7 @@ public:
 
   VkDeviceAddress gpuCacheAddress()      const { return _gpu_cache_alloc.address; }
   VkDeviceAddress gpuProcessingAddress() const { return _gpu_processing_alloc.address; }
+  VkDeviceAddress cpuStagingAddress()    const { return _cpu_staging_alloc.address; }
 
   /// Batch transfer: multiple regions from cpuProcessing → gpuCache in ONE vkQueueSubmit.
   void batchTransfer(gpu_context& ctx,

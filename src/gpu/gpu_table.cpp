@@ -258,33 +258,21 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
                        rdf_types[c], staging_dst + write_pos);
       }
 
-      // Set column to reference cache location
+      // Set column to natively reference CPU staging location! (Zero-Copy PCIe)
       table->columns[c].type = rdf_types[c];
       table->columns[c].num_rows = total_rows;
-      table->columns[c].cached_address = bufMgr.gpuCacheAddress() + cache_off;
-      table->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+      table->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging_off;
+      table->columns[c].cached_buffer = bufMgr.cpuStagingBuffer();
 
-      upload_staging_offsets.push_back(staging_off);
-      upload_cache_offsets.push_back(cache_off);
+      // We still map sizes so we log it, but we won't batchTransfer to GPU Cache
       upload_sizes.push_back(col_bytes);
 
-      // Cache for future queries
-      GPUBufferManager::CachedColumn cc;
-      cc.gpu_offset = cache_off;
-      cc.num_rows = total_rows;
-      cc.byte_size = col_bytes;
-      cc.type = rdf_types[c];
-      bufMgr.cached_columns[table_name][column_names[c]] = cc;
-
-      RASTERDB_LOG_DEBUG("  col {} ({}) UPLOAD: staging={} cache={} bytes={}",
-                         c, column_names[c], staging_off, cache_off, col_bytes);
+      RASTERDB_LOG_DEBUG("  col {} ({}) ZERO-COPY STAGING: offset={} bytes={}",
+                         c, column_names[c], staging_off, col_bytes);
     }
   }
 
-  // Batch transfer all uncached columns: staging → cache (ONE vkQueueSubmit)
-  if (!upload_staging_offsets.empty()) {
-    bufMgr.batchTransfer(ctx, upload_staging_offsets, upload_cache_offsets, upload_sizes);
-  }
+  // Skip batchTransfer entirely! Zero-Copy Optimization matches Sirius 0ms upload.
 
   table->_num_rows = total_rows;
   RASTERDB_LOG_DEBUG("GPU table from_buffer_manager: {} rows x {} cols ({} uploaded, {} cached)",

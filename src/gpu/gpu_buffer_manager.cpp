@@ -60,7 +60,9 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
   //    Used for CPU→GPU data transfers. Persistently mapped = no map/unmap overhead.
   _cpu_staging_alloc = mr->allocate(
       cpu_size,
-      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
       VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
   if (!_cpu_staging_alloc.mapped_ptr) {
     mr->deallocate(_gpu_cache_alloc);
