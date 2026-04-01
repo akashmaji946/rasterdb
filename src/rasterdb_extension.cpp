@@ -190,6 +190,9 @@ static void GPUExecutionFunction(ClientContext& context,
         disabled_optimizers.insert(OptimizerType::IN_CLAUSE);
         disabled_optimizers.insert(OptimizerType::COMPRESSED_MATERIALIZATION);
         disabled_optimizers.insert(OptimizerType::COLUMN_LIFETIME);
+        disabled_optimizers.insert(OptimizerType::LIMIT_PUSHDOWN);
+        disabled_optimizers.insert(OptimizerType::TOP_N);
+        disabled_optimizers.insert(OptimizerType::LATE_MATERIALIZATION);
         DBConfig::GetConfig(context).options.disabled_optimizers = disabled_optimizers;
 
         Optimizer optimizer(*planner.binder, context);
