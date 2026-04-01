@@ -79,6 +79,10 @@ gpu_executor::gpu_executor(gpu_context& ctx, duckdb::ClientContext& client_ctx)
 std::unique_ptr<gpu_table> gpu_executor::execute(duckdb::LogicalOperator& plan)
 {
   stage_timer t("TOTAL gpu_execute");
+
+  // Reset the temporary workspace pool strictly for this query's execution
+  _ctx.memory().reset_workspace();
+
   analyze_plan_hints(plan);
   auto result = execute_operator(plan);
   return result;
@@ -439,10 +443,11 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 
   // GPU-to-GPU copy: mask[0..N-1] → prefix_buf[0..N-1]
-  disp.copy_buffer(mask.data.buffer(), prefix_buf.buffer(), n * sizeof(uint32_t));
+  disp.copy_buffer(mask.data.buffer(), prefix_buf.buffer(), n * sizeof(uint32_t),
+                   mask.data.offset(), prefix_buf.offset());
   // Zero the sentinel element prefix_buf[N]
   disp.fill_buffer(prefix_buf.buffer(), 0u, sizeof(uint32_t),
-                   n * sizeof(uint32_t));
+                   prefix_buf.offset() + n * sizeof(uint32_t));
 
   // --- Step 2: 3-pass prefix scan on prefix_buf ---------------------------
   uint32_t scan_wg = 256;
