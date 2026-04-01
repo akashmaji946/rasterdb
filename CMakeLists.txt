@@ -70,6 +70,7 @@ set(EXTENSION_SOURCES
 # GPU_SOURCES — Vulkan/rasterdf GPU execution layer
 set(GPU_SOURCES
     src/gpu/gpu_context.cpp
+    src/gpu/gpu_buffer_manager.cpp
     src/gpu/gpu_table.cpp
     src/gpu/gpu_executor.cpp)
 # cmake-format: on
@@ -89,14 +90,12 @@ foreach(_target rasterdb_extension rasterdb_loadable_extension)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>
       $<BUILD_INTERFACE:${RASTERDF_ROOT}/include>
-      $<BUILD_INTERFACE:${RASTERDF_ROOT}>
-      $<BUILD_INTERFACE:${RASTERDF_ROOT}/build/_deps/volk-src>)
+      $<BUILD_INTERFACE:${RASTERDF_ROOT}>)
 
   target_compile_definitions(
     ${_target}
     PRIVATE
-      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">
-      VK_NO_PROTOTYPES)
+      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">)
 
   if(RASTERDF_LIBRARY)
     target_link_libraries(${_target} rasterdf_imported spdlog::spdlog Vulkan::Vulkan)

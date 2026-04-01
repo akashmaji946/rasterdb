@@ -29,12 +29,28 @@ struct gpu_column {
   rasterdf::data_type type;
   rasterdf::size_type num_rows{0};
 
+  /// Host-side data for scalar results that skip GPU allocation.
+  /// When non-empty, this column's data lives on CPU (data buffer may be empty).
+  std::vector<uint8_t> host_data;
+  bool is_host_only{false};
+
+  /// For columns backed by GPUBufferManager cache (no owned device_buffer).
+  /// When > 0, this column references a sub-region of the buffer manager's gpuCache.
+  VkDeviceAddress cached_address{0};
+  VkBuffer cached_buffer{VK_NULL_HANDLE};
+
   /// Get a column_view for passing to dispatcher calls.
   rasterdf::column_view view() const {
-    return rasterdf::column_view(type, num_rows, data.data(), 0, 0, 0);
+    VkDeviceAddress addr = cached_address ? cached_address : data.data();
+    return rasterdf::column_view(type, num_rows, addr, 0, 0, 0);
   }
 
-  VkDeviceAddress address() const { return data.data(); }
+  VkDeviceAddress address() const {
+    return cached_address ? cached_address : data.data();
+  }
+  VkBuffer buffer() const {
+    return cached_buffer ? cached_buffer : data.buffer();
+  }
   size_t byte_size() const { return static_cast<size_t>(num_rows) * rdf_type_size(type.id); }
 };
 
@@ -48,7 +64,16 @@ public:
   static std::unique_ptr<gpu_table> from_data_chunks(
     gpu_context& ctx,
     const std::vector<duckdb::LogicalType>& types,
-    const std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks);
+    std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks);
+
+  /// Upload DuckDB chunks using GPUBufferManager (pinned staging + batch transfer).
+  /// Columns are cached for future queries.
+  static std::unique_ptr<gpu_table> from_buffer_manager(
+    gpu_context& ctx,
+    const std::string& table_name,
+    const std::vector<std::string>& column_names,
+    const std::vector<duckdb::LogicalType>& types,
+    std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks);
 
   /// Upload a single DataChunk to GPU (appends to existing data).
   void append_chunk(gpu_context& ctx, const duckdb::DataChunk& chunk,

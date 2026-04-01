@@ -39,6 +39,7 @@
 #include "rasterdb_extension.hpp"
 #include "util/segfault_backtrace.hpp"
 #include "gpu/gpu_context.hpp"
+#include "gpu/gpu_buffer_manager.hpp"
 #include "gpu/gpu_executor.hpp"
 
 #include <chrono>
@@ -48,6 +49,76 @@
 namespace duckdb {
 
 bool RasterdbExtension::buffer_is_initialized = false;
+
+// =========================================================================
+// gpu_buffer_init(cache_size, processing_size) — pre-allocate GPU buffers.
+// Mirrors Sirius's gpu_buffer_init('2GB', '2GB') API exactly.
+// =========================================================================
+
+struct GPUBufferInitFunctionData : public TableFunctionData {
+  size_t cache_size = 0;
+  size_t processing_size = 0;
+  size_t pinned_memory_size = 0;
+  bool finished = false;
+};
+
+static size_t parse_size_string(const string& size_str) {
+  size_t multiplier = 1;
+  string num_part, unit_part;
+  size_t i = 0;
+  while (i < size_str.length() && isspace(size_str[i])) i++;
+  while (i < size_str.length() && (isdigit(size_str[i]) || size_str[i] == '.')) {
+    num_part += size_str[i]; i++;
+  }
+  while (i < size_str.length() && isspace(size_str[i])) i++;
+  unit_part = size_str.substr(i);
+  double num_value = stod(num_part);
+  if (unit_part == "B") multiplier = 1;
+  else if (unit_part == "KB" || unit_part == "KiB") multiplier = 1024;
+  else if (unit_part == "MB" || unit_part == "MiB") multiplier = 1024 * 1024;
+  else if (unit_part == "GB" || unit_part == "GiB") multiplier = 1024ULL * 1024 * 1024;
+  else if (unit_part == "TB" || unit_part == "TiB") multiplier = 1024ULL * 1024 * 1024 * 1024;
+  else throw InvalidInputException("gpu_buffer_init: invalid size format '" + size_str + "'");
+  return static_cast<size_t>(num_value * multiplier);
+}
+
+static unique_ptr<FunctionData> GPUBufferInitBind(ClientContext& context,
+                                                  TableFunctionBindInput& input,
+                                                  vector<LogicalType>& return_types,
+                                                  vector<string>& names) {
+  auto result = make_uniq<GPUBufferInitFunctionData>();
+  string cache_str = input.inputs[0].ToString();
+  string processing_str = input.inputs[1].ToString();
+  result->cache_size = parse_size_string(cache_str);
+  result->processing_size = parse_size_string(processing_str);
+  result->pinned_memory_size = std::max(result->cache_size, result->processing_size);
+  return_types.emplace_back(LogicalType(LogicalTypeId::BOOLEAN));
+  names.emplace_back("Success");
+  return std::move(result);
+}
+
+static void GPUBufferInitFunction(ClientContext& context,
+                                  TableFunctionInput& data_p,
+                                  DataChunk& output) {
+  auto& data = data_p.bind_data->CastNoConst<GPUBufferInitFunctionData>();
+  if (data.finished) return;
+
+  if (!rasterdb::gpu::GPUBufferManager::is_initialized()) {
+    RASTERDB_LOG_INFO("gpu_buffer_init: cache={}MB, processing={}MB, staging={}MB",
+                      data.cache_size / (1024*1024),
+                      data.processing_size / (1024*1024),
+                      data.pinned_memory_size / (1024*1024));
+    auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
+        data.cache_size, data.processing_size, data.pinned_memory_size);
+    (void)bufMgr;
+    RasterdbExtension::buffer_is_initialized = true;
+  } else {
+    RASTERDB_LOG_WARN("GPUBufferManager already initialized");
+  }
+  output.SetCardinality(1);
+  output.SetValue(0, 0, Value::BOOLEAN(true));
+  data.finished = true;
+}
 
 // =========================================================================
 // gpu_execution — execute SQL on GPU via rasterdf Vulkan compute.
@@ -198,6 +269,14 @@ void RasterdbExtension::RegisterGPUFunctions(DatabaseInstance& instance)
                               GPUExecutionBind);
   CreateTableFunctionInfo gpu_execution_info(gpu_execution);
   catalog.CreateTableFunction(transaction, gpu_execution_info);
+
+  // gpu_buffer_init(cache_size, processing_size) — pre-allocate GPU buffers
+  TableFunction gpu_buffer_init("gpu_buffer_init",
+                                {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                GPUBufferInitFunction,
+                                GPUBufferInitBind);
+  CreateTableFunctionInfo gpu_buffer_init_info(gpu_buffer_init);
+  catalog.CreateTableFunction(transaction, gpu_buffer_init_info);
 }
 
 void RasterdbExtension::InitialGPUConfigs(DBConfig& config)
@@ -205,7 +284,7 @@ void RasterdbExtension::InitialGPUConfigs(DBConfig& config)
   config.AddExtensionOption(
     "enable_duckdb_fallback",
     "Whether to fall back to DuckDB CPU execution on GPU error",
-    LogicalType::BOOLEAN,
+    LogicalType(LogicalTypeId::BOOLEAN),
     Value::BOOLEAN(Config::ENABLE_DUCKDB_FALLBACK),
     SetEnableDuckdbFallback);
 }
@@ -224,6 +303,12 @@ static void LoadInternal(ExtensionLoader& loader)
     rasterdb::gpu::gpu_context::initialize();
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
+
+    // Auto-initialize BufferManager with 2GB defaults
+    auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
+        2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024);
+    (void)bufMgr;
+
     RasterdbExtension::buffer_is_initialized = true;
     RASTERDB_LOG_INFO("RasterDB extension loaded with Vulkan GPU support");
   } catch (std::exception& e) {

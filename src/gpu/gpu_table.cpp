@@ -4,10 +4,13 @@
  */
 
 #include "gpu/gpu_table.hpp"
+#include "gpu/gpu_buffer_manager.hpp"
 #include "log/logging.hpp"
 
 #include <duckdb/common/types/vector.hpp>
 #include <cstring>
+
+#include <vulkan/vulkan.h>
 
 namespace rasterdb {
 namespace gpu {
@@ -35,10 +38,60 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
   }
   if (bytes == 0) return 0;
 
-  // Use device_buffer copy_to_host — needs non-const access for the staging copy
-  // We create a temporary wrapper to call copy_to_host
-  const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
-    dst, bytes, ctx.device(), ctx.queue(), ctx.command_pool());
+  if (col.cached_address != 0) {
+    // Column is backed by GPUBufferManager cache — use staging copy
+    // Allocate a temporary staging buffer for download
+    auto* mr = ctx.host_resource();
+    auto staging = mr->allocate(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+    if (!staging.mapped_ptr) {
+      mr->deallocate(staging);
+      throw std::runtime_error("download_column: failed to map staging buffer");
+    }
+
+    // Record copy from cached buffer → staging
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = ctx.command_pool();
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmdBuf;
+    vkAllocateCommandBuffers(ctx.device(), &allocInfo, &cmdBuf);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmdBuf, &beginInfo);
+
+    // Compute offset within the cache buffer
+    auto& bufMgr = GPUBufferManager::GetInstance();
+    VkDeviceSize srcOffset = col.cached_address - bufMgr.gpuCacheAddress();
+
+    VkBufferCopy region{};
+    region.srcOffset = srcOffset;
+    region.dstOffset = 0;
+    region.size = bytes;
+    vkCmdCopyBuffer(cmdBuf, col.cached_buffer, staging.buffer, 1, &region);
+
+    vkEndCommandBuffer(cmdBuf);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmdBuf;
+    vkQueueSubmit(ctx.queue(), 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(ctx.queue());
+
+    std::memcpy(dst, staging.mapped_ptr, bytes);
+
+    vkFreeCommandBuffers(ctx.device(), ctx.command_pool(), 1, &cmdBuf);
+    mr->deallocate(staging);
+  } else {
+    // Standard path: device_buffer owns the data
+    const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
+      dst, bytes, ctx.device(), ctx.queue(), ctx.command_pool());
+  }
   return bytes;
 }
 
@@ -70,10 +123,23 @@ static rasterdf::size_type flatten_vector(const duckdb::Vector& vec,
   return count;
 }
 
+/// Overload: write directly to a raw destination pointer. Returns bytes written.
+static size_t flatten_vector_raw(const duckdb::Vector& vec,
+                                 rasterdf::size_type count,
+                                 rasterdf::data_type rdf_type,
+                                 uint8_t* dst)
+{
+  size_t elem_size = rdf_type_size(rdf_type.id);
+  size_t bytes = static_cast<size_t>(count) * elem_size;
+  auto data_ptr = reinterpret_cast<const uint8_t*>(vec.GetData());
+  std::memcpy(dst, data_ptr, bytes);
+  return bytes;
+}
+
 std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
   gpu_context& ctx,
   const std::vector<duckdb::LogicalType>& types,
-  const std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks)
+  std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks)
 {
   auto table = std::make_unique<gpu_table>();
   table->duckdb_types = types;
@@ -127,6 +193,102 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
 
   table->_num_rows = total_rows;
   RASTERDB_LOG_DEBUG("GPU table uploaded: {} rows x {} cols", total_rows, num_cols);
+  return table;
+}
+
+// ============================================================================
+// from_buffer_manager — upload via GPUBufferManager (pinned staging + batch transfer)
+// ============================================================================
+
+std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
+  gpu_context& ctx,
+  const std::string& table_name,
+  const std::vector<std::string>& column_names,
+  const std::vector<duckdb::LogicalType>& types,
+  std::vector<std::unique_ptr<duckdb::DataChunk>>& chunks)
+{
+  auto& bufMgr = GPUBufferManager::GetInstance();
+  auto table = std::make_unique<gpu_table>();
+  table->duckdb_types = types;
+  size_t num_cols = types.size();
+
+  // Compute rasterdf types
+  std::vector<rasterdf::data_type> rdf_types(num_cols);
+  for (size_t c = 0; c < num_cols; c++) {
+    rdf_types[c] = to_rdf_type(types[c]);
+  }
+
+  // Count total rows
+  rasterdf::size_type total_rows = 0;
+  for (auto& chunk : chunks) {
+    total_rows += static_cast<rasterdf::size_type>(chunk->size());
+  }
+
+  table->columns.resize(num_cols);
+
+  // Track which columns need uploading vs already cached
+  std::vector<size_t> upload_staging_offsets;
+  std::vector<size_t> upload_cache_offsets;
+  std::vector<size_t> upload_sizes;
+
+  for (size_t c = 0; c < num_cols; c++) {
+    size_t col_bytes = static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id);
+
+    if (bufMgr.checkIfColumnCached(table_name, column_names[c])) {
+      // Use cached column — zero-cost
+      auto* cached = bufMgr.getCachedColumn(table_name, column_names[c]);
+      table->columns[c].type = cached->type;
+      table->columns[c].num_rows = static_cast<rasterdf::size_type>(cached->num_rows);
+      table->columns[c].cached_address = bufMgr.gpuCacheAddress() + cached->gpu_offset;
+      table->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+      RASTERDB_LOG_DEBUG("  col {} ({}) CACHED at offset {} ({} bytes)",
+                         c, column_names[c], cached->gpu_offset, cached->byte_size);
+    } else {
+      // Flatten DuckDB chunks into pre-allocated staging + allocate cache slot
+      uint8_t* staging_dst = bufMgr.customVkHostAlloc<uint8_t>(col_bytes);
+      size_t staging_off = static_cast<size_t>(staging_dst - bufMgr.cpuProcessing);
+      size_t cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, /*caching=*/true);
+
+      // Flatten column data into staging
+      size_t write_pos = 0;
+      for (auto& chunk : chunks) {
+        chunk->Flatten();
+        write_pos += flatten_vector_raw(chunk->data[c],
+                       static_cast<rasterdf::size_type>(chunk->size()),
+                       rdf_types[c], staging_dst + write_pos);
+      }
+
+      // Set column to reference cache location
+      table->columns[c].type = rdf_types[c];
+      table->columns[c].num_rows = total_rows;
+      table->columns[c].cached_address = bufMgr.gpuCacheAddress() + cache_off;
+      table->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+
+      upload_staging_offsets.push_back(staging_off);
+      upload_cache_offsets.push_back(cache_off);
+      upload_sizes.push_back(col_bytes);
+
+      // Cache for future queries
+      GPUBufferManager::CachedColumn cc;
+      cc.gpu_offset = cache_off;
+      cc.num_rows = total_rows;
+      cc.byte_size = col_bytes;
+      cc.type = rdf_types[c];
+      bufMgr.cached_columns[table_name][column_names[c]] = cc;
+
+      RASTERDB_LOG_DEBUG("  col {} ({}) UPLOAD: staging={} cache={} bytes={}",
+                         c, column_names[c], staging_off, cache_off, col_bytes);
+    }
+  }
+
+  // Batch transfer all uncached columns: staging → cache (ONE vkQueueSubmit)
+  if (!upload_staging_offsets.empty()) {
+    bufMgr.batchTransfer(ctx, upload_staging_offsets, upload_cache_offsets, upload_sizes);
+  }
+
+  table->_num_rows = total_rows;
+  RASTERDB_LOG_DEBUG("GPU table from_buffer_manager: {} rows x {} cols ({} uploaded, {} cached)",
+                     total_rows, num_cols, upload_sizes.size(), num_cols - upload_sizes.size());
   return table;
 }
 

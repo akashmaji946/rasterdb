@@ -31,6 +31,7 @@ public:
   rasterdf::memory_manager& memory() { return *_mem_mgr; }
   rasterdf::memory_resource* workspace_mr() { return _mem_mgr->workspace_resource(); }
   rasterdf::memory_resource* data_mr() { return _mem_mgr->data_resource(); }
+  rasterdf::memory_resource* host_resource() { return _mem_mgr->host_resource(); }
 
   VkDevice device() const { return _ctx->device(); }
   VkQueue queue() const { return _ctx->compute_queue(); }

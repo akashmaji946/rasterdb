@@ -11,6 +11,7 @@
  */
 
 #include "gpu/gpu_executor.hpp"
+#include "gpu/gpu_buffer_manager.hpp"
 #include "gpu/gpu_types.hpp"
 #include "log/logging.hpp"
 
@@ -237,7 +238,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   // Get table name from the function name / bind data
   // For seq_scan, the table name is embedded in the bind data
   // For simplicity, we construct a SELECT * query for the table
-  auto conn = duckdb::make_uniq<duckdb::Connection>(*_client_ctx.db);
+  duckdb::unique_ptr<duckdb::Connection> conn;
+  {
+    auto t_conn = std::chrono::high_resolution_clock::now();
+    conn = duckdb::make_uniq<duckdb::Connection>(*_client_ctx.db);
+    auto t_conn_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     conn_alloc               %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t_conn_end - t_conn).count());
+  }
 
   // Try to get table name from LogicalGet
   std::string table_name;
@@ -291,16 +299,26 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   std::vector<std::unique_ptr<duckdb::DataChunk>> chunks;
   {
     stage_timer t_scan("  cpu_scan");
+    auto t_qexec = std::chrono::high_resolution_clock::now();
     auto result = conn->Query(scan_query);
     if (result->HasError()) {
       throw std::runtime_error("GPU scan failed: " + result->GetError());
     }
+    auto t_qexec_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     query_exec               %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t_qexec_end - t_qexec).count());
+
+    auto t_fetch = std::chrono::high_resolution_clock::now();
     while (true) {
       auto chunk = result->Fetch();
       if (!chunk || chunk->size() == 0) break;
       chunks.push_back(std::move(chunk));
     }
     for (auto& c : chunks) total_scanned += static_cast<rasterdf::size_type>(c->size());
+    auto t_fetch_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     chunk_fetch (%zu chunks)   %8.2f ms\n",
+            chunks.size(),
+            std::chrono::duration<double, std::milli>(t_fetch_end - t_fetch).count());
   }
   fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
           table_name.c_str(), (int)total_scanned, types.size());
@@ -308,7 +326,35 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   std::unique_ptr<gpu_table> gpu_tbl;
   {
     stage_timer t_upload("  gpu_upload");
-    gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
+    auto t_up = std::chrono::high_resolution_clock::now();
+
+    if (GPUBufferManager::is_initialized()) {
+      // Build column name list for cache lookup
+      std::vector<std::string> col_names;
+      if (_scan_count_star_only && !col_ids.empty()) {
+        auto col_idx = col_ids[0].GetPrimaryIndex();
+        col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
+      } else {
+        for (size_t i = 0; i < col_ids.size(); i++) {
+          auto col_idx = col_ids[i].GetPrimaryIndex();
+          col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
+        }
+      }
+      // Reset staging bump pointer for this query
+      GPUBufferManager::GetInstance().cpuProcessingPointer.store(0, std::memory_order_relaxed);
+      gpu_tbl = gpu_table::from_buffer_manager(_ctx, table_name, col_names, types, chunks);
+    } else {
+      gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
+    }
+
+    auto t_up_end = std::chrono::high_resolution_clock::now();
+    size_t total_bytes = 0;
+    for (size_t c = 0; c < gpu_tbl->num_columns(); c++) {
+      total_bytes += gpu_tbl->col(c).byte_size();
+    }
+    fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes, %8.2f ms\n",
+            gpu_tbl->num_columns(), total_bytes,
+            std::chrono::duration<double, std::milli>(t_up_end - t_up).count());
   }
   return gpu_tbl;
 }
@@ -600,10 +646,11 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 
 std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProjection& op)
 {
-  stage_timer t("  projection");
   RASTERDB_LOG_DEBUG("GPU execute_projection");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  projection");  // Timer starts AFTER child execution
 
   auto result = std::make_unique<gpu_table>();
   result->duckdb_types = op.types;
@@ -615,6 +662,16 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
     if (expr.type == duckdb::ExpressionType::BOUND_REF) {
       auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
       auto& src = input->col(ref.index);
+
+      // If source is a host-only column (e.g. scalar aggregate), pass through directly
+      if (src.is_host_only) {
+        result->columns[i].type = src.type;
+        result->columns[i].num_rows = src.num_rows;
+        result->columns[i].is_host_only = true;
+        result->columns[i].host_data = src.host_data;
+        continue;
+      }
+
       // Copy column to output — use shader for INT32/FLOAT32, buffer copy otherwise
       result->columns[i] = allocate_column(_ctx, src.type, src.num_rows);
       bool has_shader = (src.type.id == rasterdf::type_id::INT32 ||
@@ -775,17 +832,20 @@ void gpu_executor::execute_ungrouped_aggregate(
     }
 
     if (is_count_star) {
-      output.columns[i] = allocate_column(_ctx, {rasterdf::type_id::INT64}, 1);
+      // count(*) — store directly as host-side scalar (no GPU needed)
+      output.columns[i].type = {rasterdf::type_id::INT64};
+      output.columns[i].num_rows = 1;
+      output.columns[i].is_host_only = true;
+      output.columns[i].host_data.resize(sizeof(int64_t));
       int64_t count = static_cast<int64_t>(n);
-      output.columns[i].data.copy_from_host(&count, sizeof(int64_t),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::memcpy(output.columns[i].host_data.data(), &count, sizeof(int64_t));
+      fprintf(stderr, "[RDB_DEBUG]     count_star = %ld (host-only)\n", (long)count);
       continue;
     }
 
     auto& in_col = input.col(col_idx);
     auto col_view = in_col.view();
 
-    // Map DuckDB aggregate name → rasterdf aggregation kind
     rasterdf::aggregation_kind kind;
     if (fname == "sum" || fname == "sum_no_overflow") {
       kind = rasterdf::aggregation_kind::SUM;
@@ -804,42 +864,43 @@ void gpu_executor::execute_ungrouped_aggregate(
 
     rasterdf::reduce_aggregation agg(kind);
 
-    // rasterdf::reduce() returns scalar with correct wide type:
-    //   SUM   → INT64 (int32 input) or FLOAT64 (float32 input)
-    //   MEAN  → FLOAT64
-    //   COUNT → INT64
-    //   MIN/MAX → same as input type
+    auto t_reduce = std::chrono::high_resolution_clock::now();
     auto scalar = rasterdf::reduce(col_view, agg, in_col.type,
                                    _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    auto t_reduce_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     reduce(%s) col=%zu      %8.2f ms\n",
+            fname.c_str(), (size_t)col_idx,
+            std::chrono::duration<double, std::milli>(t_reduce_end - t_reduce).count());
 
-    // scalar->type tells us the actual result type after reduce()
+    // PERF FIX: Store scalar in host_data — skip GPU alloc + copy round-trip
     auto out_type = scalar->type;
-    output.columns[i] = allocate_column(_ctx, out_type, 1);
+    output.columns[i].type = out_type;
+    output.columns[i].num_rows = 1;
+    output.columns[i].is_host_only = true;
 
-    // Copy scalar value (already on CPU) into a 1-element GPU column
     switch (out_type.id) {
     case rasterdf::type_id::INT64: {
+      output.columns[i].host_data.resize(sizeof(int64_t));
       int64_t val = scalar->as<int64_t>();
-      output.columns[i].data.copy_from_host(&val, sizeof(int64_t),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::memcpy(output.columns[i].host_data.data(), &val, sizeof(int64_t));
       break;
     }
     case rasterdf::type_id::FLOAT64: {
+      output.columns[i].host_data.resize(sizeof(double));
       double val = scalar->as<double>();
-      output.columns[i].data.copy_from_host(&val, sizeof(double),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::memcpy(output.columns[i].host_data.data(), &val, sizeof(double));
       break;
     }
     case rasterdf::type_id::FLOAT32: {
+      output.columns[i].host_data.resize(sizeof(float));
       float val = scalar->as<float>();
-      output.columns[i].data.copy_from_host(&val, sizeof(float),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::memcpy(output.columns[i].host_data.data(), &val, sizeof(float));
       break;
     }
     case rasterdf::type_id::INT32: {
+      output.columns[i].host_data.resize(sizeof(int32_t));
       int32_t val = scalar->as<int32_t>();
-      output.columns[i].data.copy_from_host(&val, sizeof(int32_t),
-                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::memcpy(output.columns[i].host_data.data(), &val, sizeof(int32_t));
       break;
     }
     default:
@@ -847,6 +908,7 @@ void gpu_executor::execute_ungrouped_aggregate(
         "RasterDB GPU: unsupported reduce output type_id %d",
         static_cast<int>(out_type.id));
     }
+    fprintf(stderr, "[RDB_DEBUG]     agg(%s) stored host-only (no GPU alloc)\n", fname.c_str());
   }
 }
 
@@ -1211,17 +1273,38 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
   // Download full columns to CPU first, then build DataChunks
   size_t num_cols = table->num_columns();
   rasterdf::size_type total_rows = table->num_rows();
+  fprintf(stderr, "[RDB_DEBUG]     to_query_result: %zu cols, %d rows\n",
+          num_cols, (int)total_rows);
+  for (size_t c = 0; c < num_cols; c++) {
+    fprintf(stderr, "[RDB_DEBUG]       col[%zu]: num_rows=%d, is_host_only=%d, host_data_sz=%zu, byte_size=%zu\n",
+            c, (int)table->col(c).num_rows, (int)table->col(c).is_host_only,
+            table->col(c).host_data.size(), table->col(c).byte_size());
+  }
 
   // Download all column data to host buffers
+  auto t_dl = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<uint8_t>> host_data(num_cols);
+  size_t total_dl_bytes = 0;
   for (size_t c = 0; c < num_cols; c++) {
     auto& col = table->col(c);
-    size_t bytes = col.byte_size();
-    host_data[c].resize(bytes);
-    if (bytes > 0) {
-      download_column(_ctx, col, host_data[c].data(), bytes);
+    if (col.is_host_only) {
+      // Column data already on CPU — use it directly (perf fix: skip GPU download)
+      host_data[c] = col.host_data;
+      fprintf(stderr, "[RDB_DEBUG]     col[%zu] host-only, %zu bytes (no GPU download)\n",
+              c, host_data[c].size());
+    } else {
+      size_t bytes = col.byte_size();
+      host_data[c].resize(bytes);
+      if (bytes > 0) {
+        download_column(_ctx, col, host_data[c].data(), bytes);
+        total_dl_bytes += bytes;
+      }
     }
   }
+  auto t_dl_end = std::chrono::high_resolution_clock::now();
+  fprintf(stderr, "[RDB_DEBUG]     col_download: %zu cols, %zu bytes  %8.2f ms\n",
+          num_cols, total_dl_bytes,
+          std::chrono::duration<double, std::milli>(t_dl_end - t_dl).count());
 
   // Build ColumnDataCollection
   auto collection = duckdb::make_uniq<duckdb::ColumnDataCollection>(
