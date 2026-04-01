@@ -258,17 +258,50 @@ static void GPUExecutionFunction(ClientContext& context,
       size_t elem_size = rasterdb::gpu::rdf_type_size(col.type.id);
       auto dst = duckdb::FlatVector::GetData(output.data[c]);
 
-      if (col.is_host_only) {
-        std::memcpy(dst, col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
-      } else {
-        const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
-            dst, chunk_size * elem_size, data.chunk_offset * elem_size,
-            gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
-      }
+      auto duckdb_tid = output.data[c].GetType().id();
+      auto rdf_tid = col.type.id;
       
-      // DuckDB types like HUGEINT require promotion
-      // Note: we assume no types require widening/casting here for simplicity,
-      // as our benchmark uses int32 and float32 which align cleanly natively.
+      bool needs_cast = (duckdb_tid == duckdb::LogicalTypeId::HUGEINT) && 
+                        (rdf_tid == rasterdf::type_id::INT64 || rdf_tid == rasterdf::type_id::INT32);
+
+      if (!needs_cast) {
+        if (col.is_host_only) {
+          std::memcpy(dst, col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
+        } else {
+          const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
+              dst, chunk_size * elem_size, data.chunk_offset * elem_size,
+              gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
+        }
+      } else {
+        std::vector<uint8_t> tmp(chunk_size * elem_size);
+        if (col.is_host_only) {
+            std::memcpy(tmp.data(), col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
+        } else {
+            const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
+                tmp.data(), chunk_size * elem_size, data.chunk_offset * elem_size,
+                gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
+        }
+        
+        if (rdf_tid == rasterdf::type_id::INT64) {
+            for (size_t r = 0; r < chunk_size; r++) {
+                int64_t val;
+                std::memcpy(&val, tmp.data() + r * sizeof(int64_t), sizeof(int64_t));
+                duckdb::hugeint_t hval;
+                hval.lower = static_cast<uint64_t>(val);
+                hval.upper = val < 0 ? -1 : 0;
+                std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
+            }
+        } else {
+            for (size_t r = 0; r < chunk_size; r++) {
+                int32_t val;
+                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                duckdb::hugeint_t hval;
+                hval.lower = static_cast<uint64_t>(val < 0 ? -static_cast<int64_t>(-val) : val);
+                hval.upper = val < 0 ? -1 : 0;
+                std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
+            }
+        }
+      }
     }
     data.chunk_offset += chunk_size;
     return;
