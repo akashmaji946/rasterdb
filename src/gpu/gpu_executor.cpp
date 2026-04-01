@@ -52,6 +52,18 @@ using namespace rasterdf::execution;
 static constexpr uint32_t WG_SIZE = 256;
 static uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+// Per-stage timing helper — prints to stderr with [TIMER] prefix
+struct stage_timer {
+  const char* name;
+  std::chrono::high_resolution_clock::time_point t0;
+  stage_timer(const char* n) : name(n), t0(std::chrono::high_resolution_clock::now()) {}
+  ~stage_timer() {
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", name, ms);
+  }
+};
+
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -65,12 +77,100 @@ gpu_executor::gpu_executor(gpu_context& ctx, duckdb::ClientContext& client_ctx)
 
 std::unique_ptr<gpu_table> gpu_executor::execute(duckdb::LogicalOperator& plan)
 {
-  auto start = std::chrono::high_resolution_clock::now();
+  stage_timer t("TOTAL gpu_execute");
+  analyze_plan_hints(plan);
   auto result = execute_operator(plan);
-  auto end = std::chrono::high_resolution_clock::now();
-  auto ms = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
-  RASTERDB_LOG_INFO("GPU execution completed in {:.2f} ms", ms);
   return result;
+}
+
+// ============================================================================
+// Pre-analyze the plan tree to set scan optimization hints.
+//  - LIMIT pushdown: LIMIT → [PROJECTION →] GET  (no filter/order)
+//  - count(*) only: AGGREGATE(count_star only) → [PROJECTION →] GET
+// ============================================================================
+
+void gpu_executor::analyze_plan_hints(duckdb::LogicalOperator& plan)
+{
+  _scan_limit = -1;
+  _scan_count_star_only = false;
+
+  // Walk down the plan to find patterns
+  auto* cur = &plan;
+
+  // Pattern 1: LIMIT pushdown
+  // LIMIT → GET  or  LIMIT → PROJECTION → GET  (no filter, no order)
+  if (cur->type == duckdb::LogicalOperatorType::LOGICAL_LIMIT) {
+    auto& limit_op = cur->Cast<duckdb::LogicalLimit>();
+    int64_t limit_val = -1;
+    int64_t offset_val = 0;
+    if (limit_op.limit_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE) {
+      limit_val = static_cast<int64_t>(limit_op.limit_val.GetConstantValue());
+    }
+    if (limit_op.offset_val.Type() == duckdb::LimitNodeType::CONSTANT_VALUE) {
+      offset_val = static_cast<int64_t>(limit_op.offset_val.GetConstantValue());
+    }
+    if (limit_val >= 0 && !limit_op.children.empty()) {
+      auto* child = limit_op.children[0].get();
+      // Skip PROJECTION node
+      if (child->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION &&
+          !child->children.empty()) {
+        child = child->children[0].get();
+      }
+      // If child is a direct GET (no filter/order between), push LIMIT to scan
+      if (child->type == duckdb::LogicalOperatorType::LOGICAL_GET) {
+        _scan_limit = limit_val + offset_val;
+        fprintf(stderr, "[TIMER]   hint: LIMIT pushdown = %ld rows\n", (long)_scan_limit);
+      }
+    }
+  }
+
+  // Pattern 2: count(*) only — all aggregates are count_star, no group columns needed
+  // AGGREGATE → [PROJECTION →] GET
+  if (cur->type == duckdb::LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+    auto& agg_op = cur->Cast<duckdb::LogicalAggregate>();
+    if (agg_op.groups.empty() && !agg_op.expressions.empty()) {
+      bool all_count_star = true;
+      for (auto& expr : agg_op.expressions) {
+        if (expr->expression_class == duckdb::ExpressionClass::BOUND_AGGREGATE) {
+          auto& agg_expr = expr->Cast<duckdb::BoundAggregateExpression>();
+          bool is_cs = agg_expr.children.empty() &&
+                       (agg_expr.function.name == "count" || agg_expr.function.name == "count_star");
+          if (!is_cs) { all_count_star = false; break; }
+        } else {
+          all_count_star = false; break;
+        }
+      }
+      if (all_count_star) {
+        _scan_count_star_only = true;
+        fprintf(stderr, "[TIMER]   hint: count(*) only — scan 1 col\n");
+      }
+    }
+  }
+
+  // Pattern 2b: count(*) behind a PROJECTION
+  // PROJECTION → AGGREGATE(count_star) → [PROJECTION →] GET
+  if (cur->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION &&
+      !cur->children.empty() &&
+      cur->children[0]->type == duckdb::LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+    auto& agg_op = cur->children[0]->Cast<duckdb::LogicalAggregate>();
+    if (agg_op.groups.empty() && !agg_op.expressions.empty()) {
+      bool all_count_star = true;
+      for (auto& expr : agg_op.expressions) {
+        if (expr->expression_class == duckdb::ExpressionClass::BOUND_AGGREGATE) {
+          auto& agg_expr = expr->Cast<duckdb::BoundAggregateExpression>();
+          bool is_cs = agg_expr.children.empty() &&
+                       (agg_expr.function.name == "count" || agg_expr.function.name == "count_star");
+          if (!is_cs) { all_count_star = false; break; }
+        } else {
+          all_count_star = false; break;
+        }
+      }
+      if (all_count_star) {
+        _scan_count_star_only = true;
+        fprintf(stderr, "[TIMER]   hint: count(*) only — scan 1 col\n");
+      }
+    }
+  }
 }
 
 // ============================================================================
@@ -153,38 +253,64 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   }
 
   // Build SELECT with projected columns (from column_ids) in order
+  // Optimization: if count(*)-only, scan just 1 column to minimize I/O
   std::string col_list;
-  for (size_t i = 0; i < col_ids.size(); i++) {
-    if (i > 0) col_list += ", ";
-    auto col_idx = col_ids[i].GetPrimaryIndex();
+  if (_scan_count_star_only && !col_ids.empty()) {
+    // Only scan the first column — we just need the row count
+    auto col_idx = col_ids[0].GetPrimaryIndex();
     if (col_idx < op.names.size()) {
-      col_list += "\"" + op.names[col_idx] + "\"";
-    } else {
-      col_list += "\"" + op.names[0] + "\"";
+      col_list = "\"" + op.names[col_idx] + "\"";
+    }
+    // Override types to just the first column
+    if (!types.empty()) {
+      types = {types[0]};
+    }
+  } else {
+    for (size_t i = 0; i < col_ids.size(); i++) {
+      if (i > 0) col_list += ", ";
+      auto col_idx = col_ids[i].GetPrimaryIndex();
+      if (col_idx < op.names.size()) {
+        col_list += "\"" + op.names[col_idx] + "\"";
+      } else {
+        col_list += "\"" + op.names[0] + "\"";
+      }
     }
   }
   if (col_list.empty()) col_list = "*";
 
   std::string scan_query = "SELECT " + col_list + " FROM \"" + table_name + "\"";
-  RASTERDB_LOG_DEBUG("GPU scan: {}", scan_query);
-  auto result = conn->Query(scan_query);
-  if (result->HasError()) {
-    throw std::runtime_error("GPU scan failed: " + result->GetError());
+
+  // Optimization: LIMIT pushdown — add LIMIT to SQL scan if no filter/order
+  if (_scan_limit > 0) {
+    scan_query += " LIMIT " + std::to_string(_scan_limit);
   }
 
-  // Collect all chunks
-  std::vector<std::unique_ptr<duckdb::DataChunk>> chunks;
-  while (true) {
-    auto chunk = result->Fetch();
-    if (!chunk || chunk->size() == 0) break;
-    chunks.push_back(std::move(chunk));
-  }
+  RASTERDB_LOG_DEBUG("GPU scan: {}", scan_query);
 
   rasterdf::size_type total_scanned = 0;
-  for (auto& c : chunks) total_scanned += static_cast<rasterdf::size_type>(c->size());
-  RASTERDB_LOG_DEBUG("Scanned {} chunks ({} rows, {} cols) from '{}'",
-                     chunks.size(), total_scanned, types.size(), table_name);
-  return gpu_table::from_data_chunks(_ctx, types, chunks);
+  std::vector<std::unique_ptr<duckdb::DataChunk>> chunks;
+  {
+    stage_timer t_scan("  cpu_scan");
+    auto result = conn->Query(scan_query);
+    if (result->HasError()) {
+      throw std::runtime_error("GPU scan failed: " + result->GetError());
+    }
+    while (true) {
+      auto chunk = result->Fetch();
+      if (!chunk || chunk->size() == 0) break;
+      chunks.push_back(std::move(chunk));
+    }
+    for (auto& c : chunks) total_scanned += static_cast<rasterdf::size_type>(c->size());
+  }
+  fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
+          table_name.c_str(), (int)total_scanned, types.size());
+
+  std::unique_ptr<gpu_table> gpu_tbl;
+  {
+    stage_timer t_upload("  gpu_upload");
+    gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
+  }
+  return gpu_tbl;
 }
 
 // ============================================================================
@@ -193,6 +319,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
 std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& op)
 {
+  stage_timer t("  filter (total)");
   RASTERDB_LOG_DEBUG("GPU execute_filter");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
@@ -203,8 +330,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   gpu_column mask;
   bool first = true;
 
+  auto t_compare_start = std::chrono::high_resolution_clock::now();
   for (auto& expr : op.expressions) {
     gpu_column expr_mask = evaluate_comparison(*input, *expr);
+
     if (first) {
       mask = std::move(expr_mask);
       first = false;
@@ -226,33 +355,81 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
     }
   }
 
+  {
+    auto t_compare_end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t_compare_end - t_compare_start).count();
+    fprintf(stderr, "[TIMER]     filter_compare             %8.2f ms\n", ms);
+  }
+
   // Apply the mask to compact the table
-  return apply_filter_mask(*input, mask);
+  auto t_compact_start = std::chrono::high_resolution_clock::now();
+  auto result = apply_filter_mask(*input, mask);
+  {
+    auto t_compact_end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t_compact_end - t_compact_start).count();
+    fprintf(stderr, "[TIMER]     filter_compact             %8.2f ms\n", ms);
+  }
+  return result;
 }
 
 // ============================================================================
-// Apply boolean mask — order-preserving host-side compaction.
-// Downloads mask + data to CPU, compacts in order, uploads result.
-// For 1M rows (~4MB) the PCIe transfer is < 1ms, and order is preserved.
+// Apply boolean mask — GPU-side order-preserving stream compaction.
+// Uses prefix scan on mask, then scatter_if per column. No CPU transfer.
 // ============================================================================
 
 std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& input, gpu_column& mask)
 {
   uint32_t n = static_cast<uint32_t>(input.num_rows());
+  auto& disp = _ctx.dispatcher();
+  auto* mr = _ctx.workspace_mr();
 
-  // Download mask to host
-  std::vector<int32_t> mask_host(n);
-  const_cast<rasterdf::device_buffer&>(mask.data).copy_to_host(
-    mask_host.data(), n * sizeof(int32_t),
-    _ctx.device(), _ctx.queue(), _ctx.command_pool());
+  // --- Step 1: GPU-side copy mask → prefix buffer (no host round-trip) ----
+  // prefix_buf[0..N-1] = mask[0..N-1], prefix_buf[N] = 0 (sentinel)
+  uint32_t prefix_count = n + 1;
 
-  // Count passing rows
+  rasterdf::device_buffer prefix_buf(
+    mr, prefix_count * sizeof(uint32_t),
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+  // GPU-to-GPU copy: mask[0..N-1] → prefix_buf[0..N-1]
+  disp.copy_buffer(mask.data.buffer(), prefix_buf.buffer(), n * sizeof(uint32_t));
+  // Zero the sentinel element prefix_buf[N]
+  disp.fill_buffer(prefix_buf.buffer(), 0u, sizeof(uint32_t),
+                   n * sizeof(uint32_t));
+
+  // --- Step 2: 3-pass prefix scan on prefix_buf ---------------------------
+  uint32_t scan_wg = 256;
+  uint32_t scan_groups = (prefix_count + scan_wg - 1) / scan_wg;
+
+  rasterdf::device_buffer block_sums(
+    mr, scan_groups * sizeof(uint32_t),
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+  // Device buffer for total_sum (written by scan_global shader)
+  rasterdf::device_buffer total_sum_buf(
+    mr, sizeof(uint32_t),
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+  prefix_scan_pc scan_pc{};
+  scan_pc.data_ptr = prefix_buf.data();
+  scan_pc.block_sums_ptr = block_sums.data();
+  scan_pc.total_sum_ptr = total_sum_buf.data();
+  scan_pc.numElements = prefix_count;
+  scan_pc.blockCount = scan_groups;
+
+  disp.dispatch_prefix_scan_local(scan_pc, scan_groups);
+  disp.dispatch_prefix_scan_global(scan_pc);
+  disp.dispatch_prefix_scan_add(scan_pc, scan_groups);
+
+  // --- Step 3: Read total count via copy_to_host --------------------------
   uint32_t output_count = 0;
-  for (uint32_t i = 0; i < n; i++) {
-    if (mask_host[i]) output_count++;
-  }
+  total_sum_buf.copy_to_host(&output_count, sizeof(uint32_t),
+                             _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-  RASTERDB_LOG_DEBUG("Filter: {} -> {} rows", n, output_count);
+  RASTERDB_LOG_DEBUG("Filter (GPU compaction): {} -> {} rows", n, output_count);
 
   auto result = std::make_unique<gpu_table>();
   result->duckdb_types = input.duckdb_types;
@@ -266,35 +443,19 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     return result;
   }
 
-  // For each column: download, compact on CPU, upload
+  // --- Step 4: Scatter each column using prefix sums ----------------------
+  uint32_t scatter_groups = (n + 255) / 256;
   for (size_t c = 0; c < input.num_columns(); c++) {
     auto& in_col = input.col(c);
-    size_t elem_size = rdf_type_size(in_col.type.id);
-
-    // Download column data
-    std::vector<uint8_t> col_host(static_cast<size_t>(n) * elem_size);
-    const_cast<rasterdf::device_buffer&>(in_col.data).copy_to_host(
-      col_host.data(), col_host.size(),
-      _ctx.device(), _ctx.queue(), _ctx.command_pool());
-
-    // Compact on CPU (preserving order)
-    std::vector<uint8_t> compacted(static_cast<size_t>(output_count) * elem_size);
-    size_t write_pos = 0;
-    for (uint32_t i = 0; i < n; i++) {
-      if (mask_host[i]) {
-        std::memcpy(compacted.data() + write_pos * elem_size,
-                    col_host.data() + static_cast<size_t>(i) * elem_size,
-                    elem_size);
-        write_pos++;
-      }
-    }
-
-    // Upload compacted data
     result->columns[c] = allocate_column(_ctx, in_col.type,
                                           static_cast<rasterdf::size_type>(output_count));
-    result->columns[c].data.copy_from_host(
-      compacted.data(), compacted.size(),
-      _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+    scatter_if_pc spc{};
+    spc.input_ptr = in_col.address();
+    spc.prefix_ptr = prefix_buf.data();
+    spc.output_ptr = result->columns[c].address();
+    spc.size = n;
+    disp.dispatch_scatter_if(spc, scatter_groups);
   }
 
   return result;
@@ -377,6 +538,7 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       pc.threshold = threshold;
       pc.op = cmp_op;
       pc.type_id = type_id;
+
       disp.dispatch_compare(pc);
       return result;
 
@@ -438,6 +600,7 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 
 std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProjection& op)
 {
+  stage_timer t("  projection");
   RASTERDB_LOG_DEBUG("GPU execute_projection");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
@@ -560,6 +723,7 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
 
 std::unique_ptr<gpu_table> gpu_executor::execute_aggregate(duckdb::LogicalAggregate& op)
 {
+  stage_timer t("  aggregate");
   RASTERDB_LOG_DEBUG("GPU execute_aggregate");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
@@ -812,6 +976,7 @@ void gpu_executor::execute_grouped_aggregate(
 
 std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 {
+  stage_timer t("  order_by");
   RASTERDB_LOG_DEBUG("GPU execute_order");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
@@ -861,6 +1026,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 
 std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
 {
+  stage_timer t("  limit");
   RASTERDB_LOG_DEBUG("GPU execute_limit");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
@@ -934,6 +1100,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
+  stage_timer t("  join");
   RASTERDB_LOG_DEBUG("GPU execute_join");
   D_ASSERT(op.children.size() == 2);
 
@@ -1040,6 +1207,7 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
   const duckdb::vector<duckdb::string>& names,
   const duckdb::vector<duckdb::LogicalType>& types)
 {
+  stage_timer t("  gpu_download+result");
   // Download full columns to CPU first, then build DataChunks
   size_t num_cols = table->num_columns();
   rasterdf::size_type total_rows = table->num_rows();

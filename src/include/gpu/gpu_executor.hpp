@@ -48,6 +48,13 @@ private:
   gpu_context& _ctx;
   duckdb::ClientContext& _client_ctx;
 
+  // Scan hints (set by pre-analysis or parent operators)
+  int64_t _scan_limit = -1;          // -1 = no limit pushdown
+  bool    _scan_count_star_only = false; // true = only need row count, scan 1 col
+
+  // Pre-analyze plan tree to set scan hints
+  void analyze_plan_hints(duckdb::LogicalOperator& plan);
+
   // Recursive plan executor
   std::unique_ptr<gpu_table> execute_operator(duckdb::LogicalOperator& op);
 

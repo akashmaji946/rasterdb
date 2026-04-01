@@ -41,6 +41,8 @@
 #include "gpu/gpu_context.hpp"
 #include "gpu/gpu_executor.hpp"
 
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 
 namespace duckdb {
@@ -99,6 +101,11 @@ static void GPUExecutionFunction(ClientContext& context,
     // Try GPU execution if the GPU context is initialized
     if (rasterdb::gpu::gpu_context::is_initialized()) {
       try {
+        auto t_total_start = std::chrono::high_resolution_clock::now();
+        fprintf(stderr, "[TIMER] === Query: %.60s%s\n",
+                data.query.c_str(), data.query.size() > 60 ? "..." : "");
+
+        auto t0 = std::chrono::high_resolution_clock::now();
         // Parse + plan + optimize the query
         Parser parser(context.GetParserOptions());
         parser.ParseQuery(data.query);
@@ -113,6 +120,9 @@ static void GPUExecutionFunction(ClientContext& context,
         // Resolve column bindings to flat indices (BoundColumnRef -> BoundRef)
         ColumnBindingResolver resolver;
         resolver.VisitOperator(plan);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", "  parse+plan",
+                std::chrono::duration<double, std::milli>(t1 - t0).count());
 
         // Execute on GPU via rasterdf
         auto& gpu_ctx = rasterdb::gpu::gpu_context::instance();
@@ -122,6 +132,10 @@ static void GPUExecutionFunction(ClientContext& context,
         // Convert GPU result to DuckDB QueryResult
         data.gpu_result = executor.to_query_result(
           std::move(gpu_table), planner.names, planner.types);
+
+        auto t_total_end = std::chrono::high_resolution_clock::now();
+        fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", "TOTAL end-to-end",
+                std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count());
 
         RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf)");
       } catch (duckdb::NotImplementedException& e) {
