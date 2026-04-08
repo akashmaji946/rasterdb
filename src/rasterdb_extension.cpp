@@ -185,6 +185,7 @@ static void GPUExecutionFunction(ClientContext& context,
         planner.CreatePlan(std::move(parser.statements[0]));
 
         // Enable optimizer to match Sirius (push down filters, join reordering, etc)
+        // But disable FILTER_PUSHDOWN - we need LogicalFilter nodes for GPU execution
         auto original_disabled = DBConfig::GetConfig(context).options.disabled_optimizers;
         auto disabled_optimizers = original_disabled;
         disabled_optimizers.insert(OptimizerType::IN_CLAUSE);
@@ -193,6 +194,7 @@ static void GPUExecutionFunction(ClientContext& context,
         disabled_optimizers.insert(OptimizerType::LIMIT_PUSHDOWN);
         disabled_optimizers.insert(OptimizerType::TOP_N);
         disabled_optimizers.insert(OptimizerType::LATE_MATERIALIZATION);
+        disabled_optimizers.insert(OptimizerType::FILTER_PUSHDOWN);  // Keep filters as separate nodes for GPU
         DBConfig::GetConfig(context).options.disabled_optimizers = disabled_optimizers;
 
         Optimizer optimizer(*planner.binder, context);

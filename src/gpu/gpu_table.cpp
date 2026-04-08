@@ -9,6 +9,10 @@
 
 #include <duckdb/common/types/vector.hpp>
 #include <cstring>
+#include <thread>
+#include <vector>
+#include <future>
+#include <latch>
 
 #include <vulkan/vulkan.h>
 
@@ -177,18 +181,68 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
   }
 
   // Second pass: flatten each column across all chunks, then upload to GPU
+  // Multi-threaded: process columns in parallel for faster CPU-side flattening
   table->columns.resize(num_cols);
-  for (size_t c = 0; c < num_cols; c++) {
-    std::vector<uint8_t> host_buf;
-    host_buf.reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
 
-    for (auto& chunk : chunks) {
-      chunk->Flatten(); // ensure flat vectors
-      flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
-                     rdf_types[c], host_buf);
+  // Determine number of threads (cap at hardware concurrency, min 1)
+  unsigned int num_threads = std::thread::hardware_concurrency();
+  if (num_threads == 0) num_threads = 4;
+  // Don't create more threads than columns
+  if (num_threads > num_cols) num_threads = static_cast<unsigned int>(num_cols);
+
+  if (num_cols == 1 || num_threads == 1) {
+    // Single-threaded path for simplicity with few columns
+    for (size_t c = 0; c < num_cols; c++) {
+      std::vector<uint8_t> host_buf;
+      host_buf.reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
+
+      for (auto& chunk : chunks) {
+        chunk->Flatten(); // ensure flat vectors
+        flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
+                       rdf_types[c], host_buf);
+      }
+      table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_buf.data());
+    }
+  } else {
+    // Multi-threaded path: parallelize across columns
+    std::vector<std::vector<uint8_t>> host_bufs(num_cols);
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+
+    // Create work items: each thread processes a subset of columns
+    auto worker = [&](size_t start_col, size_t end_col) {
+      for (size_t c = start_col; c < end_col; c++) {
+        host_bufs[c].reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
+        for (auto& chunk : chunks) {
+          chunk->Flatten(); // ensure flat vectors
+          flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
+                         rdf_types[c], host_bufs[c]);
+        }
+      }
+    };
+
+    // Launch threads with column range assignments
+    size_t cols_per_thread = num_cols / num_threads;
+    size_t remainder = num_cols % num_threads;
+    size_t start = 0;
+
+    for (unsigned int t = 0; t < num_threads; t++) {
+      size_t count = cols_per_thread + (t < remainder ? 1 : 0);
+      if (count == 0) break;
+      size_t end = start + count;
+      threads.emplace_back(worker, start, end);
+      start = end;
     }
 
-    table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_buf.data());
+    // Wait for all flattening to complete
+    for (auto& t : threads) {
+      t.join();
+    }
+
+    // Upload columns to GPU (can also be parallelized, but keep simple for now)
+    for (size_t c = 0; c < num_cols; c++) {
+      table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_bufs[c].data());
+    }
   }
 
   table->_num_rows = total_rows;
@@ -226,9 +280,14 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
 
   table->columns.resize(num_cols);
 
-  // Track which columns need uploading vs already cached
-  std::vector<size_t> upload_staging_offsets;
-  std::vector<size_t> upload_cache_offsets;
+  // First pass: identify which columns need uploading vs cached, pre-calculate offsets
+  struct upload_col_info {
+    size_t c;
+    size_t col_bytes;
+    size_t staging_off;
+    uint8_t* staging_dst;
+  };
+  std::vector<upload_col_info> upload_cols;
   std::vector<size_t> upload_sizes;
 
   for (size_t c = 0; c < num_cols; c++) {
@@ -244,31 +303,80 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
       RASTERDB_LOG_DEBUG("  col {} ({}) CACHED at offset {} ({} bytes)",
                          c, column_names[c], cached->gpu_offset, cached->byte_size);
     } else {
-      // Flatten DuckDB chunks into pre-allocated staging + allocate cache slot
+      // Pre-allocate staging + cache slot (single-threaded bump allocator)
       uint8_t* staging_dst = bufMgr.customVkHostAlloc<uint8_t>(col_bytes);
       size_t staging_off = static_cast<size_t>(staging_dst - bufMgr.cpuProcessing);
-      size_t cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, /*caching=*/true);
+      [[maybe_unused]] size_t cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, /*caching=*/true);
 
-      // Flatten column data into staging
-      size_t write_pos = 0;
-      for (auto& chunk : chunks) {
-        chunk->Flatten();
-        write_pos += flatten_vector_raw(chunk->data[c],
-                       static_cast<rasterdf::size_type>(chunk->size()),
-                       rdf_types[c], staging_dst + write_pos);
-      }
+      upload_cols.push_back({c, col_bytes, staging_off, staging_dst});
+      upload_sizes.push_back(col_bytes);
 
-      // Set column to natively reference CPU staging location! (Zero-Copy PCIe)
+      // Set column metadata now (staging pointer is valid)
       table->columns[c].type = rdf_types[c];
       table->columns[c].num_rows = total_rows;
       table->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging_off;
       table->columns[c].cached_buffer = bufMgr.cpuStagingBuffer();
+    }
+  }
 
-      // We still map sizes so we log it, but we won't batchTransfer to GPU Cache
-      upload_sizes.push_back(col_bytes);
+  // Second pass: multi-threaded flattening into pre-allocated staging buffers
+  if (!upload_cols.empty()) {
+    unsigned int num_threads = std::thread::hardware_concurrency();
+    if (num_threads == 0) num_threads = 4;
+    if (num_threads > upload_cols.size()) num_threads = static_cast<unsigned int>(upload_cols.size());
 
-      RASTERDB_LOG_DEBUG("  col {} ({}) ZERO-COPY STAGING: offset={} bytes={}",
-                         c, column_names[c], staging_off, col_bytes);
+    if (upload_cols.size() == 1 || num_threads == 1) {
+      // Single-threaded path
+      for (auto& info : upload_cols) {
+        size_t write_pos = 0;
+        for (auto& chunk : chunks) {
+          chunk->Flatten();
+          write_pos += flatten_vector_raw(chunk->data[info.c],
+                         static_cast<rasterdf::size_type>(chunk->size()),
+                         rdf_types[info.c], info.staging_dst + write_pos);
+        }
+        RASTERDB_LOG_DEBUG("  col {} ({}) ZERO-COPY STAGING: offset={} bytes={}",
+                           info.c, column_names[info.c], info.staging_off, info.col_bytes);
+      }
+    } else {
+      // Multi-threaded path: parallelize across columns to flatten
+      std::vector<std::thread> threads;
+      threads.reserve(num_threads);
+
+      auto worker = [&](size_t start_idx, size_t end_idx) {
+        for (size_t i = start_idx; i < end_idx; i++) {
+          auto& info = upload_cols[i];
+          size_t write_pos = 0;
+          for (auto& chunk : chunks) {
+            chunk->Flatten();
+            write_pos += flatten_vector_raw(chunk->data[info.c],
+                           static_cast<rasterdf::size_type>(chunk->size()),
+                           rdf_types[info.c], info.staging_dst + write_pos);
+          }
+        }
+      };
+
+      // Launch threads with work range assignments
+      size_t cols_per_thread = upload_cols.size() / num_threads;
+      size_t remainder = upload_cols.size() % num_threads;
+      size_t start = 0;
+
+      for (unsigned int t = 0; t < num_threads; t++) {
+        size_t count = cols_per_thread + (t < remainder ? 1 : 0);
+        if (count == 0) break;
+        size_t end = start + count;
+        threads.emplace_back(worker, start, end);
+        start = end;
+      }
+
+      for (auto& t : threads) {
+        t.join();
+      }
+
+      for (auto& info : upload_cols) {
+        RASTERDB_LOG_DEBUG("  col {} ({}) ZERO-COPY STAGING: offset={} bytes={}",
+                           info.c, column_names[info.c], info.staging_off, info.col_bytes);
+      }
     }
   }
 

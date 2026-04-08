@@ -8,28 +8,62 @@
  *   3. Execute compute (filter, project, aggregate, order, limit) on GPU
  *   4. Download results back to DuckDB DataChunks
  *   5. Unsupported ops throw NotImplementedException -> CPU fallback
- *
- * File decomposition (mirrors Sirius src/op/ pattern):
- *   gpu_executor.cpp           — this file: includes + core dispatch
- *   gpu_executor_internal.hpp  — shared utilities (stage_timer, unwrap_cast, constants)
- *   gpu_executor_scan.inl      — execute_get (LOGICAL_GET)
- *   gpu_executor_filter.inl    — execute_filter, evaluate_comparison, apply_filter_mask
- *   gpu_executor_project.inl   — execute_projection, evaluate_binary_op
- *   gpu_executor_aggregate.inl — execute_aggregate, execute_ungrouped/grouped_aggregate
- *   gpu_executor_order.inl     — execute_order (ORDER BY)
- *   gpu_executor_limit.inl     — execute_limit (LIMIT)
- *   gpu_executor_join.inl      — execute_join (INNER JOIN)
- *   gpu_executor_result.inl    — to_query_result (GPU download → DuckDB QueryResult)
  */
 
-#include "gpu/gpu_executor_internal.hpp"
+#include "gpu/gpu_executor.hpp"
 #include "gpu/gpu_buffer_manager.hpp"
+#include "gpu/gpu_types.hpp"
+#include "log/logging.hpp"
 
-#include <duckdb/execution/execution_context.hpp>
-#include <duckdb/parallel/thread_context.hpp>
+#include <rasterdf/execution/dispatcher.hpp>
+#include <rasterdf/reduction.hpp>
+#include <rasterdf/sorting.hpp>
+#include <rasterdf/copying.hpp>
+#include <rasterdf/stream_compaction.hpp>
+#include <rasterdf/join.hpp>
+#include <rasterdf/groupby.hpp>
+
+#include <duckdb/common/exception.hpp>
+#include <duckdb/common/types/data_chunk.hpp>
+#include <duckdb/common/types/column/column_data_collection.hpp>
+#include <duckdb/main/connection.hpp>
+#include <duckdb/main/materialized_query_result.hpp>
+#include <duckdb/planner/expression/bound_comparison_expression.hpp>
+#include <duckdb/planner/expression/bound_constant_expression.hpp>
+#include <duckdb/planner/expression/bound_conjunction_expression.hpp>
+#include <duckdb/planner/expression/bound_function_expression.hpp>
+#include <duckdb/planner/expression/bound_aggregate_expression.hpp>
+#include <duckdb/planner/expression/bound_reference_expression.hpp>
+#include <duckdb/planner/expression/bound_cast_expression.hpp>
+#include <duckdb/planner/bound_result_modifier.hpp>
+#include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+
+#include <duckdb/common/types/hugeint.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <vector>
 
 namespace rasterdb {
 namespace gpu {
+
+using namespace rasterdf::execution;
+
+static constexpr uint32_t WG_SIZE = 256;
+static uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+// Per-stage timing helper — prints to stderr with [TIMER] prefix
+struct stage_timer {
+  const char* name;
+  std::chrono::high_resolution_clock::time_point t0;
+  stage_timer(const char* n) : name(n), t0(std::chrono::high_resolution_clock::now()) {}
+  ~stage_timer() {
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", name, ms);
+  }
+};
 
 // ============================================================================
 // Constructor
@@ -200,257 +234,173 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     to_rdf_type(t);
   }
 
-  // Get table name for logging / cache lookup
+  // Use a DuckDB Connection to scan the table and get the data on CPU.
+  // We build a simple SELECT from the table using its bind_data.
+  // For table scans, the simplest approach is to use DuckDB's execution
+  // engine to materialize the scan, then upload.
+
+  // Get table name from the function name / bind data
+  // For seq_scan, the table name is embedded in the bind data
+  // For simplicity, we construct a SELECT * query for the table
+  duckdb::unique_ptr<duckdb::Connection> conn;
+  {
+    auto t_conn = std::chrono::high_resolution_clock::now();
+    conn = duckdb::make_uniq<duckdb::Connection>(*_client_ctx.db);
+    auto t_conn_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     conn_alloc               %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t_conn_end - t_conn).count());
+  }
+
+  // Try to get table name from LogicalGet
   std::string table_name;
   auto table_entry = op.GetTable();
   if (table_entry) {
     table_name = table_entry->name;
   }
+
   if (table_name.empty()) {
-    table_name = op.function.name;
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: cannot determine table name for scan '%s'",
+      op.function.name.c_str());
   }
 
-  // count(*) optimization: only scan 1 column, we just need the row count
-  if (_scan_count_star_only && !types.empty()) {
-    types.resize(1);
-  }
-
-  // ── Direct Table Function Scan (mirrors Sirius GetDataDuckDB) ────────
-  // Build scan types from column_ids
-  duckdb::vector<duckdb::LogicalType> scan_types;
+  // Build SELECT with projected columns (from column_ids) in order
+  // Optimization: if count(*)-only, scan just 1 column to minimize I/O
+  std::string col_list;
   if (_scan_count_star_only && !col_ids.empty()) {
-    auto idx = col_ids[0].GetPrimaryIndex();
-    if (idx < op.returned_types.size()) {
-      scan_types.push_back(op.returned_types[idx]);
-    }
-  } else {
-    for (auto& cid : col_ids) {
-      auto idx = cid.GetPrimaryIndex();
-      if (idx < op.returned_types.size()) {
-        scan_types.push_back(op.returned_types[idx]);
-      }
-    }
-  }
-  if (scan_types.empty()) {
-    scan_types = op.returned_types;
-  }
-
-  // Build column name list for cache lookup
-  std::vector<std::string> col_names;
-  if (_scan_count_star_only && !col_ids.empty()) {
+    // Only scan the first column — we just need the row count
     auto col_idx = col_ids[0].GetPrimaryIndex();
-    col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
+    if (col_idx < op.names.size()) {
+      col_list = "\"" + op.names[col_idx] + "\"";
+    }
+    // Override types to just the first column
+    if (!types.empty()) {
+      types = {types[0]};
+    }
   } else {
     for (size_t i = 0; i < col_ids.size(); i++) {
+      if (i > 0) col_list += ", ";
       auto col_idx = col_ids[i].GetPrimaryIndex();
-      col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
-    }
-  }
-
-  // ── Pipelined Scan + Direct Staging Write (mirrors Sirius) ──────────
-  // Scan chunks from DuckDB and flatten directly into reBAR staging buffer
-  // in a single pass, eliminating the separate upload step.
-  rasterdf::size_type total_scanned = 0;
-  std::unique_ptr<gpu_table> gpu_tbl;
-
-  bool use_buffer_manager = GPUBufferManager::is_initialized();
-
-  if (use_buffer_manager) {
-    // ── FAST PATH: Pipelined scan with direct reBAR staging write ──
-    // Scan chunks from DuckDB and flatten each chunk directly into pre-allocated
-    // staging memory as it arrives. No separate upload step needed.
-    // GPU reads directly from reBAR staging memory (host-visible device-local).
-    auto& bufMgr = GPUBufferManager::GetInstance();
-    bufMgr.cpuProcessingPointer.store(0, std::memory_order_relaxed);
-
-    size_t num_cols = scan_types.size();
-    std::vector<rasterdf::data_type> rdf_types(num_cols);
-    for (size_t c = 0; c < num_cols; c++) {
-      rdf_types[c] = to_rdf_type(scan_types[c]);
-    }
-
-    // Check cache hits first
-    gpu_tbl = std::make_unique<gpu_table>();
-    gpu_tbl->duckdb_types = types;
-    gpu_tbl->columns.resize(num_cols);
-
-    bool all_cached = true;
-    for (size_t c = 0; c < num_cols; c++) {
-      if (bufMgr.checkIfColumnCached(table_name, col_names[c])) {
-        auto* cached = bufMgr.getCachedColumn(table_name, col_names[c]);
-        gpu_tbl->columns[c].type = cached->type;
-        gpu_tbl->columns[c].num_rows = static_cast<rasterdf::size_type>(cached->num_rows);
-        gpu_tbl->columns[c].cached_address = bufMgr.gpuCacheAddress() + cached->gpu_offset;
-        gpu_tbl->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+      if (col_idx < op.names.size()) {
+        col_list += "\"" + op.names[col_idx] + "\"";
       } else {
-        all_cached = false;
+        col_list += "\"" + op.names[0] + "\"";
       }
-    }
-
-    if (all_cached) {
-      // All columns cached — skip scan entirely
-      total_scanned = gpu_tbl->columns[0].num_rows;
-      fprintf(stderr, "[TIMER]   cpu_scan                         0.00 ms (all cached)\n");
-      fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
-              table_name.c_str(), (int)total_scanned, types.size());
-      fprintf(stderr, "[TIMER]   gpu_upload                        0.00 ms (cached)\n");
-    } else {
-      // Pre-allocate staging buffers for each uncached column (max estimate)
-      // We'll use the scan to determine actual row count, then set metadata
-      struct col_staging_info {
-        size_t staging_off;
-        uint8_t* staging_dst;
-        size_t write_pos;
-      };
-      std::vector<col_staging_info> staging(num_cols);
-
-      // Estimate: allocate staging for max possible rows
-      // We grow as needed by accumulating write positions
-      // Pre-allocate generous staging space per column
-      constexpr size_t STAGING_CHUNK_ROWS = 50000000; // 50M rows estimate
-      for (size_t c = 0; c < num_cols; c++) {
-        if (!bufMgr.checkIfColumnCached(table_name, col_names[c])) {
-          size_t col_bytes = STAGING_CHUNK_ROWS * rdf_type_size(rdf_types[c].id);
-          staging[c].staging_dst = bufMgr.customVkHostAlloc<uint8_t>(col_bytes);
-          staging[c].staging_off = static_cast<size_t>(staging[c].staging_dst - bufMgr.cpuProcessing);
-          staging[c].write_pos = 0;
-          // Also allocate cache slot
-          [[maybe_unused]] size_t cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, true);
-        }
-      }
-
-      {
-        stage_timer t_scan("  cpu_scan");
-
-        // Create proper ExecutionContext for init_local (like Sirius)
-        duckdb::ThreadContext thread_ctx(_client_ctx);
-        duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
-
-        duckdb::TableFunctionInitInput init_input(
-          op.bind_data.get(), col_ids, op.projection_ids,
-          nullptr /* no filters — we handle them on GPU */,
-          op.extra_info.sample_options);
-
-        auto global_state = op.function.init_global(_client_ctx, init_input);
-
-        duckdb::unique_ptr<duckdb::LocalTableFunctionState> local_state;
-        if (op.function.init_local) {
-          local_state = op.function.init_local(exec_ctx, init_input, global_state.get());
-        }
-
-        duckdb::TableFunctionInput tf_input(
-          op.bind_data.get(), local_state.get(), global_state.get());
-
-        // ── Pipelined scan loop: read chunk, flatten directly into staging ──
-        while (true) {
-          auto chunk = duckdb::make_uniq<duckdb::DataChunk>();
-          chunk->Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
-          op.function.function(_client_ctx, tf_input, *chunk);
-          if (chunk->size() == 0) break;
-          chunk->Flatten();
-
-          auto chunk_rows = static_cast<rasterdf::size_type>(chunk->size());
-          total_scanned += chunk_rows;
-
-          // Flatten each column directly into staging (inline with scan)
-          for (size_t c = 0; c < num_cols; c++) {
-            if (staging[c].staging_dst) {
-              size_t elem_size = rdf_type_size(rdf_types[c].id);
-              size_t bytes = static_cast<size_t>(chunk_rows) * elem_size;
-              auto data_ptr = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
-              std::memcpy(staging[c].staging_dst + staging[c].write_pos, data_ptr, bytes);
-              staging[c].write_pos += bytes;
-            }
-          }
-        }
-      }
-      fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
-              table_name.c_str(), (int)total_scanned, types.size());
-
-      // Set column metadata (staging addresses for GPU to read)
-      for (size_t c = 0; c < num_cols; c++) {
-        if (staging[c].staging_dst) {
-          gpu_tbl->columns[c].type = rdf_types[c];
-          gpu_tbl->columns[c].num_rows = total_scanned;
-          gpu_tbl->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging[c].staging_off;
-          gpu_tbl->columns[c].cached_buffer = bufMgr.cpuStagingBuffer();
-        }
-      }
-      gpu_tbl->set_num_rows(total_scanned);
-
-      size_t total_bytes = 0;
-      for (size_t c = 0; c < num_cols; c++) {
-        total_bytes += gpu_tbl->col(c).byte_size();
-      }
-      fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes (zero-copy reBAR)\n",
-              gpu_tbl->num_columns(), total_bytes);
-      fprintf(stderr, "[TIMER]   gpu_upload                        0.00 ms (zero-copy)\n");
-    }
-  } else {
-    // ── FALLBACK: Standard scan + device upload ──
-    std::vector<std::unique_ptr<duckdb::DataChunk>> chunks;
-    {
-      stage_timer t_scan("  cpu_scan");
-
-      duckdb::ThreadContext thread_ctx(_client_ctx);
-      duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
-
-      duckdb::TableFunctionInitInput init_input(
-        op.bind_data.get(), col_ids, op.projection_ids,
-        nullptr, op.extra_info.sample_options);
-
-      auto global_state = op.function.init_global(_client_ctx, init_input);
-
-      duckdb::unique_ptr<duckdb::LocalTableFunctionState> local_state;
-      if (op.function.init_local) {
-        local_state = op.function.init_local(exec_ctx, init_input, global_state.get());
-      }
-
-      duckdb::TableFunctionInput tf_input(
-        op.bind_data.get(), local_state.get(), global_state.get());
-
-      while (true) {
-        auto chunk = duckdb::make_uniq<duckdb::DataChunk>();
-        chunk->Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
-        op.function.function(_client_ctx, tf_input, *chunk);
-        if (chunk->size() == 0) break;
-        chunk->Flatten();
-        total_scanned += static_cast<rasterdf::size_type>(chunk->size());
-        chunks.push_back(std::move(chunk));
-      }
-    }
-    fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
-            table_name.c_str(), (int)total_scanned, types.size());
-
-    {
-      stage_timer t_upload("  gpu_upload");
-      gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
-      size_t total_bytes = 0;
-      for (size_t c = 0; c < gpu_tbl->num_columns(); c++) {
-        total_bytes += gpu_tbl->col(c).byte_size();
-      }
-      fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes (device copy)\n",
-              gpu_tbl->num_columns(), total_bytes);
     }
   }
+  if (col_list.empty()) col_list = "*";
 
+  std::string scan_query = "SELECT " + col_list + " FROM \"" + table_name + "\"";
+
+  // Optimization: push down filters to Parquet scanner (requires optimizer)
+  if (!op.table_filters.filters.empty()) {
+    std::string where_clause = " WHERE ";
+    bool first_filter = true;
+    for (auto& entry : op.table_filters.filters) {
+      if (!first_filter) where_clause += " AND ";
+      
+      idx_t absolute_col_idx = entry.first;
+      std::string filter_col_name = "unknown";
+      
+      if (absolute_col_idx < op.names.size()) {
+          filter_col_name = op.names[absolute_col_idx];
+      } else {
+          // If for some reason names is missing the absolute column,
+          // try to match it through projected column_ids 
+          for (size_t i = 0; i < col_ids.size(); i++) {
+              if (col_ids[i].GetPrimaryIndex() == absolute_col_idx) {
+                  if (i < op.names.size()) {
+                      filter_col_name = op.names[i];
+                  }
+                  break;
+              }
+          }
+      }
+      
+      where_clause += entry.second->ToString("\"" + filter_col_name + "\"");
+      first_filter = false;
+    }
+    scan_query += where_clause;
+  }
+
+  // Optimization: LIMIT pushdown — add LIMIT to SQL scan if no filter/order
+  if (_scan_limit > 0) {
+    scan_query += " LIMIT " + std::to_string(_scan_limit);
+  }
+
+  RASTERDB_LOG_DEBUG("GPU scan: {}", scan_query);
+
+  rasterdf::size_type total_scanned = 0;
+  std::vector<std::unique_ptr<duckdb::DataChunk>> chunks;
+  {
+    stage_timer t_scan("  cpu_scan");
+    auto t_qexec = std::chrono::high_resolution_clock::now();
+    auto result = conn->Query(scan_query);
+    if (result->HasError()) {
+      throw std::runtime_error("GPU scan failed: " + result->GetError());
+    }
+    auto t_qexec_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     query_exec               %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t_qexec_end - t_qexec).count());
+
+    auto t_fetch = std::chrono::high_resolution_clock::now();
+    while (true) {
+      auto chunk = result->Fetch();
+      if (!chunk || chunk->size() == 0) break;
+      chunks.push_back(std::move(chunk));
+    }
+    for (auto& c : chunks) total_scanned += static_cast<rasterdf::size_type>(c->size());
+    auto t_fetch_end = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[RDB_DEBUG]     chunk_fetch (%zu chunks)   %8.2f ms\n",
+            chunks.size(),
+            std::chrono::duration<double, std::milli>(t_fetch_end - t_fetch).count());
+  }
+  fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
+          table_name.c_str(), (int)total_scanned, types.size());
+
+  std::unique_ptr<gpu_table> gpu_tbl;
+  {
+    stage_timer t_upload("  gpu_upload");
+    auto t_up = std::chrono::high_resolution_clock::now();
+
+    if (GPUBufferManager::is_initialized()) {
+      // Build column name list for cache lookup
+      std::vector<std::string> col_names;
+      if (_scan_count_star_only && !col_ids.empty()) {
+        auto col_idx = col_ids[0].GetPrimaryIndex();
+        col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
+      } else {
+        for (size_t i = 0; i < col_ids.size(); i++) {
+          auto col_idx = col_ids[i].GetPrimaryIndex();
+          col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
+        }
+      }
+      // Reset staging bump pointer for this query
+      GPUBufferManager::GetInstance().cpuProcessingPointer.store(0, std::memory_order_relaxed);
+      gpu_tbl = gpu_table::from_buffer_manager(_ctx, table_name, col_names, types, chunks);
+    } else {
+      gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
+    }
+
+    auto t_up_end = std::chrono::high_resolution_clock::now();
+    size_t total_bytes = 0;
+    for (size_t c = 0; c < gpu_tbl->num_columns(); c++) {
+      total_bytes += gpu_tbl->col(c).byte_size();
+    }
+    fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes, %8.2f ms\n",
+            gpu_tbl->num_columns(), total_bytes,
+            std::chrono::duration<double, std::milli>(t_up_end - t_up).count());
+  }
   return gpu_tbl;
 }
 
 // ============================================================================
 // FILTER — evaluate WHERE clause predicates on GPU
-// ============================================================================
 std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& op)
 {
   RASTERDB_LOG_DEBUG("GPU execute_filter");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
-
-  RASTERDB_LOG_DEBUG("Filter input: {} rows x {} cols", input->num_rows(), input->num_columns());
-  for (size_t c = 0; c < input->num_columns(); c++) {
-    RASTERDB_LOG_DEBUG("  input col {}: {} rows, type={}, addr={}", c, input->col(c).num_rows,
-                       static_cast<int>(input->col(c).type.id), input->col(c).address());
-  }
 
   stage_timer t("  filter (total)");
 
@@ -571,7 +521,6 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
       result->columns[c].type = input.col(c).type;
       result->columns[c].num_rows = 0;
     }
-    RASTERDB_LOG_DEBUG("Filter result: 0 rows (early return)");
     return result;
   }
 
@@ -590,12 +539,23 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     disp.dispatch_scatter_if(spc, scatter_groups);
   }
 
-  result->set_num_rows(static_cast<rasterdf::size_type>(output_count));
-  RASTERDB_LOG_DEBUG("Filter result: {} rows x {} cols", result->num_rows(), result->num_columns());
   return result;
 }
 
-// unwrap_cast is defined in gpu_executor_internal.hpp
+// ============================================================================
+// Helper: unwrap BoundCastExpression to find the inner expression.
+// DuckDB's optimizer inserts casts for type promotion (e.g., val > 5 becomes
+// CAST(val AS BIGINT) > CAST(5 AS BIGINT)). We strip these to find the
+// underlying column ref or constant.
+// ============================================================================
+
+static duckdb::Expression& unwrap_cast(duckdb::Expression& expr) {
+  if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+    auto& cast = expr.Cast<duckdb::BoundCastExpression>();
+    return unwrap_cast(*cast.child);
+  }
+  return expr;
+}
 
 // ============================================================================
 // Evaluate comparison expression -> int32 mask (0/1 per element)

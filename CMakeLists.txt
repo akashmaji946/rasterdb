@@ -72,7 +72,8 @@ set(GPU_SOURCES
     src/gpu/gpu_context.cpp
     src/gpu/gpu_buffer_manager.cpp
     src/gpu/gpu_table.cpp
-    src/gpu/gpu_executor.cpp)
+    src/gpu/gpu_executor.cpp
+    src/gpu/gpu_scan_executor.cpp)
 # cmake-format: on
 
 build_static_extension(rasterdb ${EXTENSION_SOURCES} ${GPU_SOURCES})
