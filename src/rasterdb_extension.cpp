@@ -184,25 +184,8 @@ static void GPUExecutionFunction(ClientContext& context,
         Planner planner(context);
         planner.CreatePlan(std::move(parser.statements[0]));
 
-        // Enable optimizer to match Sirius (push down filters, join reordering, etc)
-        // But disable FILTER_PUSHDOWN - we need LogicalFilter nodes for GPU execution
-        auto original_disabled = DBConfig::GetConfig(context).options.disabled_optimizers;
-        auto disabled_optimizers = original_disabled;
-        disabled_optimizers.insert(OptimizerType::IN_CLAUSE);
-        disabled_optimizers.insert(OptimizerType::COMPRESSED_MATERIALIZATION);
-        disabled_optimizers.insert(OptimizerType::COLUMN_LIFETIME);
-        disabled_optimizers.insert(OptimizerType::LIMIT_PUSHDOWN);
-        disabled_optimizers.insert(OptimizerType::TOP_N);
-        disabled_optimizers.insert(OptimizerType::LATE_MATERIALIZATION);
-        disabled_optimizers.insert(OptimizerType::FILTER_PUSHDOWN);  // Keep filters as separate nodes for GPU
-        DBConfig::GetConfig(context).options.disabled_optimizers = disabled_optimizers;
-
-        Optimizer optimizer(*planner.binder, context);
-        auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
-        
-        DBConfig::GetConfig(context).options.disabled_optimizers = original_disabled;
-        
-        auto& plan = *optimized_plan;
+        // Use unoptimized plan to avoid spurious FILTER nodes from optimizer
+        auto& plan = *planner.plan;
 
         // Resolve column bindings to flat indices (BoundColumnRef -> BoundRef)
         ColumnBindingResolver resolver;
@@ -262,11 +245,16 @@ static void GPUExecutionFunction(ClientContext& context,
 
       auto duckdb_tid = output.data[c].GetType().id();
       auto rdf_tid = col.type.id;
-      
-      bool needs_cast = (duckdb_tid == duckdb::LogicalTypeId::HUGEINT) && 
-                        (rdf_tid == rasterdf::type_id::INT64 || rdf_tid == rasterdf::type_id::INT32);
 
-      if (!needs_cast) {
+      // Determine if a type cast is needed between rdf column and DuckDB output
+      bool types_match = false;
+      if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::INTEGER) types_match = true;
+      if (rdf_tid == rasterdf::type_id::INT64 && duckdb_tid == duckdb::LogicalTypeId::BIGINT) types_match = true;
+      if (rdf_tid == rasterdf::type_id::FLOAT32 && duckdb_tid == duckdb::LogicalTypeId::FLOAT) types_match = true;
+      if (rdf_tid == rasterdf::type_id::FLOAT64 && duckdb_tid == duckdb::LogicalTypeId::DOUBLE) types_match = true;
+
+      if (types_match) {
+        // Direct copy — types match in layout
         if (col.is_host_only) {
           std::memcpy(dst, col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
         } else {
@@ -275,6 +263,7 @@ static void GPUExecutionFunction(ClientContext& context,
               gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
         }
       } else {
+        // Need type conversion — download to temp buffer first
         std::vector<uint8_t> tmp(chunk_size * elem_size);
         if (col.is_host_only) {
             std::memcpy(tmp.data(), col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
@@ -283,8 +272,10 @@ static void GPUExecutionFunction(ClientContext& context,
                 tmp.data(), chunk_size * elem_size, data.chunk_offset * elem_size,
                 gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
         }
-        
-        if (rdf_tid == rasterdf::type_id::INT64) {
+
+        if (duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
+          // INT64 or INT32 → HUGEINT
+          if (rdf_tid == rasterdf::type_id::INT64) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int64_t val;
                 std::memcpy(&val, tmp.data() + r * sizeof(int64_t), sizeof(int64_t));
@@ -293,7 +284,7 @@ static void GPUExecutionFunction(ClientContext& context,
                 hval.upper = val < 0 ? -1 : 0;
                 std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
             }
-        } else {
+          } else {
             for (size_t r = 0; r < chunk_size; r++) {
                 int32_t val;
                 std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
@@ -302,6 +293,50 @@ static void GPUExecutionFunction(ClientContext& context,
                 hval.upper = val < 0 ? -1 : 0;
                 std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
             }
+          }
+        } else if (duckdb_tid == duckdb::LogicalTypeId::DOUBLE) {
+          // INT64 → DOUBLE or FLOAT32 → DOUBLE or INT32 → DOUBLE
+          if (rdf_tid == rasterdf::type_id::INT64) {
+            for (size_t r = 0; r < chunk_size; r++) {
+                int64_t val;
+                std::memcpy(&val, tmp.data() + r * sizeof(int64_t), sizeof(int64_t));
+                double dval = static_cast<double>(val);
+                std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
+            }
+          } else if (rdf_tid == rasterdf::type_id::FLOAT32) {
+            for (size_t r = 0; r < chunk_size; r++) {
+                float val;
+                std::memcpy(&val, tmp.data() + r * sizeof(float), sizeof(float));
+                double dval = static_cast<double>(val);
+                std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
+            }
+          } else if (rdf_tid == rasterdf::type_id::INT32) {
+            for (size_t r = 0; r < chunk_size; r++) {
+                int32_t val;
+                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                double dval = static_cast<double>(val);
+                std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
+            }
+          } else {
+            // FLOAT64 → DOUBLE: same layout, direct copy
+            std::memcpy(dst, tmp.data(), chunk_size * elem_size);
+          }
+        } else if (duckdb_tid == duckdb::LogicalTypeId::BIGINT) {
+          // INT32 → BIGINT
+          if (rdf_tid == rasterdf::type_id::INT32) {
+            for (size_t r = 0; r < chunk_size; r++) {
+                int32_t val;
+                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                int64_t wide = static_cast<int64_t>(val);
+                std::memcpy(dst + r * sizeof(int64_t), &wide, sizeof(int64_t));
+            }
+          } else {
+            // INT64 → BIGINT: same layout
+            std::memcpy(dst, tmp.data(), chunk_size * elem_size);
+          }
+        } else {
+          // Fallback: direct copy (sizes should match)
+          std::memcpy(dst, tmp.data(), chunk_size * elem_size);
         }
       }
     }

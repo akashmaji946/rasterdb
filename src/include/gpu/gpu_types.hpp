@@ -27,6 +27,8 @@ inline rasterdf::data_type to_rdf_type(const duckdb::LogicalType& type) {
     case duckdb::LogicalTypeId::BOOLEAN:   return {rasterdf::type_id::BOOL8};
     case duckdb::LogicalTypeId::DATE:      return {rasterdf::type_id::TIMESTAMP_DAYS};
     case duckdb::LogicalTypeId::TIMESTAMP: return {rasterdf::type_id::TIMESTAMP_MICROSECONDS};
+    case duckdb::LogicalTypeId::DECIMAL:   return {rasterdf::type_id::FLOAT32};  // treat DECIMAL as float for GPU
+    case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT64};    // best-effort for large int intermediates
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported type %s — falling back to CPU",

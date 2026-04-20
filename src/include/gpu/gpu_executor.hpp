@@ -68,6 +68,7 @@ private:
   std::unique_ptr<gpu_table> execute_join(duckdb::LogicalComparisonJoin& op);
 
   // Expression evaluation helpers
+  gpu_column evaluate_expression(const gpu_table& input, duckdb::Expression& expr);
   gpu_column evaluate_comparison(const gpu_table& input, duckdb::Expression& expr);
   gpu_column evaluate_binary_op(const gpu_table& input, duckdb::Expression& expr);
 
