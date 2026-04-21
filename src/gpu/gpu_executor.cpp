@@ -575,21 +575,6 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
 
   fprintf(stderr, "[RDB_DEBUG] FILTER: %zu expressions, %d rows x %zu cols\n",
           op.expressions.size(), (int)input->num_rows(), input->num_columns());
-  // Debug: dump first 20 values of each column
-  if (input->num_rows() > 0) {
-    size_t sample = std::min((size_t)20, (size_t)input->num_rows());
-    for (size_t c = 0; c < input->num_columns(); c++) {
-      std::vector<int32_t> h_vals(sample);
-      const_cast<rasterdf::device_buffer&>(input->col(c).data).copy_to_host(
-          h_vals.data(), sample * sizeof(int32_t),
-          _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      fprintf(stderr, "[RDB_DEBUG]   col[%zu] type=%d first %zu:", c,
-              (int)input->col(c).type.id, sample);
-      for (size_t i = 0; i < sample; i++) fprintf(stderr, " %d", h_vals[i]);
-      fprintf(stderr, "\n");
-    }
-    fflush(stderr);
-  }
   stage_timer t("  filter (total)");
 
   if (input->num_rows() == 0) return input;
@@ -599,27 +584,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   bool first = true;
 
   auto t_compare_start = std::chrono::high_resolution_clock::now();
-  size_t expr_idx = 0;
   for (auto& expr : op.expressions) {
-    fprintf(stderr, "[RDB_DEBUG] filter expr[%zu/%zu]: %s => %s\n",
-            expr_idx, op.expressions.size(),
-            duckdb::ExpressionTypeToString(expr->type).c_str(),
-            expr->ToString().c_str());
-    fflush(stderr);
     gpu_column expr_mask = evaluate_comparison(*input, *expr);
-    // Debug: count 1s in this mask
-    {
-      std::vector<int32_t> h_mask(input->num_rows());
-      const_cast<rasterdf::device_buffer&>(expr_mask.data).copy_to_host(
-          h_mask.data(), input->num_rows() * sizeof(int32_t),
-          _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      int64_t ones = 0;
-      for (auto v : h_mask) ones += (v != 0) ? 1 : 0;
-      fprintf(stderr, "[RDB_DEBUG]   expr[%zu] mask: %ld / %d pass\n",
-              expr_idx, (long)ones, (int)input->num_rows());
-      fflush(stderr);
-    }
-    expr_idx++;
 
     if (first) {
       mask = std::move(expr_mask);
@@ -767,11 +733,6 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
 
 gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Expression& expr)
 {
-  fprintf(stderr, "[RDB_DEBUG] evaluate_comparison: type=%s, toString=%s\n",
-          duckdb::ExpressionTypeToString(expr.type).c_str(),
-          expr.ToString().c_str());
-  fflush(stderr);
-
   auto& disp = _ctx.dispatcher();
   uint32_t n = static_cast<uint32_t>(input.num_rows());
 
@@ -820,10 +781,6 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         float fval = constant.value.DefaultCastAs(duckdb::LogicalType::FLOAT).GetValue<float>();
         std::memcpy(&threshold, &fval, sizeof(float));
       }
-
-      fprintf(stderr, "[RDB_DEBUG]   compare: col_idx=%zu op=%d threshold=%d type=%d\n",
-              (size_t)col_ref.index, cmp_op, threshold, type_id);
-      fflush(stderr);
 
       compare_push_constants pc{};
       pc.input_addr = col.address();
@@ -1052,6 +1009,35 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
   }
 }
 
+// Helper: cast an INT32 gpu_column to FLOAT32 via CPU round-trip.
+// Used to align mixed-type operands before dispatching the (single-type) binary_op shader.
+static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  const int32_t* src_int = nullptr;
+  std::vector<int32_t> h_int;
+
+  auto& bufMgr = GPUBufferManager::GetInstance();
+  if (src.cached_address != 0 && src.cached_buffer == bufMgr.cpuStagingBuffer()) {
+    // Zero-copy reBAR: data is directly accessible via mapped CPU staging.
+    size_t staging_off = static_cast<size_t>(
+        src.cached_address - bufMgr.cpuStagingAddress());
+    src_int = reinterpret_cast<const int32_t*>(bufMgr.cpuProcessing + staging_off);
+  } else {
+    // gpuCache-backed or device_buffer-owned: fall back to generic download.
+    h_int.resize(n);
+    download_column(ctx, src, h_int.data(), n * sizeof(int32_t));
+    src_int = h_int.data();
+  }
+
+  std::vector<float> h_flt(n);
+  for (size_t i = 0; i < n; i++) h_flt[i] = static_cast<float>(src_int[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::FLOAT32}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_flt.data(), n * sizeof(float),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
 gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expression& expr)
 {
   auto& func = expr.Cast<duckdb::BoundFunctionExpression>();
@@ -1098,19 +1084,72 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   bool left_is_const = left_expr.type == duckdb::ExpressionType::VALUE_CONSTANT;
 
   // Resolve addresses — evaluate complex sub-expressions to temp columns
-  gpu_column left_temp, right_temp;  // keep alive for address validity
+  gpu_column left_temp, right_temp;    // keep alive for address validity
+  gpu_column left_cast, right_cast;    // keep cast-to-float temp alive if needed
+
+  // Helper lambda: resolve an operand to (addr, source_type_id). For a BOUND_REF,
+  // reads directly from input.col(idx); otherwise evaluates into `temp_out`.
+  auto resolve_operand =
+      [&](duckdb::Expression& e, bool is_ref, gpu_column& temp_out)
+      -> std::pair<VkDeviceAddress, rasterdf::type_id> {
+    if (is_ref) {
+      auto& ref = e.Cast<duckdb::BoundReferenceExpression>();
+      const auto& src = input.col(ref.index);
+      return {src.address(), src.type.id};
+    }
+    temp_out = evaluate_expression(input, e);
+    return {temp_out.address(), temp_out.type.id};
+  };
 
   VkDeviceAddress left_addr = 0;
-  if (left_is_ref) {
-    left_addr = input.col(left_expr.Cast<duckdb::BoundReferenceExpression>().index).address();
-  } else if (!left_is_const) {
-    left_temp = evaluate_expression(input, left_expr);
-    left_addr = left_temp.address();
+  rasterdf::type_id left_src_type = rasterdf::type_id::INT32;
+  if (!left_is_const) {
+    auto r = resolve_operand(left_expr, left_is_ref, left_temp);
+    left_addr = r.first;
+    left_src_type = r.second;
+  }
+
+  // If shader will run the float path but this operand is INT32, cast it.
+  auto align_if_int_to_float = [&](VkDeviceAddress& addr,
+                                   rasterdf::type_id& src_type,
+                                   gpu_column& cast_out,
+                                   const gpu_column* ref_src) {
+    if (out_type.id != rasterdf::type_id::FLOAT32) return;
+    if (src_type == rasterdf::type_id::INT32) {
+      // Build a gpu_column view of the int32 source so we can cast it.
+      gpu_column tmp_view;
+      tmp_view.type = {rasterdf::type_id::INT32};
+      tmp_view.num_rows = static_cast<rasterdf::size_type>(input.num_rows());
+      if (ref_src) {
+        tmp_view.cached_address = ref_src->address();
+        tmp_view.cached_buffer = ref_src->cached_buffer;
+        tmp_view.is_host_only = ref_src->is_host_only;
+        tmp_view.host_data = ref_src->host_data;
+        cast_out = cast_int32_to_float32(_ctx, *ref_src);
+      } else {
+        // Can't cheaply view without the gpu_column; fall back to a re-read.
+        // Not expected in current flows (non-ref temps are already float).
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: unexpected INT32 temp operand requiring float cast");
+      }
+      addr = cast_out.address();
+      src_type = rasterdf::type_id::FLOAT32;
+    }
+  };
+
+  // Apply cast to left operand if needed (only for BOUND_REF, where we can access the source column)
+  if (!left_is_const && left_is_ref) {
+    auto& ref = left_expr.Cast<duckdb::BoundReferenceExpression>();
+    align_if_int_to_float(left_addr, left_src_type, left_cast, &input.col(ref.index));
   }
 
   if (left_is_ref && right_is_ref) {
+    auto& rref = right_expr.Cast<duckdb::BoundReferenceExpression>();
+    VkDeviceAddress right_addr = input.col(rref.index).address();
+    rasterdf::type_id right_src_type = input.col(rref.index).type.id;
+    align_if_int_to_float(right_addr, right_src_type, right_cast, &input.col(rref.index));
     pc.input_a = left_addr;
-    pc.input_b = input.col(right_expr.Cast<duckdb::BoundReferenceExpression>().index).address();
+    pc.input_b = right_addr;
     pc.mode = 0; // COL_COL
     pc.scalar_val = 0;
   } else if (left_addr != 0 && right_is_const) {
@@ -1338,26 +1377,7 @@ void gpu_executor::execute_grouped_aggregate(
       group_expr.Cast<duckdb::BoundReferenceExpression>().index);
   }
 
-  // Debug: print group column indices
-  {
-    fprintf(stderr, "[RDB_DEBUG] GROUP BY %zu cols, indices:", num_group_cols);
-    for (auto idx : group_col_indices)
-      fprintf(stderr, " %zu", (size_t)idx);
-    fprintf(stderr, ", input: %d rows x %zu cols\n", (int)input.num_rows(), input.num_columns());
-    fflush(stderr);
-    // Count unique values in each group column
-    for (size_t g = 0; g < num_group_cols; g++) {
-      std::vector<int32_t> h_col(input.num_rows());
-      const_cast<rasterdf::device_buffer&>(input.col(group_col_indices[g]).data).copy_to_host(
-          h_col.data(), input.num_rows() * sizeof(int32_t),
-          _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      std::set<int32_t> uniq(h_col.begin(), h_col.end());
-      int32_t minv = *uniq.begin(), maxv = *uniq.rbegin();
-      fprintf(stderr, "[RDB_DEBUG]   col[%zu] (idx %zu): %zu unique, min=%d, max=%d\n",
-              g, (size_t)group_col_indices[g], uniq.size(), minv, maxv);
-      fflush(stderr);
-    }
-  }
+  RASTERDB_LOG_DEBUG("GROUP BY {} cols, {} rows", num_group_cols, input.num_rows());
 
   // Build the effective group key column (single or composite)
   auto n_rows = input.num_rows();
