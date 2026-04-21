@@ -31,6 +31,7 @@
 #include <limits>
 #include <numeric>
 #include <unordered_map>
+#include <set>
 
 namespace rasterdb {
 namespace gpu {
@@ -54,6 +55,15 @@ std::unique_ptr<gpu_table> gpu_executor::execute(duckdb::LogicalOperator& plan)
 
   // Reset the temporary workspace pool strictly for this query's execution
   _ctx.memory().reset_workspace();
+
+  // Reset staging/processing bump pointers once per query (NOT per-scan)
+  // so multiple table scans get non-overlapping staging regions.
+  if (GPUBufferManager::is_initialized()) {
+    auto& bufMgr = GPUBufferManager::GetInstance();
+    bufMgr.cpuProcessingPointer.store(0, std::memory_order_relaxed);
+    bufMgr.gpuProcessingPointer.store(0, std::memory_order_relaxed);
+    bufMgr.gpuCachingPointer.store(0, std::memory_order_relaxed);
+  }
 
   debug_print_plan(plan);
   analyze_plan_hints(plan);
@@ -219,6 +229,24 @@ std::unique_ptr<gpu_table> gpu_executor::execute_operator(duckdb::LogicalOperato
 std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 {
   RASTERDB_LOG_DEBUG("GPU execute_get: {}", op.function.name);
+  // Debug: check table_filters
+  {
+    fprintf(stderr, "[RDB_DEBUG] GET '%s': table_filters=%zu\n",
+            op.function.name.c_str(), op.table_filters.filters.size());
+    auto& cids = op.GetColumnIds();
+    fprintf(stderr, "[RDB_DEBUG]   column_ids(%zu):", cids.size());
+    for (auto& c : cids) fprintf(stderr, " %zu", (size_t)c.GetPrimaryIndex());
+    fprintf(stderr, "\n[RDB_DEBUG]   projection_ids(%zu):", op.projection_ids.size());
+    for (auto& p : op.projection_ids) fprintf(stderr, " %zu", (size_t)p);
+    fprintf(stderr, "\n[RDB_DEBUG]   names(%zu):", op.names.size());
+    for (size_t i = 0; i < op.names.size() && i < 20; i++) fprintf(stderr, " %s", op.names[i].c_str());
+    fprintf(stderr, "\n");
+    auto bindings = op.GetColumnBindings();
+    fprintf(stderr, "[RDB_DEBUG]   bindings(%zu):", bindings.size());
+    for (auto& b : bindings) fprintf(stderr, " (%zu,%zu)", (size_t)b.table_index, (size_t)b.column_index);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+  }
 
   // Get the output types from the logical operator.
   // In unoptimized plans, op.types may be empty. Use returned_types + column_ids
@@ -301,7 +329,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     // staging memory as it arrives. No separate upload step needed.
     // GPU reads directly from reBAR staging memory (host-visible device-local).
     auto& bufMgr = GPUBufferManager::GetInstance();
-    bufMgr.cpuProcessingPointer.store(0, std::memory_order_relaxed);
+    // NOTE: cpuProcessingPointer is reset per-query in execute(), NOT here.
+    // Resetting per-scan would overwrite previous tables' staging data.
 
     size_t num_cols = scan_types.size();
     std::vector<rasterdf::data_type> rdf_types(num_cols);
@@ -360,8 +389,6 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           staging[c].staging_dst = bufMgr.customVkHostAlloc<uint8_t>(col_bytes);
           staging[c].staging_off = static_cast<size_t>(staging[c].staging_dst - bufMgr.cpuProcessing);
           staging[c].write_pos = 0;
-          // Also allocate cache slot
-          [[maybe_unused]] size_t cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, true);
         }
       }
 
@@ -421,7 +448,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
               table_name.c_str(), (int)total_scanned, types.size());
 
-      // Set column metadata (staging addresses for GPU to read)
+      // Set column metadata (staging addresses for GPU to read via reBAR zero-copy)
       for (size_t c = 0; c < num_cols; c++) {
         if (staging[c].staging_dst) {
           gpu_tbl->columns[c].type = rdf_types[c];
@@ -484,6 +511,38 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
             table_name.c_str(), (int)total_scanned, types.size());
 
+    // Debug: dump first 20 values from each column in CPU staging
+    if (total_scanned > 0 && !chunks.empty()) {
+      size_t sample = std::min((size_t)20, (size_t)total_scanned);
+      fprintf(stderr, "[RDB_DEBUG] SCAN '%s' CPU staging first %zu:\n", table_name.c_str(), sample);
+      for (size_t col_idx = 0; col_idx < types.size(); col_idx++) {
+        fprintf(stderr, "[RDB_DEBUG]   col[%zu] type=%s:", col_idx, types[col_idx].ToString().c_str());
+        size_t row_idx = 0;
+        for (auto& chunk : chunks) {
+          if (row_idx >= sample) break;
+          auto& vec = chunk->data[col_idx];
+          auto chunk_rows = std::min((size_t)chunk->size(), sample - row_idx);
+          if (types[col_idx] == duckdb::LogicalType::FLOAT) {
+            auto floats = duckdb::FlatVector::GetData<float>(vec);
+            for (size_t i = 0; i < chunk_rows; i++) {
+              fprintf(stderr, " %.0f", floats[i]);
+            }
+          } else if (types[col_idx] == duckdb::LogicalType::INTEGER) {
+            auto ints = duckdb::FlatVector::GetData<int32_t>(vec);
+            for (size_t i = 0; i < chunk_rows; i++) {
+              fprintf(stderr, " %d", ints[i]);
+            }
+          } else {
+            fprintf(stderr, " ?");
+          }
+          row_idx += chunk_rows;
+          if (row_idx >= sample) break;
+        }
+        fprintf(stderr, "\n");
+      }
+      fflush(stderr);
+    }
+
     {
       stage_timer t_upload("  gpu_upload");
       gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
@@ -514,6 +573,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
                        static_cast<int>(input->col(c).type.id), input->col(c).address());
   }
 
+  fprintf(stderr, "[RDB_DEBUG] FILTER: %zu expressions, %d rows x %zu cols\n",
+          op.expressions.size(), (int)input->num_rows(), input->num_columns());
+  // Debug: dump first 20 values of each column
+  if (input->num_rows() > 0) {
+    size_t sample = std::min((size_t)20, (size_t)input->num_rows());
+    for (size_t c = 0; c < input->num_columns(); c++) {
+      std::vector<int32_t> h_vals(sample);
+      const_cast<rasterdf::device_buffer&>(input->col(c).data).copy_to_host(
+          h_vals.data(), sample * sizeof(int32_t),
+          _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      fprintf(stderr, "[RDB_DEBUG]   col[%zu] type=%d first %zu:", c,
+              (int)input->col(c).type.id, sample);
+      for (size_t i = 0; i < sample; i++) fprintf(stderr, " %d", h_vals[i]);
+      fprintf(stderr, "\n");
+    }
+    fflush(stderr);
+  }
   stage_timer t("  filter (total)");
 
   if (input->num_rows() == 0) return input;
@@ -523,8 +599,27 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   bool first = true;
 
   auto t_compare_start = std::chrono::high_resolution_clock::now();
+  size_t expr_idx = 0;
   for (auto& expr : op.expressions) {
+    fprintf(stderr, "[RDB_DEBUG] filter expr[%zu/%zu]: %s => %s\n",
+            expr_idx, op.expressions.size(),
+            duckdb::ExpressionTypeToString(expr->type).c_str(),
+            expr->ToString().c_str());
+    fflush(stderr);
     gpu_column expr_mask = evaluate_comparison(*input, *expr);
+    // Debug: count 1s in this mask
+    {
+      std::vector<int32_t> h_mask(input->num_rows());
+      const_cast<rasterdf::device_buffer&>(expr_mask.data).copy_to_host(
+          h_mask.data(), input->num_rows() * sizeof(int32_t),
+          _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      int64_t ones = 0;
+      for (auto v : h_mask) ones += (v != 0) ? 1 : 0;
+      fprintf(stderr, "[RDB_DEBUG]   expr[%zu] mask: %ld / %d pass\n",
+              expr_idx, (long)ones, (int)input->num_rows());
+      fflush(stderr);
+    }
+    expr_idx++;
 
     if (first) {
       mask = std::move(expr_mask);
@@ -561,6 +656,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
     double ms = std::chrono::duration<double, std::milli>(t_compact_end - t_compact_start).count();
     fprintf(stderr, "[TIMER]     filter_compact             %8.2f ms\n", ms);
   }
+  fprintf(stderr, "[RDB_DEBUG] filter: %d rows => %d rows\n",
+          (int)input->num_rows(), (int)result->num_rows());
+  fflush(stderr);
   return result;
 }
 
@@ -669,6 +767,11 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
 
 gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Expression& expr)
 {
+  fprintf(stderr, "[RDB_DEBUG] evaluate_comparison: type=%s, toString=%s\n",
+          duckdb::ExpressionTypeToString(expr.type).c_str(),
+          expr.ToString().c_str());
+  fflush(stderr);
+
   auto& disp = _ctx.dispatcher();
   uint32_t n = static_cast<uint32_t>(input.num_rows());
 
@@ -717,6 +820,10 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         float fval = constant.value.DefaultCastAs(duckdb::LogicalType::FLOAT).GetValue<float>();
         std::memcpy(&threshold, &fval, sizeof(float));
       }
+
+      fprintf(stderr, "[RDB_DEBUG]   compare: col_idx=%zu op=%d threshold=%d type=%d\n",
+              (size_t)col_ref.index, cmp_op, threshold, type_id);
+      fflush(stderr);
 
       compare_push_constants pc{};
       pc.input_addr = col.address();
@@ -1231,6 +1338,27 @@ void gpu_executor::execute_grouped_aggregate(
       group_expr.Cast<duckdb::BoundReferenceExpression>().index);
   }
 
+  // Debug: print group column indices
+  {
+    fprintf(stderr, "[RDB_DEBUG] GROUP BY %zu cols, indices:", num_group_cols);
+    for (auto idx : group_col_indices)
+      fprintf(stderr, " %zu", (size_t)idx);
+    fprintf(stderr, ", input: %d rows x %zu cols\n", (int)input.num_rows(), input.num_columns());
+    fflush(stderr);
+    // Count unique values in each group column
+    for (size_t g = 0; g < num_group_cols; g++) {
+      std::vector<int32_t> h_col(input.num_rows());
+      const_cast<rasterdf::device_buffer&>(input.col(group_col_indices[g]).data).copy_to_host(
+          h_col.data(), input.num_rows() * sizeof(int32_t),
+          _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      std::set<int32_t> uniq(h_col.begin(), h_col.end());
+      int32_t minv = *uniq.begin(), maxv = *uniq.rbegin();
+      fprintf(stderr, "[RDB_DEBUG]   col[%zu] (idx %zu): %zu unique, min=%d, max=%d\n",
+              g, (size_t)group_col_indices[g], uniq.size(), minv, maxv);
+      fflush(stderr);
+    }
+  }
+
   // Build the effective group key column (single or composite)
   auto n_rows = input.num_rows();
   gpu_column composite_key_storage;   // owns memory for multi-col case
@@ -1394,6 +1522,10 @@ void gpu_executor::execute_grouped_aggregate(
           h_key_ids[r] = it->second;
         }
       }
+
+      fprintf(stderr, "[RDB_DEBUG] surrogate: %zu unique composite keys from %d rows\n",
+              surrogate_id_to_composite.size(), (int)n_rows);
+      fflush(stderr);
 
       composite_key_storage = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
       composite_key_storage.data.copy_from_host(
@@ -1740,6 +1872,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   }
 
   // Validate all conditions are equi-joins on column references
+  fprintf(stderr, "[RDB_DEBUG] JOIN: %zu conditions\n", op.conditions.size());
+  for (size_t ci = 0; ci < op.conditions.size(); ci++) {
+    auto& c = op.conditions[ci];
+    fprintf(stderr, "[RDB_DEBUG]   cond[%zu]: cmp=%s left=%s right=%s\n",
+            ci, duckdb::ExpressionTypeToString(c.comparison).c_str(),
+            c.left->ToString().c_str(), c.right->ToString().c_str());
+  }
+  fflush(stderr);
   for (auto& cond : op.conditions) {
     if (cond.comparison != duckdb::ExpressionType::COMPARE_EQUAL) {
       throw duckdb::NotImplementedException("RasterDB GPU: only equi-join supported");
@@ -1768,6 +1908,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
 
   auto left_key_view = left_table->col(left_key_idx).view();
   auto right_key_view = right_table->col(right_key_idx).view();
+  fprintf(stderr, "[RDB_DEBUG] JOIN keys: L col[%zu] addr=0x%lx size=%d, R col[%zu] addr=0x%lx size=%d\n",
+          (size_t)left_key_idx, (unsigned long)left_key_view.data(), (int)left_key_view.size(),
+          (size_t)right_key_idx, (unsigned long)right_key_view.data(), (int)right_key_view.size());
+  fflush(stderr);
   std::vector<rasterdf::column_view> lk = {left_key_view};
   std::vector<rasterdf::column_view> rk = {right_key_view};
   rasterdf::table_view left_keys_tv(lk);
@@ -1800,12 +1944,12 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   auto right_gathered = rasterdf::gather(right_table->view(), right_idx_view,
     _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
 
+  auto left_cols = left_gathered->extract();
+  auto right_cols = right_gathered->extract();
+
   // Build result: left columns then right columns
   auto result = std::make_unique<gpu_table>();
   result->duckdb_types = op.types;
-
-  auto left_cols = left_gathered->extract();
-  auto right_cols = right_gathered->extract();
 
   size_t total_cols = left_cols.size() + right_cols.size();
   result->columns.resize(total_cols);

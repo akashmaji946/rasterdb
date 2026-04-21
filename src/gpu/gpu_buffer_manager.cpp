@@ -149,6 +149,20 @@ GPUBufferManager::CachedColumn* GPUBufferManager::getCachedColumn(
   return &col_it->second;
 }
 
+void GPUBufferManager::registerCachedColumn(const std::string& table_name,
+                                            const std::string& column_name,
+                                            size_t gpu_offset,
+                                            size_t num_rows,
+                                            size_t byte_size,
+                                            rasterdf::data_type type) {
+  CachedColumn col;
+  col.gpu_offset = gpu_offset;
+  col.num_rows = num_rows;
+  col.byte_size = byte_size;
+  col.type = type;
+  cached_columns[table_name][column_name] = col;
+}
+
 void GPUBufferManager::batchTransfer(
     gpu_context& ctx,
     const std::vector<size_t>& src_offsets,

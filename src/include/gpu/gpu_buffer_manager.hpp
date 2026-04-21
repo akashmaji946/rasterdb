@@ -90,6 +90,12 @@ public:
                            const std::string& column_name);
   CachedColumn* getCachedColumn(const std::string& table_name,
                                 const std::string& column_name);
+  void registerCachedColumn(const std::string& table_name,
+                            const std::string& column_name,
+                            size_t gpu_offset,
+                            size_t num_rows,
+                            size_t byte_size,
+                            rasterdf::data_type type);
 
   // ---- Vulkan buffer handles (for vkCmdCopyBuffer) ----
   VkBuffer gpuCacheBuffer()     const { return _gpu_cache_alloc.buffer; }
