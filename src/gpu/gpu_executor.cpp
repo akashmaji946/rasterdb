@@ -28,6 +28,7 @@
 #include <duckdb/execution/execution_context.hpp>
 #include <duckdb/parallel/thread_context.hpp>
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <numeric>
 #include <unordered_map>
@@ -44,6 +45,53 @@ gpu_executor::gpu_executor(gpu_context& ctx, duckdb::ClientContext& client_ctx)
   : _ctx(ctx), _client_ctx(client_ctx) {}
 
 static void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
+
+static bool groupby_diag_enabled()
+{
+  const char* v = std::getenv("RDB_GROUPBY_DIAG");
+  return v && v[0] && v[0] != '0';
+}
+
+static void diag_int32_column_stats(gpu_context& ctx, const gpu_column& col, const char* label)
+{
+  auto n = static_cast<uint32_t>(col.num_rows);
+  if (n == 0) {
+    fprintf(stderr, "[RDB_DIAG] %s: rows=0\n", label);
+    return;
+  }
+
+  rasterdf::reduce_aggregation min_agg(rasterdf::aggregation_kind::MIN);
+  rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
+  auto min_s = rasterdf::reduce(col.view(), min_agg, rasterdf::data_type{rasterdf::type_id::INT32},
+                                ctx.vk_context(), ctx.dispatcher(), ctx.workspace_mr());
+  auto max_s = rasterdf::reduce(col.view(), max_agg, rasterdf::data_type{rasterdf::type_id::INT32},
+                                ctx.vk_context(), ctx.dispatcher(), ctx.workspace_mr());
+
+  const rasterdf::size_type sample_n = static_cast<rasterdf::size_type>(std::min<uint32_t>(n, 8));
+  auto idx = allocate_column(ctx, {rasterdf::type_id::INT32}, sample_n);
+  std::vector<int32_t> h_idx(static_cast<size_t>(sample_n));
+  for (size_t i = 0; i < h_idx.size(); i++) h_idx[i] = static_cast<int32_t>(i);
+  idx.data.copy_from_host(h_idx.data(), h_idx.size() * sizeof(int32_t),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+
+  auto sample = allocate_column(ctx, {rasterdf::type_id::INT32}, sample_n);
+  gather_indices_pc gc{};
+  gc.input_addr = col.address();
+  gc.indices_addr = idx.address();
+  gc.output_addr = sample.address();
+  gc.size = static_cast<uint32_t>(sample_n);
+  ctx.dispatcher().dispatch_gather_indices(gc, div_ceil(gc.size, WG_SIZE));
+
+  std::vector<int32_t> h_sample(static_cast<size_t>(sample_n));
+  download_column(ctx, sample, h_sample.data(), h_sample.size() * sizeof(int32_t));
+
+  fprintf(stderr, "[RDB_DIAG] %s: rows=%u min=%d max=%d sample=[",
+          label, n, min_s->as<int32_t>(), max_s->as<int32_t>());
+  for (size_t i = 0; i < h_sample.size(); i++) {
+    fprintf(stderr, "%s%d", (i ? "," : ""), h_sample[i]);
+  }
+  fprintf(stderr, "]\n");
+}
 
 // ============================================================================
 // Top-level execute
@@ -229,6 +277,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_operator(duckdb::LogicalOperato
 std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 {
   RASTERDB_LOG_DEBUG("GPU execute_get: {}", op.function.name);
+  const bool diag = groupby_diag_enabled();
   // Debug: check table_filters
   {
     fprintf(stderr, "[RDB_DEBUG] GET '%s': table_filters=%zu\n",
@@ -367,13 +416,22 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       // Pre-allocate staging buffers for each uncached column (max estimate)
       // We'll use the scan to determine actual row count, then set metadata
       struct col_staging_info {
+        bool uncached;
         size_t staging_off;
         uint8_t* staging_dst;
         size_t write_pos;
+        size_t capacity_bytes;
+        size_t cache_off;
       };
       std::vector<col_staging_info> staging(num_cols);
 
-      // Estimate staging size: use _scan_limit, estimated_cardinality, or fallback
+      // Estimate staging size: use _scan_limit, estimated_cardinality, or full
+      // staging-budget row capacity (safe fallback).
+      //
+      // NOTE: The old fixed fallback (20M rows) under-allocated for SF10
+      // lineitem (~60M rows), causing memcpy overwrite across adjacent staging
+      // regions and silent data corruption (observed as GROUP BY keys becoming
+      // date-like values and exploding cardinality).
       size_t STAGING_CHUNK_ROWS;
       if (_scan_limit > 0) {
         STAGING_CHUNK_ROWS = static_cast<size_t>(_scan_limit);
@@ -381,7 +439,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
         // Use plan estimate with 20% headroom
         STAGING_CHUNK_ROWS = static_cast<size_t>(op.estimated_cardinality * 1.2) + 1024;
       } else {
-        STAGING_CHUNK_ROWS = 20000000; // 20M rows fallback
+        size_t row_width = 0;
+        for (size_t c = 0; c < num_cols; c++) {
+          row_width += rdf_type_size(rdf_types[c].id);
+        }
+        if (row_width == 0) row_width = 1;
+        // Keep a small safety margin for allocator alignment overhead.
+        STAGING_CHUNK_ROWS = (bufMgr.processing_size_per_cpu * 95 / 100) / row_width;
+        if (STAGING_CHUNK_ROWS == 0) STAGING_CHUNK_ROWS = 1;
       }
       for (size_t c = 0; c < num_cols; c++) {
         if (!bufMgr.checkIfColumnCached(table_name, col_names[c])) {
@@ -389,6 +454,20 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           staging[c].staging_dst = bufMgr.customVkHostAlloc<uint8_t>(col_bytes);
           staging[c].staging_off = static_cast<size_t>(staging[c].staging_dst - bufMgr.cpuProcessing);
           staging[c].write_pos = 0;
+          staging[c].capacity_bytes = col_bytes;
+          staging[c].cache_off = 0;
+          staging[c].uncached = true;
+          if (diag) {
+            fprintf(stderr, "[RDB_DIAG] scan staging col[%zu] capacity=%zu bytes (~%zu rows)\n",
+                    c, col_bytes, STAGING_CHUNK_ROWS);
+          }
+        } else {
+          staging[c].uncached = false;
+          staging[c].staging_dst = nullptr;
+          staging[c].staging_off = 0;
+          staging[c].write_pos = 0;
+          staging[c].capacity_bytes = 0;
+          staging[c].cache_off = 0;
         }
       }
 
@@ -426,6 +505,27 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           if (chunk->size() == 0) break;
           chunk->Flatten();
 
+          if (diag && total_scanned == 0) {
+            fprintf(stderr, "[RDB_DIAG] scan first_chunk rows=%zu scan_types=%zu\n",
+                    static_cast<size_t>(chunk->size()), scan_types.size());
+            for (size_t c = 0; c < scan_types.size(); c++) {
+              auto cid = (c < col_ids.size()) ? static_cast<size_t>(col_ids[c].GetPrimaryIndex()) : static_cast<size_t>(-1);
+              fprintf(stderr, "[RDB_DIAG] scan col[%zu] cid=%zu type=%s sample=[",
+                      c, cid, scan_types[c].ToString().c_str());
+              size_t s = std::min<size_t>(chunk->size(), 8);
+              if (scan_types[c] == duckdb::LogicalType::INTEGER) {
+                auto p = duckdb::FlatVector::GetData<int32_t>(chunk->data[c]);
+                for (size_t i = 0; i < s; i++) fprintf(stderr, "%s%d", (i ? "," : ""), p[i]);
+              } else if (scan_types[c] == duckdb::LogicalType::FLOAT) {
+                auto p = duckdb::FlatVector::GetData<float>(chunk->data[c]);
+                for (size_t i = 0; i < s; i++) fprintf(stderr, "%s%.2f", (i ? "," : ""), p[i]);
+              } else {
+                fprintf(stderr, "?");
+              }
+              fprintf(stderr, "]\n");
+            }
+          }
+
           auto chunk_rows = static_cast<rasterdf::size_type>(chunk->size());
           // Clamp to limit
           if (total_scanned + chunk_rows > scan_row_limit) {
@@ -438,6 +538,12 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
             if (staging[c].staging_dst) {
               size_t elem_size = rdf_type_size(rdf_types[c].id);
               size_t bytes = static_cast<size_t>(chunk_rows) * elem_size;
+              if (staging[c].write_pos + bytes > staging[c].capacity_bytes) {
+                throw duckdb::NotImplementedException(
+                  "RasterDB GPU: scan staging overflow col %zu (need %zu, cap %zu). "
+                  "Increase staging or fix row estimate.",
+                  c, staging[c].write_pos + bytes, staging[c].capacity_bytes);
+              }
               auto data_ptr = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
               std::memcpy(staging[c].staging_dst + staging[c].write_pos, data_ptr, bytes);
               staging[c].write_pos += bytes;
@@ -448,13 +554,49 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       fprintf(stderr, "[TIMER]   scan: %s %d rows x %zu cols\n",
               table_name.c_str(), (int)total_scanned, types.size());
 
-      // Set column metadata (staging addresses for GPU to read via reBAR zero-copy)
+      // Batch transfer uncached scan columns from host staging to device-local cache.
+      // Compute stages (filter/groupby) are much faster on device-local memory than
+      // host-visible reBAR zero-copy for large SF10 scans.
+      std::vector<size_t> src_offsets;
+      std::vector<size_t> dst_offsets;
+      std::vector<size_t> sizes;
+      src_offsets.reserve(num_cols);
+      dst_offsets.reserve(num_cols);
+      sizes.reserve(num_cols);
+
       for (size_t c = 0; c < num_cols; c++) {
-        if (staging[c].staging_dst) {
+        if (staging[c].uncached) {
+          size_t col_bytes = static_cast<size_t>(total_scanned) * rdf_type_size(rdf_types[c].id);
+          staging[c].cache_off = bufMgr.customVkMalloc<uint8_t>(col_bytes, /*caching=*/true);
+          src_offsets.push_back(staging[c].staging_off);
+          dst_offsets.push_back(staging[c].cache_off);
+          sizes.push_back(col_bytes);
+        }
+      }
+
+      if (!sizes.empty()) {
+        stage_timer t_upload("  gpu_upload");
+        bufMgr.batchTransfer(_ctx, src_offsets, dst_offsets, sizes);
+      } else {
+        fprintf(stderr, "[TIMER]   gpu_upload                        0.00 ms (all cached)\n");
+      }
+
+      // Set column metadata (device-local cache for uncached columns; cached columns reuse existing slots)
+      for (size_t c = 0; c < num_cols; c++) {
+        if (staging[c].uncached) {
+          size_t col_bytes = static_cast<size_t>(total_scanned) * rdf_type_size(rdf_types[c].id);
           gpu_tbl->columns[c].type = rdf_types[c];
           gpu_tbl->columns[c].num_rows = total_scanned;
-          gpu_tbl->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging[c].staging_off;
-          gpu_tbl->columns[c].cached_buffer = bufMgr.cpuStagingBuffer();
+          gpu_tbl->columns[c].cached_address = bufMgr.gpuCacheAddress() + staging[c].cache_off;
+          gpu_tbl->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+          bufMgr.registerCachedColumn(table_name, col_names[c], staging[c].cache_off,
+                                      static_cast<size_t>(total_scanned), col_bytes, rdf_types[c]);
+        } else {
+          auto* cached = bufMgr.getCachedColumn(table_name, col_names[c]);
+          gpu_tbl->columns[c].type = cached->type;
+          gpu_tbl->columns[c].num_rows = static_cast<rasterdf::size_type>(cached->num_rows);
+          gpu_tbl->columns[c].cached_address = bufMgr.gpuCacheAddress() + cached->gpu_offset;
+          gpu_tbl->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
         }
       }
       gpu_tbl->set_num_rows(total_scanned);
@@ -463,9 +605,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       for (size_t c = 0; c < num_cols; c++) {
         total_bytes += gpu_tbl->col(c).byte_size();
       }
-      fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes (zero-copy reBAR)\n",
+      fprintf(stderr, "[RDB_DEBUG]     gpu_upload_detail: %zu cols, %zu bytes (staging->gpuCache)\n",
               gpu_tbl->num_columns(), total_bytes);
-      fprintf(stderr, "[TIMER]   gpu_upload                        0.00 ms (zero-copy)\n");
+      fflush(stderr);
     }
   } else {
     // ── FALLBACK: Standard scan + device upload ──
@@ -566,6 +708,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   RASTERDB_LOG_DEBUG("GPU execute_filter");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  const bool diag = groupby_diag_enabled();
 
   RASTERDB_LOG_DEBUG("Filter input: {} rows x {} cols", input->num_rows(), input->num_columns());
   for (size_t c = 0; c < input->num_columns(); c++) {
@@ -578,6 +721,18 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   stage_timer t("  filter (total)");
 
   if (input->num_rows() == 0) return input;
+
+  if (diag) {
+    fprintf(stderr, "[RDB_DIAG] filter_input rows=%d cols=%zu\n",
+            static_cast<int>(input->num_rows()), input->num_columns());
+    for (size_t c = 0; c < input->num_columns(); c++) {
+      const auto& col = input->col(c);
+      if (col.type.id == rasterdf::type_id::INT32) {
+        fprintf(stderr, "[RDB_DIAG] filter_input col[%zu] type=INT32\n", c);
+        diag_int32_column_stats(_ctx, col, "filter_input_col");
+      }
+    }
+  }
 
   // Evaluate each filter expression to produce a boolean (int32 0/1) mask
   gpu_column mask;
@@ -624,6 +779,17 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   }
   fprintf(stderr, "[RDB_DEBUG] filter: %d rows => %d rows\n",
           (int)input->num_rows(), (int)result->num_rows());
+  if (diag) {
+    fprintf(stderr, "[RDB_DIAG] filter_output rows=%d cols=%zu\n",
+            static_cast<int>(result->num_rows()), result->num_columns());
+    for (size_t c = 0; c < result->num_columns(); c++) {
+      const auto& col = result->col(c);
+      if (col.type.id == rasterdf::type_id::INT32) {
+        fprintf(stderr, "[RDB_DIAG] filter_output col[%zu] type=INT32\n", c);
+        diag_int32_column_stats(_ctx, col, "filter_output_col");
+      }
+    }
+  }
   fflush(stderr);
   return result;
 }
@@ -648,6 +814,9 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 
+  // --- Batch 1: copy, fill, and prefix scan in one command buffer ----------
+  disp.begin_batch();
+
   // GPU-to-GPU copy: mask[0..N-1] → prefix_buf[0..N-1]
   disp.copy_buffer(mask.data.buffer(), prefix_buf.buffer(), n * sizeof(uint32_t),
                    mask.data.offset(), prefix_buf.offset());
@@ -655,7 +824,7 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
   disp.fill_buffer(prefix_buf.buffer(), 0u, sizeof(uint32_t),
                    prefix_buf.offset() + n * sizeof(uint32_t));
 
-  // --- Step 2: 3-pass prefix scan on prefix_buf ---------------------------
+  // --- 3-pass prefix scan on prefix_buf ---------------------------
   uint32_t scan_wg = 256;
   uint32_t scan_groups = (prefix_count + scan_wg - 1) / scan_wg;
 
@@ -678,8 +847,12 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
   scan_pc.blockCount = scan_groups;
 
   disp.dispatch_prefix_scan_local(scan_pc, scan_groups);
+  disp.batch_barrier();
   disp.dispatch_prefix_scan_global(scan_pc);
+  disp.batch_barrier();
   disp.dispatch_prefix_scan_add(scan_pc, scan_groups);
+
+  disp.end_batch();
 
   // --- Step 3: Read total count via copy_to_host --------------------------
   uint32_t output_count = 0;
@@ -701,8 +874,12 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     return result;
   }
 
-  // --- Step 4: Scatter each column using prefix sums ----------------------
+  // --- Step 4: Scatter each column using prefix sums (batched) -------------
   uint32_t scatter_groups = (n + 255) / 256;
+
+  // --- Batch 2: scatter all columns in one command buffer -----------------
+  disp.begin_batch();
+
   for (size_t c = 0; c < input.num_columns(); c++) {
     auto& in_col = input.col(c);
     result->columns[c] = allocate_column(_ctx, in_col.type,
@@ -719,6 +896,8 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
       disp.dispatch_scatter_if(spc, scatter_groups);
     }
   }
+
+  disp.end_batch();
 
   result->set_num_rows(static_cast<rasterdf::size_type>(output_count));
   RASTERDB_LOG_DEBUG("Filter result: {} rows x {} cols", result->num_rows(), result->num_columns());
@@ -1379,6 +1558,19 @@ void gpu_executor::execute_grouped_aggregate(
 
   RASTERDB_LOG_DEBUG("GROUP BY {} cols, {} rows", num_group_cols, input.num_rows());
 
+  const bool diag = groupby_diag_enabled();
+  if (diag) {
+    fprintf(stderr, "[RDB_DIAG] grouped_aggregate: input_rows=%d group_cols=%zu agg_cols=%zu\n",
+            static_cast<int>(input.num_rows()), num_group_cols, static_cast<size_t>(aggregates.size()));
+    for (size_t g = 0; g < num_group_cols; g++) {
+      auto gi = group_col_indices[g];
+      fprintf(stderr, "[RDB_DIAG] group_col[%zu]=input.col(%zu) type_id=%d rows=%d\n",
+              g, static_cast<size_t>(gi), static_cast<int>(input.col(gi).type.id),
+              static_cast<int>(input.col(gi).num_rows));
+      diag_int32_column_stats(_ctx, input.col(gi), "group_input");
+    }
+  }
+
   // Build the effective group key column (single or composite)
   auto n_rows = input.num_rows();
   gpu_column composite_key_storage;   // owns memory for multi-col case
@@ -1421,6 +1613,9 @@ void gpu_executor::execute_grouped_aggregate(
       decompose_base1 = GROUPBY_COMPOSITE_M_I32;
       decompose_base2 = GROUPBY_COMPOSITE_M_I32;
 
+      // Batch the binary_op dispatches for composite key building
+      disp.begin_batch();
+
       // Step 1: temp = col0 * M  (COL_SCALAR multiply)
       auto temp = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
       {
@@ -1436,6 +1631,7 @@ void gpu_executor::execute_grouped_aggregate(
         pc.debug_mode = 0;
         disp.dispatch_binary_op(pc);
       }
+      disp.batch_barrier();
 
       // Step 2: composite = temp + col1  (COL_COL add)
       composite_key_storage = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
@@ -1453,6 +1649,7 @@ void gpu_executor::execute_grouped_aggregate(
       }
 
       if (num_group_cols == 3) {
+        disp.batch_barrier();
         // Step 3: temp2 = composite * M
         auto temp2 = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
         {
@@ -1468,6 +1665,7 @@ void gpu_executor::execute_grouped_aggregate(
           pc.debug_mode = 0;
           disp.dispatch_binary_op(pc);
         }
+        disp.batch_barrier();
         // Step 4: composite = temp2 + col2
         {
           binary_op_push_constants pc{};
@@ -1482,6 +1680,8 @@ void gpu_executor::execute_grouped_aggregate(
           disp.dispatch_binary_op(pc);
         }
       }
+
+      disp.end_batch();
       key_col_ptr = &composite_key_storage;
     } else {
       // ---- INT64 CPU path (safe for large keys) ----
@@ -1499,9 +1699,12 @@ void gpu_executor::execute_grouped_aggregate(
       std::vector<std::vector<int32_t>> h_group_cols(num_group_cols);
       for (size_t g = 0; g < num_group_cols; g++) {
         h_group_cols[g].resize(n_rows);
-        const_cast<rasterdf::device_buffer&>(input.col(group_col_indices[g]).data).copy_to_host(
-            h_group_cols[g].data(), n_rows * sizeof(int32_t),
-            _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        // Use download_column: handles both device_buffer-owned and
+        // cached (reBAR/gpuCache) columns.  Raw .data.copy_to_host would
+        // read from an empty buffer for zero-copy scan columns.
+        download_column(_ctx, input.col(group_col_indices[g]),
+                        h_group_cols[g].data(),
+                        static_cast<size_t>(n_rows) * sizeof(int32_t));
       }
 
       std::vector<int64_t> h_composite(n_rows);
@@ -1557,6 +1760,9 @@ void gpu_executor::execute_grouped_aggregate(
 
   // Build table_view for the effective group key
   auto group_key_view = key_col_ptr->view();
+  if (diag) {
+    diag_int32_column_stats(_ctx, *key_col_ptr, "group_effective_key");
+  }
   std::vector<rasterdf::column_view> key_views = {group_key_view};
   rasterdf::table_view keys_tv(key_views);
 
@@ -1627,6 +1833,10 @@ void gpu_executor::execute_grouped_aggregate(
         fname.c_str());
     }
     auto ng = this_key_cols[0]->size();
+    if (diag) {
+      fprintf(stderr, "[RDB_DIAG] agg[%zu]=%s produced groups=%d\n",
+              static_cast<size_t>(i), fname.c_str(), static_cast<int>(ng));
+    }
 
     // Download keys to CPU for sorting (INT32 or INT64 depending on key type)
     auto& key_col_rdf = *this_key_cols[0];
@@ -1658,6 +1868,22 @@ void gpu_executor::execute_grouped_aggregate(
     val_col_rdf.device_data().copy_to_host(
         h_vals.data(), ng * val_elem_size, 0,
         _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+    if (diag && ng > 0) {
+      if (val_col_rdf.type().id == rasterdf::type_id::INT64) {
+        auto* vp = reinterpret_cast<const int64_t*>(h_vals.data());
+        long double sum = 0.0;
+        for (rasterdf::size_type j = 0; j < ng; j++) sum += static_cast<long double>(vp[j]);
+        fprintf(stderr, "[RDB_DIAG] agg[%zu] val_type=INT64 sum_of_groups=%0.0Lf first=%lld\n",
+                static_cast<size_t>(i), sum, static_cast<long long>(vp[0]));
+      } else if (val_col_rdf.type().id == rasterdf::type_id::FLOAT64) {
+        auto* vp = reinterpret_cast<const double*>(h_vals.data());
+        long double sum = 0.0;
+        for (rasterdf::size_type j = 0; j < ng; j++) sum += static_cast<long double>(vp[j]);
+        fprintf(stderr, "[RDB_DIAG] agg[%zu] val_type=FLOAT64 sum_of_groups=%0.3Lf first=%0.6f\n",
+                static_cast<size_t>(i), sum, vp[0]);
+      }
+    }
 
     // Apply permutation to keys and values
     std::vector<uint8_t> sorted_keys_raw(ng * key_elem_size);

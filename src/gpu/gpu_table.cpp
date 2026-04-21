@@ -43,7 +43,17 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
   if (bytes == 0) return 0;
 
   if (col.cached_address != 0) {
-    // Column is backed by GPUBufferManager cache — use staging copy
+    auto& bufMgr = GPUBufferManager::GetInstance();
+
+    // Fast path: zero-copy reBAR staging is already host-mapped — just memcpy.
+    if (col.cached_buffer == bufMgr.cpuStagingBuffer()) {
+      size_t staging_off = static_cast<size_t>(
+          col.cached_address - bufMgr.cpuStagingAddress());
+      std::memcpy(dst, bufMgr.cpuProcessing + staging_off, bytes);
+      return bytes;
+    }
+
+    // Column is backed by GPUBufferManager gpuCache — use staging copy
     // Allocate a temporary staging buffer for download
     auto* mr = ctx.host_resource();
     auto staging = mr->allocate(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -69,7 +79,6 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
     vkBeginCommandBuffer(cmdBuf, &beginInfo);
 
     // Compute offset within the cache buffer
-    auto& bufMgr = GPUBufferManager::GetInstance();
     VkDeviceSize srcOffset = col.cached_address - bufMgr.gpuCacheAddress();
 
     VkBufferCopy region{};
@@ -339,7 +348,24 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
                            info.c, column_names[info.c], info.staging_off, info.col_bytes);
       }
     } else {
-      // Multi-threaded path: parallelize across columns to flatten
+      // Multi-threaded path: parallelize across columns to flatten.
+      //
+      // IMPORTANT: duckdb::DataChunk::Flatten() mutates the chunk (it may
+      // convert dictionary/constant vectors into owned flat vectors).
+      // Calling Flatten() on the same chunk from multiple threads concurrently
+      // (which happens when threads iterate different columns of the SAME
+      // shared `chunks` vector) is a data race and corrupts reads.  At SF1
+      // with a handful of chunks the race rarely manifests; at SF10+ with
+      // tens of thousands of chunks it produces garbage data (e.g. columns
+      // appear shifted, GROUP BY sees bogus keys).
+      //
+      // Fix: flatten every chunk exactly once, single-threaded, BEFORE
+      // spawning the worker threads.  The parallel workers then only do a
+      // thread-safe memcpy from already-flat vectors.
+      for (auto& chunk : chunks) {
+        chunk->Flatten();
+      }
+
       std::vector<std::thread> threads;
       threads.reserve(num_threads);
 
@@ -348,7 +374,6 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
           auto& info = upload_cols[i];
           size_t write_pos = 0;
           for (auto& chunk : chunks) {
-            chunk->Flatten();
             write_pos += flatten_vector_raw(chunk->data[info.c],
                            static_cast<rasterdf::size_type>(chunk->size()),
                            rdf_types[info.c], info.staging_dst + write_pos);

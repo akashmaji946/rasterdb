@@ -10,6 +10,7 @@
 
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/connection.hpp>
+#include <duckdb/common/vector_operations/vector_operations.hpp>
 #include <cstring>
 
 namespace rasterdb::gpu {
@@ -56,13 +57,29 @@ std::unique_ptr<gpu_table> gpu_scan_executor::execute_scan(
       duckdb::TableFunctionInput tf_input(bind_data, nullptr, global_state.get());
 
       while (true) {
-        auto chunk = duckdb::make_uniq<duckdb::DataChunk>();
-        chunk->Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
-        function.function(client_ctx, tf_input, *chunk);
-        if (chunk->size() == 0) break;
-        chunk->Flatten();
-        total_rows += static_cast<rasterdf::size_type>(chunk->size());
-        all_chunks.push_back(std::move(chunk));
+        duckdb::DataChunk scan_chunk;
+        scan_chunk.Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
+        function.function(client_ctx, tf_input, scan_chunk);
+        if (scan_chunk.size() == 0) break;
+        scan_chunk.Flatten();
+
+        // DuckDB seq_scan returns FLAT vectors whose storage points into the
+        // table's buffer-managed pages.  Those pages may be evicted / reused
+        // as subsequent chunks are fetched, silently invalidating earlier
+        // chunks (manifests at scale: e.g. SF10 lineitem → wrong GROUP BY
+        // keys).  Force a deep copy into a freshly-owned DataChunk so the
+        // captured data survives until we upload it to the GPU staging
+        // buffer.
+        auto owned = duckdb::make_uniq<duckdb::DataChunk>();
+        owned->Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
+        owned->SetCardinality(scan_chunk.size());
+        for (duckdb::idx_t c = 0; c < scan_types.size(); c++) {
+          duckdb::VectorOperations::Copy(scan_chunk.data[c], owned->data[c],
+                                         scan_chunk.size(), 0, 0);
+        }
+
+        total_rows += static_cast<rasterdf::size_type>(owned->size());
+        all_chunks.push_back(std::move(owned));
       }
     }
 

@@ -417,9 +417,11 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
-    // Auto-initialize BufferManager with 2GB defaults
+    auto BUFFER_SIZE_RDB = 1024ULL * 1024 * 1024 * 2;
+
+    // Auto-initialize BufferManager with 8GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024);
+        BUFFER_SIZE_RDB, BUFFER_SIZE_RDB, BUFFER_SIZE_RDB);
     (void)bufMgr;
 
     RasterdbExtension::buffer_is_initialized = true;
