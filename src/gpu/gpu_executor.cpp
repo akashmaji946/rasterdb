@@ -1209,10 +1209,11 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
 
 std::unique_ptr<gpu_table> gpu_executor::execute_aggregate(duckdb::LogicalAggregate& op)
 {
-  stage_timer t("  aggregate");
   RASTERDB_LOG_DEBUG("GPU execute_aggregate");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  aggregate");  // Timer starts AFTER child execution
 
   if (!op.groups.empty()) {
     auto result = std::make_unique<gpu_table>();
@@ -1756,10 +1757,11 @@ void gpu_executor::execute_grouped_aggregate(
 
 std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 {
-  stage_timer t("  order_by");
   RASTERDB_LOG_DEBUG("GPU execute_order");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  order_by");  // Timer starts AFTER child execution
 
   if (input->num_rows() <= 1) return input;
 
@@ -1803,10 +1805,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 
 std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
 {
-  stage_timer t("  limit");
   RASTERDB_LOG_DEBUG("GPU execute_limit");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  limit");  // Timer starts AFTER child execution
 
   int64_t limit_val = 0;
   int64_t offset_val = 0;
@@ -1884,7 +1887,6 @@ static constexpr bool USE_SIMPLE_GARUDA_JOIN = false;
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
-  stage_timer t("  join");
   RASTERDB_LOG_DEBUG("GPU execute_join (simple_garuda=%s)", USE_SIMPLE_GARUDA_JOIN ? "true" : "false");
   D_ASSERT(op.children.size() == 2);
 
@@ -1919,6 +1921,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   // Execute both children
   auto left_table = execute_operator(*op.children[0]);
   auto right_table = execute_operator(*op.children[1]);
+
+  stage_timer t("  join");  // Timer starts AFTER child execution
 
   RASTERDB_LOG_DEBUG("JOIN: left {} rows x {} cols, right {} rows x {} cols",
                      left_table->num_rows(), left_table->num_columns(),

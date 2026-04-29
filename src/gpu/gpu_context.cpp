@@ -35,6 +35,11 @@ gpu_context::gpu_context(size_t memory_limit)
   _dispatcher = std::make_unique<rasterdf::execution::dispatcher>(*_ctx);
   RASTERDB_LOG_INFO("Vulkan compute pipelines loaded");
 
+  // Eagerly create simple_garuda_engine (graphics pipelines, render pass, etc.)
+  // so the first join call doesn't pay the ~15ms init cost.
+  rasterdf::simple_garuda_engine_init(*_ctx);
+  RASTERDB_LOG_INFO("Simple Garuda join pipelines loaded");
+
   // Create memory manager
   if (memory_limit == 0) {
     memory_limit = static_cast<size_t>(_ctx->device_memory_bytes() * 0.8);
