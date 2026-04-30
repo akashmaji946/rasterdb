@@ -34,7 +34,7 @@ set(RASTERDF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../rasterdf")
 # Look for pre-built librasterdf.so
 find_library(RASTERDF_LIBRARY
   NAMES rasterdf
-  PATHS "${RASTERDF_ROOT}/build_release" "${RASTERDF_ROOT}/build"
+  PATHS "${RASTERDF_ROOT}/build" "${RASTERDF_ROOT}/build_release"
   NO_DEFAULT_PATH)
 
 if(RASTERDF_LIBRARY)

@@ -39,7 +39,7 @@ echo ""
 echo "[1/4] Checking rasterdf library..."
 RASTERDF_ROOT="${PROJECT_DIR}/../rasterdf"
 SO_FILE=""
-for candidate in "${RASTERDF_ROOT}/build_release/librasterdf.so" \
+for candidate in "${RASTERDF_ROOT}/build/librasterdf.so" \
                  "${RASTERDF_ROOT}/build/librasterdf.so" \
                  "/usr/local/lib/librasterdf.so"; do
     if [ -f "$candidate" ]; then

@@ -7,6 +7,7 @@
 #include "log/logging.hpp"
 
 #include <rasterdf/simple_garuda_join.hpp>
+#include <rasterdf/gfx_groupby_engine.hpp>
 #include <cstdlib>
 
 namespace rasterdb {
@@ -53,6 +54,7 @@ gpu_context::~gpu_context()
 {
   // Destroy in reverse order. Do NOT log here — the static singleton
   // may be destroyed after spdlog's global registry is torn down.
+  rasterdf::gfx_groupby_engine_reset();
   rasterdf::simple_garuda_engine_reset();
   _mem_mgr.reset();
   _dispatcher.reset();
@@ -81,6 +83,7 @@ void gpu_context::initialize(size_t memory_limit)
 
 void gpu_context::shutdown()
 {
+  rasterdf::gfx_groupby_engine_reset();
   rasterdf::simple_garuda_engine_reset();
   _instance.reset();
 }
