@@ -131,3 +131,7 @@ echo "    export RASTERDF_SHADER_DIR=/usr/local/share/rasterdf/shaders"
 echo "    duckdb -unsigned"
 echo "    LOAD '${EXT_FILE:-build/${BUILD_PRESET}/.../rasterdb.duckdb_extension}';"
 echo "    SELECT * FROM gpu_execution('SELECT sum(a) FROM t');"
+
+echo "============================================"
+echo "BUILD SUCCESS"
+echo "============================================"

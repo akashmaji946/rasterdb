@@ -771,6 +771,36 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       auto& col_ref = left.Cast<duckdb::BoundReferenceExpression>();
       auto& constant = right.Cast<duckdb::BoundConstantExpression>();
       auto& col = input.col(col_ref.index);
+
+      // ── INT64 / FLOAT64 GPU comparison (for HAVING and wide types) ──
+      // Uses the compare_int64 compute shader which handles both INT64 and FLOAT64.
+      if (col.type.id == rasterdf::type_id::INT64 ||
+          col.type.id == rasterdf::type_id::FLOAT64) {
+        auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, n);
+
+        compare_int64_push_constants pc{};
+        pc.input_addr = col.address();
+        pc.output_addr = result.address();
+        pc.size = n;
+        pc._pad = 0;
+        if (col.type.id == rasterdf::type_id::INT64) {
+          pc.threshold = constant.value.DefaultCastAs(duckdb::LogicalType::BIGINT).GetValue<int64_t>();
+          pc.type_id = 0; // int64
+        } else {
+          double dval = constant.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
+          int64_t bits;
+          std::memcpy(&bits, &dval, sizeof(double));
+          pc.threshold = bits;
+          pc.type_id = 1; // float64
+        }
+        pc.op = cmp_op;
+
+        disp.dispatch_compare_int64(pc);
+        fprintf(stderr, "[RDB_DEBUG] HAVING: GPU %s compare on %u rows\n",
+                col.type.id == rasterdf::type_id::INT64 ? "INT64" : "FLOAT64", n);
+        return result;
+      }
+
       int32_t type_id = rdf_shader_type_id(col.type.id);
 
       auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, input.num_rows());
