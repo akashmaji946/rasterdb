@@ -1353,7 +1353,7 @@ static constexpr int32_t GROUPBY_COMPOSITE_M_I32 = 10007;
 static constexpr int64_t GROUPBY_COMPOSITE_M_I64 = 100000007LL;
 
 // Toggle between compute-shader groupby and mesh-shader gfxm groupby
-static constexpr bool USE_SIMPLE_GFX_AGGR = true;
+static constexpr bool USE_SIMPLE_GFX_AGGR = false;
 
 void gpu_executor::execute_grouped_aggregate(
   const gpu_table& input,
@@ -1401,17 +1401,33 @@ void gpu_executor::execute_grouped_aggregate(
     auto& disp = _ctx.dispatcher();
     uint32_t sz = static_cast<uint32_t>(n_rows);
 
-    // Quick max-reduction on each group column to decide INT32 vs INT64
+    // Quick max-reduction on each group column to decide INT32 vs INT64.
+    // FLOAT32 group columns force the INT64/surrogate path because they
+    // can't participate in integer composite key arithmetic.
+    bool has_float_group_col = false;
     int64_t max_composite_estimate = 1;
     std::vector<int64_t> max_vals(num_group_cols, 0);
     {
       for (size_t g = 0; g < num_group_cols; g++) {
-        auto col_view = input.col(group_col_indices[g]).view();
+        auto& gcol = input.col(group_col_indices[g]);
+        auto col_view = gcol.view();
         rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
-        auto max_s = rasterdf::reduce(col_view, max_agg,
-            rasterdf::data_type{rasterdf::type_id::INT32},
-            _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-        int64_t mv = static_cast<int64_t>(max_s->as<int32_t>());
+        int64_t mv = 0;
+        if (gcol.type.id == rasterdf::type_id::FLOAT32) {
+          has_float_group_col = true;
+          auto max_s = rasterdf::reduce(col_view, max_agg,
+              rasterdf::data_type{rasterdf::type_id::FLOAT32},
+              _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+          // Bit-cast float max to int32 for range estimation
+          float fv = max_s->as<float>();
+          int32_t iv; std::memcpy(&iv, &fv, sizeof(int32_t));
+          mv = static_cast<int64_t>(iv < 0 ? -iv : iv);
+        } else {
+          auto max_s = rasterdf::reduce(col_view, max_agg,
+              rasterdf::data_type{rasterdf::type_id::INT32},
+              _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+          mv = static_cast<int64_t>(max_s->as<int32_t>());
+        }
         max_vals[g] = mv;
         if (g == 0) {
           max_composite_estimate = mv;
@@ -1420,7 +1436,8 @@ void gpu_executor::execute_grouped_aggregate(
         }
       }
     }
-    composite_is_int64 = (max_composite_estimate > INT32_MAX / 2);
+    // Force INT64/surrogate path when FLOAT columns are in GROUP BY
+    composite_is_int64 = has_float_group_col || (max_composite_estimate > INT32_MAX / 2);
 
     if (!composite_is_int64) {
       // ---- INT32 GPU path (fast) ----
@@ -1512,6 +1529,7 @@ void gpu_executor::execute_grouped_aggregate(
           "RasterDB GPU: non-positive GROUP BY base in INT64 composite path");
       }
 
+      // Download all group columns to host (4 bytes each — works for both INT32 and FLOAT32)
       std::vector<std::vector<int32_t>> h_group_cols(num_group_cols);
       for (size_t g = 0; g < num_group_cols; g++) {
         h_group_cols[g].resize(n_rows);
@@ -1520,47 +1538,63 @@ void gpu_executor::execute_grouped_aggregate(
             _ctx.device(), _ctx.queue(), _ctx.command_pool());
       }
 
-      std::vector<int64_t> h_composite(n_rows);
-      for (rasterdf::size_type r = 0; r < n_rows; r++) {
-        __int128 key = static_cast<int64_t>(h_group_cols[0][r]);
-        if (num_group_cols == 2) {
-          key = key * static_cast<__int128>(decompose_base1) +
-                static_cast<int64_t>(h_group_cols[1][r]);
-        } else {
-          key = (key * static_cast<__int128>(decompose_base1) +
-                 static_cast<int64_t>(h_group_cols[1][r])) *
-                    static_cast<__int128>(decompose_base2) +
-                static_cast<int64_t>(h_group_cols[2][r]);
-        }
-        if (key > static_cast<__int128>(std::numeric_limits<int64_t>::max()) ||
-            key < static_cast<__int128>(std::numeric_limits<int64_t>::min())) {
-          throw duckdb::NotImplementedException(
-            "RasterDB GPU: INT64 composite key overflow in GROUP BY");
-        }
-        h_composite[r] = static_cast<int64_t>(key);
-      }
+      // Build surrogate INT32 keys from raw column tuples.
+      // When FLOAT columns are present, mixed-radix composites can't guarantee
+      // injectivity (float bit patterns span full int32 range), so we always
+      // go directly to surrogate mapping via a hash-map on the column tuple.
 
-      // INT64-key atomics are broken on this driver; remap to dense INT32 surrogates
-      surrogate_id_to_composite.reserve(n_rows);
-      std::unordered_map<int64_t, int32_t> composite_to_id;
-      composite_to_id.reserve(static_cast<size_t>(n_rows) * 2);
+      // Build (col0, col1[, col2]) → surrogate_id mapping
+      // Store per-group raw column values for decomposition
+      std::vector<std::vector<int32_t>> group_raw_vals; // [group_id][col_idx]
+      group_raw_vals.reserve(n_rows / 4); // estimate
+      surrogate_id_to_composite.clear(); // not used in tuple path
+
+      // Use a map from tuple to ID
+      struct TupleKey {
+        int32_t v0, v1, v2;
+        bool operator==(const TupleKey& o) const {
+          return v0 == o.v0 && v1 == o.v1 && v2 == o.v2;
+        }
+      };
+      struct TupleKeyHash {
+        size_t operator()(const TupleKey& k) const {
+          size_t h = std::hash<int32_t>{}(k.v0);
+          h ^= std::hash<int32_t>{}(k.v1) + 0x9e3779b9 + (h << 6) + (h >> 2);
+          h ^= std::hash<int32_t>{}(k.v2) + 0x9e3779b9 + (h << 6) + (h >> 2);
+          return h;
+        }
+      };
+      std::unordered_map<TupleKey, int32_t, TupleKeyHash> tuple_to_id;
+      tuple_to_id.reserve(static_cast<size_t>(n_rows) * 2);
 
       std::vector<int32_t> h_key_ids(n_rows);
       for (rasterdf::size_type r = 0; r < n_rows; r++) {
-        int64_t key = h_composite[r];
-        auto it = composite_to_id.find(key);
-        if (it == composite_to_id.end()) {
-          int32_t id = static_cast<int32_t>(surrogate_id_to_composite.size());
-          composite_to_id.emplace(key, id);
-          surrogate_id_to_composite.push_back(key);
+        TupleKey tk;
+        tk.v0 = h_group_cols[0][r];
+        tk.v1 = h_group_cols[1][r];
+        tk.v2 = (num_group_cols >= 3) ? h_group_cols[2][r] : 0;
+        auto it = tuple_to_id.find(tk);
+        if (it == tuple_to_id.end()) {
+          int32_t id = static_cast<int32_t>(group_raw_vals.size());
+          tuple_to_id.emplace(tk, id);
+          group_raw_vals.push_back({tk.v0, tk.v1, tk.v2});
           h_key_ids[r] = id;
         } else {
           h_key_ids[r] = it->second;
         }
       }
 
-      fprintf(stderr, "[RDB_DEBUG] surrogate: %zu unique composite keys from %d rows\n",
-              surrogate_id_to_composite.size(), (int)n_rows);
+      // Store group_raw_vals for decomposition after groupby
+      // Repurpose decompose_base1 as a sentinel to signal tuple-based decomposition
+      decompose_base1 = -1; // sentinel: use _group_raw_vals
+      _group_raw_vals = std::move(group_raw_vals);
+      _group_col_types.resize(num_group_cols);
+      for (size_t g = 0; g < num_group_cols; g++) {
+        _group_col_types[g] = input.col(group_col_indices[g]).type.id;
+      }
+
+      fprintf(stderr, "[RDB_DEBUG] surrogate (tuple): %zu unique groups from %d rows\n",
+              _group_raw_vals.size(), (int)n_rows);
       fflush(stderr);
 
       composite_key_storage = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
@@ -1791,15 +1825,35 @@ void gpu_executor::execute_grouped_aggregate(
           RASTERDB_LOG_DEBUG("     [GFXM] Upload sorted keys time: %.2f ms",
                              std::chrono::duration<double, std::milli>(t_upload_keys_end - t_upload_keys_start).count());
           output.columns[0] = std::move(sorted_key_col);
+        } else if (decompose_base1 == -1 && !_group_raw_vals.empty()) {
+          // Tuple-based surrogate decomposition (FLOAT group cols or large-range INT cols)
+          RASTERDB_LOG_DEBUG("     [GFXM] Tuple-based surrogate decomposition");
+          auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
+          for (size_t g = 0; g < num_group_cols; g++) {
+            rasterdf::type_id tid = (g < _group_col_types.size())
+                ? _group_col_types[g] : rasterdf::type_id::INT32;
+            std::vector<int32_t> col_data(out_num_groups);
+            for (uint32_t j = 0; j < out_num_groups; j++) {
+              int32_t id = p[j];
+              if (id < 0 || static_cast<size_t>(id) >= _group_raw_vals.size()) {
+                throw duckdb::NotImplementedException(
+                  "RasterDB GPU: invalid tuple surrogate key id %d (max %zu)",
+                  id, _group_raw_vals.size());
+              }
+              col_data[j] = _group_raw_vals[static_cast<size_t>(id)][g];
+            }
+            output.columns[g] = allocate_column(_ctx, {tid}, out_num_groups);
+            output.columns[g].data.copy_from_host(col_data.data(), out_num_groups * sizeof(int32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          }
         } else {
-          // For multi-col: decompose composite keys to individual INT32 cols on CPU
-          RASTERDB_LOG_DEBUG("     [GFXM] Multi-column GROUP BY, decomposing composite keys");
+          // Mixed-radix decomposition (INT32/INT64 composite keys, no FLOAT cols)
+          RASTERDB_LOG_DEBUG("     [GFXM] Mixed-radix decomposition");
           std::vector<int64_t> sorted_composite_i64(out_num_groups);
           if (keys_are_int64) {
             auto* p = reinterpret_cast<const int64_t*>(sorted_keys_raw.data());
             for (uint32_t j = 0; j < out_num_groups; j++) sorted_composite_i64[j] = p[j];
           } else if (!surrogate_id_to_composite.empty()) {
-            // Surrogate INT32 keys → map back to INT64 composite
             auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
             for (uint32_t j = 0; j < out_num_groups; j++) {
               int32_t id = p[j];
@@ -1817,9 +1871,6 @@ void gpu_executor::execute_grouped_aggregate(
           fprintf(stderr, "[GFXM_DBG] decompose: num_group_cols=%zu base1=%ld base2=%ld surr_empty=%d keys_i64=%d\n",
                   num_group_cols, decompose_base1, decompose_base2,
                   (int)surrogate_id_to_composite.empty(), (int)keys_are_int64);
-          fprintf(stderr, "[GFXM_DBG] sorted_composite_i64: ");
-          for (uint32_t j = 0; j < out_num_groups && j < 10; j++) fprintf(stderr, "%ld ", sorted_composite_i64[j]);
-          fprintf(stderr, "\n");
           fflush(stderr);
 
           if (num_group_cols == 2) {
@@ -1828,25 +1879,13 @@ void gpu_executor::execute_grouped_aggregate(
               col1[j] = static_cast<int32_t>(sorted_composite_i64[j] % decompose_base1);
               col0[j] = static_cast<int32_t>(sorted_composite_i64[j] / decompose_base1);
             }
-            fprintf(stderr, "[GFXM_DBG] decomposed col0: ");
-            for (uint32_t j = 0; j < out_num_groups && j < 10; j++) fprintf(stderr, "%d ", col0[j]);
-            fprintf(stderr, "\n");
-            fprintf(stderr, "[GFXM_DBG] decomposed col1: ");
-            for (uint32_t j = 0; j < out_num_groups && j < 10; j++) fprintf(stderr, "%d ", col1[j]);
-            fprintf(stderr, "\n");
-            fflush(stderr);
-            auto t_upload_keys_start = std::chrono::high_resolution_clock::now();
             output.columns[0] = allocate_column(_ctx, {rasterdf::type_id::INT32}, out_num_groups);
             output.columns[0].data.copy_from_host(col0.data(), out_num_groups * sizeof(int32_t),
                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
             output.columns[1] = allocate_column(_ctx, {rasterdf::type_id::INT32}, out_num_groups);
             output.columns[1].data.copy_from_host(col1.data(), out_num_groups * sizeof(int32_t),
                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            auto t_upload_keys_end = std::chrono::high_resolution_clock::now();
-            RASTERDB_LOG_DEBUG("     [GFXM] Upload decomposed keys time: %.2f ms",
-                               std::chrono::duration<double, std::milli>(t_upload_keys_end - t_upload_keys_start).count());
           } else {
-            // 3-col: composite = (col0 * M + col1) * M + col2
             std::vector<int32_t> col0(out_num_groups), col1(out_num_groups), col2(out_num_groups);
             for (uint32_t j = 0; j < out_num_groups; j++) {
               int64_t c = sorted_composite_i64[j];
@@ -1855,7 +1894,6 @@ void gpu_executor::execute_grouped_aggregate(
               col1[j] = static_cast<int32_t>(c % decompose_base1);
               col0[j] = static_cast<int32_t>(c / decompose_base1);
             }
-            auto t_upload_keys_start = std::chrono::high_resolution_clock::now();
             output.columns[0] = allocate_column(_ctx, {rasterdf::type_id::INT32}, out_num_groups);
             output.columns[0].data.copy_from_host(col0.data(), out_num_groups * sizeof(int32_t),
                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
@@ -1865,9 +1903,6 @@ void gpu_executor::execute_grouped_aggregate(
             output.columns[2] = allocate_column(_ctx, {rasterdf::type_id::INT32}, out_num_groups);
             output.columns[2].data.copy_from_host(col2.data(), out_num_groups * sizeof(int32_t),
                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            auto t_upload_keys_end = std::chrono::high_resolution_clock::now();
-            RASTERDB_LOG_DEBUG("     [GFXM] Upload decomposed keys time: %.2f ms",
-                               std::chrono::duration<double, std::milli>(t_upload_keys_end - t_upload_keys_start).count());
           }
         }
         keys_set = true;
@@ -2000,15 +2035,33 @@ void gpu_executor::execute_grouped_aggregate(
               sorted_keys_raw.data(), ng * key_elem_size,
               _ctx.device(), _ctx.queue(), _ctx.command_pool());
           output.columns[0] = std::move(sorted_key_col);
+        } else if (decompose_base1 == -1 && !_group_raw_vals.empty()) {
+          // Tuple-based surrogate decomposition (used when FLOAT group cols present)
+          auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
+          for (size_t g = 0; g < num_group_cols; g++) {
+            rasterdf::type_id tid = (g < _group_col_types.size())
+                ? _group_col_types[g] : rasterdf::type_id::INT32;
+            std::vector<int32_t> col_data(ng);
+            for (rasterdf::size_type j = 0; j < ng; j++) {
+              int32_t id = p[j];
+              if (id < 0 || static_cast<size_t>(id) >= _group_raw_vals.size()) {
+                throw duckdb::NotImplementedException(
+                  "RasterDB GPU: invalid tuple surrogate key id %d (max %zu)",
+                  id, _group_raw_vals.size());
+              }
+              col_data[j] = _group_raw_vals[static_cast<size_t>(id)][g];
+            }
+            output.columns[g] = allocate_column(_ctx, {tid}, ng);
+            output.columns[g].data.copy_from_host(col_data.data(), ng * sizeof(int32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          }
         } else {
-          // For multi-col: decompose composite keys to individual INT32 cols on CPU
-          // Works for both INT32 and INT64 composite keys via int64_t arithmetic
+          // Mixed-radix decomposition (INT32/INT64 composite keys, no FLOAT cols)
           std::vector<int64_t> sorted_composite_i64(ng);
           if (keys_are_int64) {
             auto* p = reinterpret_cast<const int64_t*>(sorted_keys_raw.data());
             for (rasterdf::size_type j = 0; j < ng; j++) sorted_composite_i64[j] = p[j];
           } else if (!surrogate_id_to_composite.empty()) {
-            // Surrogate INT32 keys → map back to INT64 composite
             auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
             for (rasterdf::size_type j = 0; j < ng; j++) {
               int32_t id = p[j];
@@ -2036,7 +2089,6 @@ void gpu_executor::execute_grouped_aggregate(
             output.columns[1].data.copy_from_host(col1.data(), ng * sizeof(int32_t),
                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
           } else {
-            // 3-col: composite = (col0 * M + col1) * M + col2
             std::vector<int32_t> col0(ng), col1(ng), col2(ng);
             for (rasterdf::size_type j = 0; j < ng; j++) {
               int64_t c = sorted_composite_i64[j];

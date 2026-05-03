@@ -84,6 +84,12 @@ private:
                                   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
                                   const duckdb::vector<duckdb::LogicalType>& result_types,
                                   gpu_table& output);
+
+  // Tuple-based surrogate decomposition data (for FLOAT group columns in multi-col GROUP BY)
+  // _group_raw_vals[surrogate_id] = {col0_bits, col1_bits, col2_bits}
+  std::vector<std::vector<int32_t>> _group_raw_vals;
+  // Per-group-column types for correct output type assignment during decomposition
+  std::vector<rasterdf::type_id> _group_col_types;
 };
 
 } // namespace gpu
