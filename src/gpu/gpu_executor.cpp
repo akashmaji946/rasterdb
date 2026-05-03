@@ -705,20 +705,56 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
 
   // --- Step 4: Scatter each column using prefix sums ----------------------
   uint32_t scatter_groups = (n + 255) / 256;
-  for (size_t c = 0; c < input.num_columns(); c++) {
-    auto& in_col = input.col(c);
-    result->columns[c] = allocate_column(_ctx, in_col.type,
-                                          static_cast<rasterdf::size_type>(output_count));
+  
+  // Skip GPU scatter for very small output tables (driver crash on tiny dispatches)
+  // For tiny outputs, use CPU-based scatter
+  if (output_count < 256) {
+    RASTERDB_LOG_DEBUG("Filter (CPU scatter for tiny output): {} -> {} rows", n, output_count);
+    for (size_t c = 0; c < input.num_columns(); c++) {
+      auto& in_col = input.col(c);
+      result->columns[c] = allocate_column(_ctx, in_col.type,
+                                            static_cast<rasterdf::size_type>(output_count));
+      
+      // Copy prefix to host to find which rows passed
+      std::vector<uint32_t> host_prefix(prefix_count);
+      prefix_buf.copy_to_host(host_prefix.data(), prefix_count * sizeof(uint32_t),
+                             _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      
+      // Copy input column to host (need non-const access)
+      size_t elem_size = rdf_type_size(in_col.type.id);
+      std::vector<uint8_t> host_input(n * elem_size);
+      const_cast<rasterdf::device_buffer&>(in_col.data).copy_to_host(host_input.data(), n * elem_size,
+                               _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      
+      // Scatter on CPU
+      std::vector<uint8_t> host_output(output_count * elem_size);
+      for (uint32_t i = 0; i < n; i++) {
+        if (host_prefix[i + 1] > host_prefix[i]) {
+          uint32_t dst_idx = host_prefix[i];
+          memcpy(&host_output[dst_idx * elem_size], &host_input[i * elem_size], elem_size);
+        }
+      }
+      
+      // Copy output to GPU
+      result->columns[c].data.copy_from_host(host_output.data(), output_count * elem_size,
+                                            _ctx.device(), _ctx.queue(), _ctx.command_pool());
+    }
+  } else {
+    for (size_t c = 0; c < input.num_columns(); c++) {
+      auto& in_col = input.col(c);
+      result->columns[c] = allocate_column(_ctx, in_col.type,
+                                            static_cast<rasterdf::size_type>(output_count));
 
-    scatter_if_pc spc{};
-    spc.input_ptr = in_col.address();
-    spc.prefix_ptr = prefix_buf.data();
-    spc.output_ptr = result->columns[c].address();
-    spc.size = n;
-    if (rdf_type_size(in_col.type.id) == 8) {
-      disp.dispatch_scatter_if_64(spc, scatter_groups);
-    } else {
-      disp.dispatch_scatter_if(spc, scatter_groups);
+      scatter_if_pc spc{};
+      spc.input_ptr = in_col.address();
+      spc.prefix_ptr = prefix_buf.data();
+      spc.output_ptr = result->columns[c].address();
+      spc.size = n;
+      if (rdf_type_size(in_col.type.id) == 8) {
+        disp.dispatch_scatter_if_64(spc, scatter_groups);
+      } else {
+        disp.dispatch_scatter_if(spc, scatter_groups);
+      }
     }
   }
 
