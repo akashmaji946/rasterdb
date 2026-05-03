@@ -18,6 +18,7 @@
 
 #include "duckdb/execution/physical_operator.hpp"
 #include "gpu_physical_operator.hpp"
+#include "log/logging.hpp"
 
 namespace duckdb {
 
@@ -30,7 +31,7 @@ class GPUPhysicalEmptyResult : public GPUPhysicalOperator {
     : GPUPhysicalOperator(
         PhysicalOperatorType::EMPTY_RESULT, std::move(types), estimated_cardinality)
   {
-    printf("GPUPhysicalEmptyResult constructor\n");
+    RASTERDB_LOG_DEBUG("GPUPhysicalEmptyResult constructor");
   }
 
  public:

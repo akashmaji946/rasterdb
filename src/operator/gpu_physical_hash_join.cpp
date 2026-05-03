@@ -509,15 +509,6 @@ SourceResultType GPUPhysicalHashJoin::GetData(GPUIntermediateRelation& output_re
   // 	}
   // }
 
-  // check if all output columns has the same size
-  //  for (idx_t i = 1; i < output_relation.columns.size(); i++) {
-  //  	if (output_relation.columns[i]->column_length != output_relation.columns[0]->column_length)
-  //  { 		printf("Column %d has length %zu, while column 0 has length %zu\n", i,
-  //  output_relation.columns[i]->column_length, output_relation.columns[0]->column_length); throw
-  //  InvalidInputException("Output columns have different sizes");
-  //  	}
-  //  }
-
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
   RASTERDB_LOG_DEBUG("Hash Join GetData time: {:.2f} ms", duration.count() / 1000.0);

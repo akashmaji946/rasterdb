@@ -30,9 +30,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#include <cinttypes>
-#include <cstdio>
-#include <iostream>
+#include <sstream>
 #include <vector>
 
 namespace duckdb {
@@ -119,109 +117,125 @@ namespace {
 constexpr cudf::size_type kDefaultMaxRows = 20;
 
 template <typename T>
-void print_column_values_signed(cudf::column_view const& col, cudf::size_type max_rows)
+std::string format_column_values_signed(cudf::column_view const& col, cudf::size_type max_rows)
 {
   cudf::size_type n = std::min(col.size(), max_rows);
-  if (n <= 0) { return; }
+  if (n <= 0) { return ""; }
   std::vector<T> host(n);
   cudaError_t err = cudaMemcpy(
     host.data(), col.data<T>(), static_cast<size_t>(n) * sizeof(T), cudaMemcpyDeviceToHost);
   if (err != cudaSuccess) {
-    std::printf("(cudaMemcpy failed: %s)", cudaGetErrorString(err));
-    return;
+    std::ostringstream err_line;
+    err_line << "(cudaMemcpy failed: " << cudaGetErrorString(err) << ")";
+    return err_line.str();
   }
+  std::ostringstream line;
   for (cudf::size_type i = 0; i < n; ++i) {
-    std::printf("%s%" PRId64, i ? ", " : "", static_cast<int64_t>(host[i]));
+    if (i) { line << ", "; }
+    line << static_cast<int64_t>(host[i]);
   }
-  if (col.size() > max_rows) { std::printf(", ..."); }
+  if (col.size() > max_rows) { line << ", ..."; }
+  return line.str();
 }
 
 template <typename T>
-void print_column_values_unsigned(cudf::column_view const& col, cudf::size_type max_rows)
+std::string format_column_values_unsigned(cudf::column_view const& col, cudf::size_type max_rows)
 {
   cudf::size_type n = std::min(col.size(), max_rows);
-  if (n <= 0) { return; }
+  if (n <= 0) { return ""; }
   std::vector<T> host(n);
   cudaError_t err = cudaMemcpy(
     host.data(), col.data<T>(), static_cast<size_t>(n) * sizeof(T), cudaMemcpyDeviceToHost);
   if (err != cudaSuccess) {
-    std::printf("(cudaMemcpy failed: %s)", cudaGetErrorString(err));
-    return;
+    std::ostringstream err_line;
+    err_line << "(cudaMemcpy failed: " << cudaGetErrorString(err) << ")";
+    return err_line.str();
   }
+  std::ostringstream line;
   for (cudf::size_type i = 0; i < n; ++i) {
-    std::printf("%s%" PRIu64, i ? ", " : "", static_cast<uint64_t>(host[i]));
+    if (i) { line << ", "; }
+    line << static_cast<uint64_t>(host[i]);
   }
-  if (col.size() > max_rows) { std::printf(", ..."); }
+  if (col.size() > max_rows) { line << ", ..."; }
+  return line.str();
 }
 
-void print_column_values_float(cudf::column_view const& col, cudf::size_type max_rows)
+std::string format_column_values_float(cudf::column_view const& col, cudf::size_type max_rows)
 {
   cudf::size_type n = std::min(col.size(), max_rows);
-  if (n <= 0) { return; }
+  if (n <= 0) { return ""; }
   std::vector<float> host(n);
   cudaError_t err = cudaMemcpy(
     host.data(), col.data<float>(), static_cast<size_t>(n) * sizeof(float), cudaMemcpyDeviceToHost);
   if (err != cudaSuccess) {
-    std::printf("(cudaMemcpy failed: %s)", cudaGetErrorString(err));
-    return;
+    std::ostringstream err_line;
+    err_line << "(cudaMemcpy failed: " << cudaGetErrorString(err) << ")";
+    return err_line.str();
   }
+  std::ostringstream line;
   for (cudf::size_type i = 0; i < n; ++i) {
-    std::printf("%s%.6g", i ? ", " : "", host[i]);
+    if (i) { line << ", "; }
+    line << host[i];
   }
-  if (col.size() > max_rows) { std::printf(", ..."); }
+  if (col.size() > max_rows) { line << ", ..."; }
+  return line.str();
 }
 
-void print_column_values_double(cudf::column_view const& col, cudf::size_type max_rows)
+std::string format_column_values_double(cudf::column_view const& col, cudf::size_type max_rows)
 {
   cudf::size_type n = std::min(col.size(), max_rows);
-  if (n <= 0) { return; }
+  if (n <= 0) { return ""; }
   std::vector<double> host(n);
   cudaError_t err = cudaMemcpy(host.data(),
                                col.data<double>(),
                                static_cast<size_t>(n) * sizeof(double),
                                cudaMemcpyDeviceToHost);
   if (err != cudaSuccess) {
-    std::printf("(cudaMemcpy failed: %s)", cudaGetErrorString(err));
-    return;
+    std::ostringstream err_line;
+    err_line << "(cudaMemcpy failed: " << cudaGetErrorString(err) << ")";
+    return err_line.str();
   }
+  std::ostringstream line;
   for (cudf::size_type i = 0; i < n; ++i) {
-    std::printf("%s%.6g", i ? ", " : "", host[i]);
+    if (i) { line << ", "; }
+    line << host[i];
   }
-  if (col.size() > max_rows) { std::printf(", ..."); }
+  if (col.size() > max_rows) { line << ", ..."; }
+  return line.str();
 }
 
 void print_one_column(cudf::column_view const& col, cudf::size_type max_rows, int col_idx)
 {
-  std::printf("  col[%d] (%s, %zd rows): ",
-              col_idx,
-              cudf::type_to_name(col.type()).c_str(),
-              static_cast<size_t>(col.size()));
+  std::string values;
   switch (col.type().id()) {
-    case cudf::type_id::INT8: print_column_values_signed<int8_t>(col, max_rows); break;
-    case cudf::type_id::INT16: print_column_values_signed<int16_t>(col, max_rows); break;
-    case cudf::type_id::INT32: print_column_values_signed<int32_t>(col, max_rows); break;
-    case cudf::type_id::INT64: print_column_values_signed<int64_t>(col, max_rows); break;
-    case cudf::type_id::UINT8: print_column_values_unsigned<uint8_t>(col, max_rows); break;
-    case cudf::type_id::UINT16: print_column_values_unsigned<uint16_t>(col, max_rows); break;
-    case cudf::type_id::UINT32: print_column_values_unsigned<uint32_t>(col, max_rows); break;
-    case cudf::type_id::UINT64: print_column_values_unsigned<uint64_t>(col, max_rows); break;
-    case cudf::type_id::FLOAT32: print_column_values_float(col, max_rows); break;
-    case cudf::type_id::FLOAT64: print_column_values_double(col, max_rows); break;
-    case cudf::type_id::BOOL8: print_column_values_signed<int8_t>(col, max_rows); break;
-    default: std::printf("(unprinted type %s)", cudf::type_to_name(col.type()).c_str()); break;
+    case cudf::type_id::INT8: values = format_column_values_signed<int8_t>(col, max_rows); break;
+    case cudf::type_id::INT16: values = format_column_values_signed<int16_t>(col, max_rows); break;
+    case cudf::type_id::INT32: values = format_column_values_signed<int32_t>(col, max_rows); break;
+    case cudf::type_id::INT64: values = format_column_values_signed<int64_t>(col, max_rows); break;
+    case cudf::type_id::UINT8: values = format_column_values_unsigned<uint8_t>(col, max_rows); break;
+    case cudf::type_id::UINT16: values = format_column_values_unsigned<uint16_t>(col, max_rows); break;
+    case cudf::type_id::UINT32: values = format_column_values_unsigned<uint32_t>(col, max_rows); break;
+    case cudf::type_id::UINT64: values = format_column_values_unsigned<uint64_t>(col, max_rows); break;
+    case cudf::type_id::FLOAT32: values = format_column_values_float(col, max_rows); break;
+    case cudf::type_id::FLOAT64: values = format_column_values_double(col, max_rows); break;
+    case cudf::type_id::BOOL8: values = format_column_values_signed<int8_t>(col, max_rows); break;
+    default: values = "(unprinted type " + cudf::type_to_name(col.type()) + ")"; break;
   }
-  std::printf("\n");
+  RASTERDB_LOG_DEBUG("  col[{}] ({}, {} rows): {}",
+                     col_idx, cudf::type_to_name(col.type()),
+                     static_cast<size_t>(col.size()), values);
 }
 
 }  // namespace
 
 void print_table_contents(cudf::table_view const& table, cudf::size_type max_rows)
 {
+  if (!duckdb::RasterDBShouldLog(spdlog::level::debug)) { return; }
   if (max_rows <= 0) { max_rows = kDefaultMaxRows; }
   cudaDeviceSynchronize();
-  std::printf("table_view: %zd rows, %d columns\n",
-              static_cast<size_t>(table.num_rows()),
-              static_cast<int>(table.num_columns()));
+  RASTERDB_LOG_DEBUG("table_view: {} rows, {} columns",
+                     static_cast<size_t>(table.num_rows()),
+                     static_cast<int>(table.num_columns()));
   for (cudf::size_type c = 0; c < table.num_columns(); ++c) {
     print_one_column(table.column(c), max_rows, static_cast<int>(c));
   }
@@ -229,8 +243,9 @@ void print_table_contents(cudf::table_view const& table, cudf::size_type max_row
 
 void print_data_batch_contents(cucascade::data_batch const& batch, cudf::size_type max_rows)
 {
+  if (!duckdb::RasterDBShouldLog(spdlog::level::debug)) { return; }
   cudf::table_view tv = get_cudf_table_view(batch);
-  std::printf("data_batch (id=%llu):\n", static_cast<unsigned long long>(batch.get_batch_id()));
+  RASTERDB_LOG_DEBUG("data_batch (id={}):", static_cast<unsigned long long>(batch.get_batch_id()));
   print_table_contents(tv, max_rows);
 }
 

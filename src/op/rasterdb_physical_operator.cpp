@@ -17,6 +17,7 @@
 #include "op/rasterdb_physical_operator.hpp"
 
 #include "gpu_executor.hpp"
+#include "log/logging.hpp"
 #include "pipeline/rasterdb_meta_pipeline.hpp"
 #include "pipeline/rasterdb_pipeline.hpp"
 
@@ -79,7 +80,7 @@ std::string rasterdb_physical_operator::get_name() const
 
 std::string rasterdb_physical_operator::to_string() const { return get_name() + params_to_string(); }
 
-void rasterdb_physical_operator::print() const { std::cout << to_string() << std::endl; }
+void rasterdb_physical_operator::print() const { RASTERDB_LOG_DEBUG("{}", to_string()); }
 
 duckdb::vector<duckdb::const_reference<rasterdb_physical_operator>>
 rasterdb_physical_operator::get_children() const

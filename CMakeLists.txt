@@ -29,6 +29,11 @@ endif()
 find_package(Vulkan REQUIRED)
 find_package(spdlog REQUIRED CONFIG)
 
+set(RASTERDB_LOG_LEVEL
+    "info"
+    CACHE STRING "Default RasterDB log level: trace, debug, info, warn, error, critical, none")
+set_property(CACHE RASTERDB_LOG_LEVEL PROPERTY STRINGS trace debug info warn error critical none)
+
 # rasterdf - Vulkan GPU DataFrame Library (use pre-built shared library)
 set(RASTERDF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../rasterdf")
 # Look for pre-built librasterdf.so
@@ -67,13 +72,29 @@ set(EXTENSION_SOURCES
     # Utilities
     src/util/segfault_backtrace_handler.cpp)
 
+# GPU executor — split by logical operator/responsibility.
+set(GPU_EXECUTOR_SOURCES
+    src/gpu/executor/gpu_executor_core.cpp
+    src/gpu/executor/gpu_executor_plan_hints.cpp
+    src/gpu/executor/gpu_executor_scan.cpp
+    src/gpu/executor/gpu_executor_filter.cpp
+    src/gpu/executor/gpu_executor_projection.cpp
+    src/gpu/executor/gpu_executor_expression.cpp
+    src/gpu/executor/gpu_executor_aggregate.cpp
+    src/gpu/executor/gpu_executor_grouped_aggregate.cpp
+    src/gpu/executor/gpu_executor_order.cpp
+    src/gpu/executor/gpu_executor_limit.cpp
+    src/gpu/executor/gpu_executor_join.cpp
+    src/gpu/executor/gpu_executor_result.cpp
+    src/gpu/executor/gpu_executor_utils.cpp)
+
 # GPU_SOURCES — Vulkan/rasterdf GPU execution layer
 set(GPU_SOURCES
     src/gpu/gpu_context.cpp
     src/gpu/gpu_buffer_manager.cpp
     src/gpu/gpu_table.cpp
-    src/gpu/gpu_executor.cpp
-    src/gpu/gpu_scan_executor.cpp)
+    src/gpu/gpu_scan_executor.cpp
+    ${GPU_EXECUTOR_SOURCES})
 # cmake-format: on
 
 build_static_extension(rasterdb ${EXTENSION_SOURCES} ${GPU_SOURCES})
@@ -96,7 +117,8 @@ foreach(_target rasterdb_extension rasterdb_loadable_extension)
   target_compile_definitions(
     ${_target}
     PRIVATE
-      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">)
+      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">
+      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_LEVEL="${RASTERDB_LOG_LEVEL}">)
 
   if(RASTERDF_LIBRARY)
     target_link_libraries(${_target} rasterdf_imported spdlog::spdlog Vulkan::Vulkan)

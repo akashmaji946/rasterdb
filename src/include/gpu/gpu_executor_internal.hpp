@@ -38,8 +38,17 @@
 #include <duckdb/common/types/hugeint.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
+#include <limits>
+#include <numeric>
+#include <set>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace rasterdb {
@@ -49,8 +58,11 @@ using namespace rasterdf::execution;
 
 static constexpr uint32_t WG_SIZE = 256;
 inline uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+inline bool debug_logging_enabled() { return duckdb::RasterDBShouldLog(spdlog::level::debug); }
 
-// Per-stage timing helper — prints to stderr with [TIMER] prefix
+void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
+
+// Per-stage timing helper — uses RASTERDB_LOG_DEBUG with [TIMER] prefix
 struct stage_timer {
   const char* name;
   std::chrono::high_resolution_clock::time_point t0;
@@ -58,7 +70,7 @@ struct stage_timer {
   ~stage_timer() {
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", name, ms);
+    RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", name, ms);
   }
 };
 

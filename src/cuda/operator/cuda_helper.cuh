@@ -70,7 +70,6 @@
 // FIXME: handle error message from kernel to log file
 #define CHECK_CU_ERROR(err, cufunc) { \
     if (err != CUDA_SUCCESS) { \
-        /* printf ("Error %d for CUDA Driver API function '%s'\n", err, cufunc); */ \
         return -1; \
     } \
 }

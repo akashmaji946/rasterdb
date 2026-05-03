@@ -174,8 +174,8 @@ static void GPUExecutionFunction(ClientContext& context,
     if (rasterdb::gpu::gpu_context::is_initialized()) {
       try {
         auto t_total_start = std::chrono::high_resolution_clock::now();
-        fprintf(stderr, "[TIMER] === Query: %.60s%s\n",
-                data.query.c_str(), data.query.size() > 60 ? "..." : "");
+        RASTERDB_LOG_DEBUG("[TIMER] === Query: {}{}",
+                data.query.substr(0, 60), data.query.size() > 60 ? "..." : "");
 
         auto t0 = std::chrono::high_resolution_clock::now();
         // Parse + plan the query
@@ -191,7 +191,7 @@ static void GPUExecutionFunction(ClientContext& context,
         ColumnBindingResolver resolver;
         resolver.VisitOperator(plan);
         auto t1 = std::chrono::high_resolution_clock::now();
-        fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", "  parse+plan",
+        RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", "  parse+plan",
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
 
         // Execute on GPU via rasterdf
@@ -201,7 +201,7 @@ static void GPUExecutionFunction(ClientContext& context,
         data.chunk_offset = 0;
 
         auto t_total_end = std::chrono::high_resolution_clock::now();
-        fprintf(stderr, "[TIMER] %-30s %8.2f ms\n", "TOTAL gpu_execute",
+        RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", "TOTAL gpu_execute",
                 std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count());
 
         RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf)");
@@ -404,6 +404,7 @@ void RasterdbExtension::InitialGPUConfigs(DBConfig& config)
 
 static void LoadInternal(ExtensionLoader& loader)
 {
+  duckdb::InitGPULogger();
   rasterdb::util::install_segfault_backtrace_handler();
 
   auto& db     = loader.GetDatabaseInstance();

@@ -6,7 +6,7 @@
 #   - spdlog must be installed (apt install libspdlog-dev or via conda)
 #   - Vulkan SDK / headers must be available
 #
-# Usage: ./build.sh [--release|--debug|--clean]
+# Usage: ./build.sh [--release|--debug|--clean] [--log-level=debug|info|warn|error|none]
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,17 +14,38 @@ cd "$PROJECT_DIR"
 
 BUILD_PRESET="release"
 CLEAN=0
+LOG_LEVEL="${RASTERDB_LOG_LEVEL:-info}"
 for arg in "$@"; do
     case "$arg" in
         --release) BUILD_PRESET="release" ;;
         --debug)   BUILD_PRESET="debug" ;;
         --clean)   CLEAN=1 ;;
+        --log-level=*) LOG_LEVEL="${arg#*=}" ;;
+        --log-level)
+            echo "ERROR: --log-level requires a value, e.g. --log-level=debug"
+            exit 1
+            ;;
+        --trace|--debug-log|--info|--warn|--error|--none)
+            LOG_LEVEL="${arg#--}"
+            [ "$LOG_LEVEL" = "debug-log" ] && LOG_LEVEL="debug"
+            ;;
     esac
 done
+
+LOG_LEVEL="${LOG_LEVEL,,}"
+case "$LOG_LEVEL" in
+    trace|debug|info|warn|warning|error|err|critical|fatal|none|off) ;;
+    *)
+        echo "ERROR: invalid log level '${LOG_LEVEL}'"
+        echo "       expected trace, debug, info, warn, error, critical, or none"
+        exit 1
+        ;;
+esac
 
 echo "============================================"
 echo "  RasterDB — DuckDB Extension Build"
 echo "  Preset: ${BUILD_PRESET}"
+echo "  Default log level: ${LOG_LEVEL}"
 echo "============================================"
 
 # --- 0. Clean if requested ---
@@ -92,14 +113,16 @@ fi
 echo ""
 echo "[4/4] Building rasterdb extension (${BUILD_PRESET})..."
 
-# Add spdlog prefix to CMAKE_PREFIX_PATH if found
-CMAKE_EXTRA=""
+# Add spdlog prefix to CMAKE_PREFIX_PATH if found.
+# Keep -D arguments before --preset; this CMake version otherwise lets the
+# preset/default cache value win during DuckDB's configure step.
+CMAKE_ARGS=("-DRASTERDB_LOG_LEVEL=${LOG_LEVEL}")
 if [ -n "$SPDLOG_PREFIX" ]; then
-    CMAKE_EXTRA="-DCMAKE_PREFIX_PATH=${SPDLOG_PREFIX}"
+    CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${SPDLOG_PREFIX}")
 fi
 
 cd "${PROJECT_DIR}/duckdb"
-cmake --preset "${BUILD_PRESET}" ${CMAKE_EXTRA}
+cmake "${CMAKE_ARGS[@]}" --preset "${BUILD_PRESET}"
 cmake --build --preset "${BUILD_PRESET}" -j$(nproc)
 
 # --- 5. Verify ---

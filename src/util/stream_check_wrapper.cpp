@@ -15,10 +15,10 @@
  */
 
 #include "util/stream_check_wrapper.hpp"
+#include "log/logging.hpp"
 
 #include <dlfcn.h>
 
-#include <iostream>
 #include <mutex>
 
 namespace rasterdb {
@@ -64,11 +64,11 @@ void lazy_init() noexcept
   if (env_path && env_path[0] != '\0') {
     g_stream_check_handle = dlopen(env_path, RTLD_LAZY | RTLD_LOCAL);
     if (g_stream_check_handle) {
-      std::cerr << "Stream check: loaded from SIRIUS_STREAM_CHECK_LIB: " << env_path << std::endl;
+      RASTERDB_LOG_DEBUG("Stream check: loaded from SIRIUS_STREAM_CHECK_LIB: {}", env_path);
       // Continue to resolve symbols below
     } else {
-      std::cerr << "Stream check: failed to load from SIRIUS_STREAM_CHECK_LIB: " << env_path
-                << " - " << dlerror() << std::endl;
+      RASTERDB_LOG_WARN("Stream check: failed to load from SIRIUS_STREAM_CHECK_LIB: {} - {}",
+                        env_path, dlerror());
     }
   }
 
@@ -77,7 +77,7 @@ void lazy_init() noexcept
     for (int i = 0; lib_names[i] != nullptr; ++i) {
       g_stream_check_handle = dlopen(lib_names[i], RTLD_LAZY | RTLD_LOCAL);
       if (g_stream_check_handle) {
-        std::cerr << "Stream check: loaded from: " << lib_names[i] << std::endl;
+        RASTERDB_LOG_DEBUG("Stream check: loaded from: {}", lib_names[i]);
         break;
       }
     }
@@ -95,8 +95,7 @@ void lazy_init() noexcept
   g_enable_log_fn =
     reinterpret_cast<enable_log_fn_t>(dlsym(g_stream_check_handle, "enable_log_on_default_stream"));
   if (!g_enable_log_fn) {
-    std::cerr << "Stream check: failed to resolve enable_log_on_default_stream: " << dlerror()
-              << std::endl;
+    RASTERDB_LOG_WARN("Stream check: failed to resolve enable_log_on_default_stream: {}", dlerror());
     dlclose(g_stream_check_handle);
     g_stream_check_handle = nullptr;
     return;
@@ -105,8 +104,7 @@ void lazy_init() noexcept
   g_disable_log_fn = reinterpret_cast<disable_log_fn_t>(
     dlsym(g_stream_check_handle, "disable_log_on_default_stream"));
   if (!g_disable_log_fn) {
-    std::cerr << "Stream check: failed to resolve disable_log_on_default_stream: " << dlerror()
-              << std::endl;
+    RASTERDB_LOG_WARN("Stream check: failed to resolve disable_log_on_default_stream: {}", dlerror());
     dlclose(g_stream_check_handle);
     g_stream_check_handle = nullptr;
     g_enable_log_fn       = nullptr;
@@ -116,8 +114,7 @@ void lazy_init() noexcept
   g_set_log_file_fn =
     reinterpret_cast<set_log_file_fn_t>(dlsym(g_stream_check_handle, "set_stream_check_log_file"));
   if (!g_set_log_file_fn) {
-    std::cerr << "Stream check: failed to resolve set_stream_check_log_file: " << dlerror()
-              << std::endl;
+    RASTERDB_LOG_WARN("Stream check: failed to resolve set_stream_check_log_file: {}", dlerror());
     dlclose(g_stream_check_handle);
     g_stream_check_handle = nullptr;
     g_enable_log_fn       = nullptr;
@@ -126,7 +123,7 @@ void lazy_init() noexcept
   }
 
   g_init_success = true;
-  std::cerr << "Stream check: library loaded successfully" << std::endl;
+  RASTERDB_LOG_DEBUG("Stream check: library loaded successfully");
 }
 
 }  // anonymous namespace

@@ -270,8 +270,6 @@ void rasterdb_config::load_from_file(const std::filesystem::path& config_path)
       "Failed to load Sirius configuration from file: " + config_path.string() + " " + e.what());
   }
 
-  // std::cerr << "Loaded Sirius configuration from file: " << config_path << std::endl;
-
   std::copy(gpu_memory_space_configs.begin(),
             gpu_memory_space_configs.end(),
             std::back_inserter(_memory_space_configs));

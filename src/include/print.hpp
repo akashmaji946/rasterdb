@@ -36,14 +36,14 @@ void printGPUTable(GPUIntermediateRelation& table, ClientContext& context);
 namespace rasterdb {
 
 /**
- * Print the contents of a cudf::table_view to stdout (printf).
+ * Log the contents of a cudf::table_view.
  * Copies device data to host. Supports common numeric types; other types
  * print as "(unprinted)". Limits to the first max_rows rows (default 20).
  */
 void print_table_contents(cudf::table_view const& table, cudf::size_type max_rows = 20);
 
 /**
- * Print the contents of a cucascade::data_batch to stdout (printf).
+ * Log the contents of a cucascade::data_batch.
  * Equivalent to printing the underlying cudf table view.
  */
 void print_data_batch_contents(cucascade::data_batch const& batch, cudf::size_type max_rows = 20);

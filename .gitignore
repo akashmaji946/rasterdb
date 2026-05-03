@@ -11,6 +11,9 @@ test/__pycache__/
 tpch-data/dbgen
 .vscode/
 *.duckdb
+
+.plan/
+
 !test/cpp/integration/integration.duckdb
 CMakeFiles/
 CMakeCache.txt

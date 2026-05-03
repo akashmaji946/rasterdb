@@ -390,7 +390,6 @@ SinkResultType GPUPhysicalMaterializedCollector::ConvertGPUTableToCPUCollection(
       if (str_column->data_wrapper.validity_mask == nullptr) {
         RASTERDB_LOG_DEBUG("Column {} has no validity mask, creating a mask with all valid values\n",
                          col);
-        // printf("Column %d has no validity mask, creating a mask with all valid values\n", col);
         uint64_t padded_bytes = getMaskBytesSize(str_column->column_length);
         // If the validity mask is null, we create a mask with all valid values
         host_mask_data[col] = gpuBufferManager->customCudaHostAlloc<uint8_t>(padded_bytes);

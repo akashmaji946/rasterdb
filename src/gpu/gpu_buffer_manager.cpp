@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstring>
+#include <sstream>
 #include <stdexcept>
 
 namespace rasterdb {
@@ -111,26 +112,38 @@ void GPUBufferManager::ResetCache() {
 }
 
 void GPUBufferManager::Print() {
-  fprintf(stderr, "[GPUBufferManager]\n");
-  fprintf(stderr, "  GPU cache:      %zu / %zu MB (%.1f%%)\n",
-          gpuCachingPointer.load() / (1024*1024), cache_size_per_gpu / (1024*1024),
-          100.0 * gpuCachingPointer.load() / cache_size_per_gpu);
-  fprintf(stderr, "  GPU processing: %zu / %zu MB (%.1f%%)\n",
-          gpuProcessingPointer.load() / (1024*1024), processing_size_per_gpu / (1024*1024),
-          100.0 * gpuProcessingPointer.load() / processing_size_per_gpu);
-  fprintf(stderr, "  CPU staging:    %zu / %zu MB (%.1f%%)\n",
-          cpuProcessingPointer.load() / (1024*1024), processing_size_per_cpu / (1024*1024),
-          100.0 * cpuProcessingPointer.load() / processing_size_per_cpu);
-  fprintf(stderr, "  Cached columns: ");
+  auto pct = [](size_t used, size_t total) {
+    return total == 0 ? 0.0 : 100.0 * static_cast<double>(used) / static_cast<double>(total);
+  };
+
+  auto cache_used = gpuCachingPointer.load();
+  auto gpu_processing_used = gpuProcessingPointer.load();
+  auto cpu_processing_used = cpuProcessingPointer.load();
+
+  RASTERDB_LOG_INFO("[GPUBufferManager]");
+  RASTERDB_LOG_INFO("  GPU cache:      {} / {} MB ({:.1f}%)",
+                    cache_used / (1024 * 1024), cache_size_per_gpu / (1024 * 1024),
+                    pct(cache_used, cache_size_per_gpu));
+  RASTERDB_LOG_INFO("  GPU processing: {} / {} MB ({:.1f}%)",
+                    gpu_processing_used / (1024 * 1024), processing_size_per_gpu / (1024 * 1024),
+                    pct(gpu_processing_used, processing_size_per_gpu));
+  RASTERDB_LOG_INFO("  CPU staging:    {} / {} MB ({:.1f}%)",
+                    cpu_processing_used / (1024 * 1024), processing_size_per_cpu / (1024 * 1024),
+                    pct(cpu_processing_used, processing_size_per_cpu));
+
+  std::ostringstream cached;
   size_t total = 0;
   for (auto& [tbl, cols] : cached_columns) {
     for (auto& [col, info] : cols) {
-      fprintf(stderr, "%s.%s (%zuMB), ", tbl.c_str(), col.c_str(), info.byte_size / (1024*1024));
+      if (total > 0) {
+        cached << ", ";
+      }
+      cached << tbl << "." << col << " (" << info.byte_size / (1024 * 1024) << "MB)";
       total += info.byte_size;
     }
   }
-  if (total == 0) fprintf(stderr, "(none)");
-  fprintf(stderr, "\n");
+  auto cached_columns_text = total == 0 ? std::string("(none)") : cached.str();
+  RASTERDB_LOG_INFO("  Cached columns: {}", cached_columns_text);
 }
 
 bool GPUBufferManager::checkIfColumnCached(const std::string& table_name,

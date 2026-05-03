@@ -29,12 +29,12 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "expression_executor/gpu_expression_translator.hpp"
+#include "log/logging.hpp"
 #include "pipeline/rasterdb_meta_pipeline.hpp"
 #include "pipeline/rasterdb_pipeline.hpp"
 
 #include <nvtx3/nvtx3.hpp>
 
-#include <cstdio>
 #include <unordered_set>
 
 namespace rasterdb {
@@ -182,7 +182,7 @@ rasterdb_physical_hash_join::rasterdb_physical_hash_join(
       if (col_idx < lhs_input_types.size()) {
         lhs_output_columns.col_idxs.emplace_back(static_cast<cudf::size_type>(col_idx));
       } else {
-        printf("WARNING:In rasterdb_physical_hash_join: left_projection_map index out of range");
+        RASTERDB_LOG_WARN("In rasterdb_physical_hash_join: left_projection_map index out of range");
       }
     }
   }
@@ -205,7 +205,7 @@ rasterdb_physical_hash_join::rasterdb_physical_hash_join(
       if (col_idx < rhs_input_types.size()) {
         rhs_output_columns.col_idxs.emplace_back(static_cast<cudf::size_type>(col_idx));
       } else {
-        printf("WARNING:In rasterdb_physical_hash_join: right_projection_map index out of range");
+        RASTERDB_LOG_WARN("In rasterdb_physical_hash_join: right_projection_map index out of range");
       }
     }
   }
