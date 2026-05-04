@@ -52,7 +52,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
       pc.scalar_val = 0;
       pc.mode = 0;     // COL_COL
       pc.debug_mode = 0;
-      pc.type_id = 0;  // int32
+      pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);  // int32
       _ctx.dispatcher().dispatch_binary_op(pc);
       mask = std::move(result);
     }

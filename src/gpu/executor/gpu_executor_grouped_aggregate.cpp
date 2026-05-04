@@ -126,7 +126,7 @@ void gpu_executor::execute_grouped_aggregate(
         pc.op = 2;  // MUL
         pc.scalar_val = GROUPBY_COMPOSITE_M_I32;
         pc.mode = 1; // COL_SCALAR
-        pc.type_id = 0; // INT32
+        pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // INT32
         pc.debug_mode = 0;
         disp.dispatch_binary_op(pc);
       }
@@ -141,7 +141,7 @@ void gpu_executor::execute_grouped_aggregate(
         pc.size = sz;
         pc.op = 0;  // ADD
         pc.mode = 0; // COL_COL
-        pc.type_id = 0; // INT32
+        pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // INT32
         pc.debug_mode = 0;
         disp.dispatch_binary_op(pc);
       }
@@ -158,7 +158,7 @@ void gpu_executor::execute_grouped_aggregate(
           pc.op = 2; // MUL
           pc.scalar_val = GROUPBY_COMPOSITE_M_I32;
           pc.mode = 1; // COL_SCALAR
-          pc.type_id = 0; // INT32
+          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // INT32
           pc.debug_mode = 0;
           disp.dispatch_binary_op(pc);
         }
@@ -171,7 +171,7 @@ void gpu_executor::execute_grouped_aggregate(
           pc.size = sz;
           pc.op = 0; // ADD
           pc.mode = 0; // COL_COL
-          pc.type_id = 0; // INT32
+          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // INT32
           pc.debug_mode = 0;
           disp.dispatch_binary_op(pc);
         }

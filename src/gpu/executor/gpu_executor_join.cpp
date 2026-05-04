@@ -168,7 +168,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     cpc.output_addr = mask.address();
     cpc.size = n;
     cpc.op = 4; // EQ
-    cpc.type_id = 0; // INT32
+    cpc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // INT32
     _ctx.dispatcher().dispatch_compare_columns(cpc);
 
     result = apply_filter_mask(*result, mask);

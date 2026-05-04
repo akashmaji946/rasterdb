@@ -59,7 +59,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
       bpc.output_addr = indices.address();
       bpc.size = static_cast<uint32_t>(count);
       bpc.op = 0; bpc.scalar_val = static_cast<int32_t>(start);
-      bpc.mode = 1; bpc.type_id = 0; bpc.input_b = 0; bpc.debug_mode = 0;
+      bpc.mode = 1; bpc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); bpc.input_b = 0; bpc.debug_mode = 0;
       disp.dispatch_binary_op(bpc);
     }
   }

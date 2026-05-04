@@ -10,6 +10,7 @@
 #include <duckdb/common/exception.hpp>
 
 #include <cstddef>
+#include <rasterdf/execution/constants.hpp>
 
 namespace rasterdb {
 namespace gpu {
@@ -60,11 +61,14 @@ inline size_t rdf_type_size(rasterdf::type_id tid) {
 
 /// Returns the dispatcher type_id code used in push constants (0=int32, 1=float32).
 /// For types that don't have dedicated shaders yet, throws.
+
 inline int32_t rdf_shader_type_id(rasterdf::type_id tid) {
   switch (tid) {
     case rasterdf::type_id::INT32:
-    case rasterdf::type_id::TIMESTAMP_DAYS:   return 0; // int32 path
-    case rasterdf::type_id::FLOAT32:          return 1; // float32 path
+    case rasterdf::type_id::TIMESTAMP_DAYS:   return static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);
+    case rasterdf::type_id::FLOAT32:          return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT32);
+    case rasterdf::type_id::INT64:            return static_cast<int32_t>(rasterdf::ShaderTypeId::INT64);
+    case rasterdf::type_id::FLOAT64:          return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT64);
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: type_id %d not yet supported in Vulkan shaders — falling back to CPU",

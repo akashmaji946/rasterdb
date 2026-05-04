@@ -64,13 +64,13 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         pc._pad = 0;
         if (col.type.id == rasterdf::type_id::INT64) {
           pc.threshold = constant.value.DefaultCastAs(duckdb::LogicalType::BIGINT).GetValue<int64_t>();
-          pc.type_id = 0; // int64
+          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // int64
         } else {
           double dval = constant.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
           int64_t bits;
           std::memcpy(&bits, &dval, sizeof(double));
           pc.threshold = bits;
-          pc.type_id = 1; // float64
+          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT64); // float64
         }
         pc.op = cmp_op;
 
@@ -144,7 +144,7 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       pc.input_b = child_mask.address();
       pc.output_addr = combined.address();
       pc.size = static_cast<uint32_t>(result.num_rows);
-      pc.op = 2; pc.mode = 0; pc.type_id = 0; pc.debug_mode = 0; pc.scalar_val = 0;
+      pc.op = 2; pc.mode = 0; pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); pc.debug_mode = 0; pc.scalar_val = 0;
       disp.dispatch_binary_op(pc);
       result = std::move(combined);
     }

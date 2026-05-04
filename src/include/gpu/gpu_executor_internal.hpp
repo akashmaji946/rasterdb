@@ -62,7 +62,7 @@ inline bool debug_logging_enabled() { return duckdb::RasterDBShouldLog(spdlog::l
 
 void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
 
-// Per-stage timing helper — uses RASTERDB_LOG_DEBUG with [TIMER] prefix
+// Per-stage timing helper — uses RASTERDB_LOG_INFO with [TIMER] prefix
 struct stage_timer {
   const char* name;
   std::chrono::high_resolution_clock::time_point t0;
@@ -70,7 +70,7 @@ struct stage_timer {
   ~stage_timer() {
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", name, ms);
+    RASTERDB_LOG_INFO("[TIMER] {:<30s} {:8.2f} ms", name, ms);
   }
 };
 
