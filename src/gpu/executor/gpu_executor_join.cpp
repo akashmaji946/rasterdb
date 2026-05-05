@@ -157,6 +157,18 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     result->columns[left_cols.size() + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
   }
 
+  // Propagate dictionary metadata: left dicts keep index, right dicts are shifted
+  for (auto& [col_idx, dict] : left_table->dictionaries.col_dicts) {
+    if (col_idx < left_cols.size()) {
+      result->dictionaries.col_dicts[col_idx] = dict;
+    }
+  }
+  for (auto& [col_idx, dict] : right_table->dictionaries.col_dicts) {
+    if (col_idx < right_cols.size()) {
+      result->dictionaries.col_dicts[left_cols.size() + col_idx] = dict;
+    }
+  }
+
   RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} cols", match_count, total_cols);
 
   // Post-filter on remaining conditions (multi-condition join)

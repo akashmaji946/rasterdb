@@ -42,9 +42,15 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
 
       // Copy column to output — use shader for INT32/FLOAT32, buffer copy otherwise
       result->columns[i] = allocate_column(_ctx, src.type, src.num_rows);
+      // Propagate dictionary metadata for VARCHAR columns
+      if (input->dictionaries.has_dict(ref.index)) {
+        result->dictionaries.col_dicts[i] = input->dictionaries.get(ref.index);
+      }
+
       bool has_shader = (src.type.id == rasterdf::type_id::INT32 ||
                          src.type.id == rasterdf::type_id::FLOAT32 ||
-                         src.type.id == rasterdf::type_id::TIMESTAMP_DAYS);
+                         src.type.id == rasterdf::type_id::TIMESTAMP_DAYS ||
+                         src.type.id == rasterdf::type_id::DICTIONARY32);
       if (has_shader) {
         binary_op_push_constants pc{};
         pc.input_a = src.address();

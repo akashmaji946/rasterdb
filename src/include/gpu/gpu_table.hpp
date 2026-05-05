@@ -7,6 +7,7 @@
 
 #include "gpu_context.hpp"
 #include "gpu_types.hpp"
+#include "string_dictionary.hpp"
 
 #include <rasterdf/core/column.hpp>
 #include <rasterdf/core/column_view.hpp>
@@ -104,6 +105,9 @@ public:
 
   /// Column types (DuckDB types, for result conversion).
   std::vector<duckdb::LogicalType> duckdb_types;
+
+  /// Dictionary metadata for VARCHAR columns (col_index → dictionary).
+  table_dictionaries dictionaries;
 
 private:
   rasterdf::size_type _num_rows{0};

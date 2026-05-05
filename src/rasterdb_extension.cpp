@@ -41,6 +41,7 @@
 #include "gpu/gpu_context.hpp"
 #include "gpu/gpu_buffer_manager.hpp"
 #include "gpu/gpu_executor.hpp"
+#include "gpu/gpu_table.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -245,6 +246,28 @@ static void GPUExecutionFunction(ClientContext& context,
 
       auto duckdb_tid = output.data[c].GetType().id();
       auto rdf_tid = col.type.id;
+
+      // ── DICTIONARY32 → VARCHAR decode ──
+      if (rdf_tid == rasterdf::type_id::DICTIONARY32 &&
+          duckdb_tid == duckdb::LogicalTypeId::VARCHAR &&
+          data.result_table->dictionaries.has_dict(c)) {
+        const auto& dict = data.result_table->dictionaries.get(c);
+        std::vector<int32_t> codes(chunk_size);
+        if (col.is_host_only) {
+          std::memcpy(codes.data(), col.host_data.data() + data.chunk_offset * sizeof(int32_t),
+                      chunk_size * sizeof(int32_t));
+        } else {
+          const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
+              codes.data(), chunk_size * sizeof(int32_t), data.chunk_offset * sizeof(int32_t),
+              gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
+        }
+        auto& vec = output.data[c];
+        for (size_t r = 0; r < chunk_size; r++) {
+          const auto& str = dict.decode(codes[r]);
+          vec.SetValue(r, duckdb::Value(str));
+        }
+        continue;
+      }
 
       // Determine if a type cast is needed between rdf column and DuckDB output
       bool types_match = false;

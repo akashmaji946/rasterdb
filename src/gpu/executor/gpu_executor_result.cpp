@@ -68,13 +68,28 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
     chunk.SetCardinality(count);
 
     for (size_t c = 0; c < num_cols; c++) {
-      size_t rdf_elem_size = rdf_type_size(table->col(c).type.id);
+      auto rdf_tid = table->col(c).type.id;
+      auto duckdb_tid = types[c].id();
+
+      // ── DICTIONARY32 → VARCHAR decode ──
+      if (rdf_tid == rasterdf::type_id::DICTIONARY32 &&
+          duckdb_tid == duckdb::LogicalTypeId::VARCHAR &&
+          table->dictionaries.has_dict(c)) {
+        const auto& dict = table->dictionaries.get(c);
+        const auto* codes = reinterpret_cast<const int32_t*>(
+            host_data[c].data() + static_cast<size_t>(offset) * sizeof(int32_t));
+        auto& vec = chunk.data[c];
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          const auto& str = dict.decode(codes[r]);
+          vec.SetValue(r, duckdb::Value(str));
+        }
+        continue;
+      }
+
+      size_t rdf_elem_size = rdf_type_size(rdf_tid);
       size_t byte_offset = static_cast<size_t>(offset) * rdf_elem_size;
       const uint8_t* src = host_data[c].data() + byte_offset;
       auto dst = reinterpret_cast<uint8_t*>(chunk.data[c].GetData());
-
-      auto rdf_tid = table->col(c).type.id;
-      auto duckdb_tid = types[c].id();
 
       // If the rasterdf type matches the DuckDB type in size, direct copy
       bool needs_cast = false;

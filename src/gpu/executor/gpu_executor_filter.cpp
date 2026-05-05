@@ -72,6 +72,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
     double ms = std::chrono::duration<double, std::milli>(t_compact_end - t_compact_start).count();
     RASTERDB_LOG_DEBUG("[TIMER]     filter_compact             {:8.2f} ms", ms);
   }
+  // Propagate dictionary metadata (filter only compacts rows, dictionaries unchanged)
+  result->dictionaries = input->dictionaries;
+
   RASTERDB_LOG_DEBUG("[RDB_DEBUG] filter: {} rows => {} rows",
                      input->num_rows(), result->num_rows());
   return result;

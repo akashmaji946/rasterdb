@@ -5,6 +5,7 @@
 
 #include "gpu/gpu_executor_internal.hpp"
 
+#include <duckdb/common/types/string_type.hpp>
 #include <duckdb/storage/table_storage_info.hpp>
 
 namespace rasterdb {
@@ -63,9 +64,16 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     types = op.returned_types;  // fallback: all columns
   }
 
-  // Validate all types are GPU-compatible (throws for strings etc.)
+  // Validate all types are GPU-compatible.
+  // VARCHAR columns are dictionary-encoded → DICTIONARY32 (INT32 codes on GPU).
   for (auto& t : types) {
-    to_rdf_type(t);
+    to_rdf_type(t);  // throws for truly unsupported types
+  }
+
+  // Track which columns are VARCHAR (need dictionary encoding)
+  std::vector<bool> is_varchar(types.size(), false);
+  for (size_t i = 0; i < types.size(); i++) {
+    is_varchar[i] = is_varchar_type(types[i]);
   }
 
   // Get table name for logging / cache lookup
@@ -258,11 +266,24 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           // Flatten each column directly into staging (inline with scan)
           for (size_t c = 0; c < num_cols; c++) {
             if (staging[c].staging_dst) {
-              size_t elem_size = rdf_type_size(rdf_types[c].id);
-              size_t bytes     = static_cast<size_t>(chunk_rows) * elem_size;
-              auto data_ptr    = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
-              std::memcpy(staging[c].staging_dst + staging[c].write_pos, data_ptr, bytes);
-              staging[c].write_pos += bytes;
+              if (is_varchar[c]) {
+                // Dictionary-encode VARCHAR column to INT32 codes
+                auto& vec  = chunk->data[c];
+                auto* strs = duckdb::FlatVector::GetData<duckdb::string_t>(vec);
+                auto* dst  = reinterpret_cast<int32_t*>(
+                    staging[c].staging_dst + staging[c].write_pos);
+                auto& dict = gpu_tbl->dictionaries.col_dicts[c];
+                for (rasterdf::size_type r = 0; r < chunk_rows; r++) {
+                  dst[r] = dict.encode(strs[r].GetString());
+                }
+                staging[c].write_pos += static_cast<size_t>(chunk_rows) * sizeof(int32_t);
+              } else {
+                size_t elem_size = rdf_type_size(rdf_types[c].id);
+                size_t bytes     = static_cast<size_t>(chunk_rows) * elem_size;
+                auto data_ptr    = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
+                std::memcpy(staging[c].staging_dst + staging[c].write_pos, data_ptr, bytes);
+                staging[c].write_pos += bytes;
+              }
             }
           }
         }
@@ -366,9 +387,66 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       }
     }
 
+    // Check if any columns are VARCHAR — if so, we need to dictionary-encode first
+    bool has_varchar = false;
+    for (size_t c = 0; c < types.size(); c++) {
+      if (is_varchar[c]) { has_varchar = true; break; }
+    }
+
     {
       stage_timer t_upload("  gpu_upload");
-      gpu_tbl            = gpu_table::from_data_chunks(_ctx, types, chunks);
+      if (has_varchar) {
+        // Dictionary-encode VARCHAR columns → INT32, then upload manually
+        gpu_tbl = std::make_unique<gpu_table>();
+        gpu_tbl->duckdb_types = types;
+        size_t num_cols = types.size();
+        gpu_tbl->columns.resize(num_cols);
+        gpu_tbl->set_num_rows(total_scanned);
+
+        for (size_t c = 0; c < num_cols; c++) {
+          rasterdf::data_type rdf_type = to_rdf_type(types[c]);
+          gpu_tbl->columns[c].type = rdf_type;
+          gpu_tbl->columns[c].num_rows = total_scanned;
+
+          if (is_varchar[c]) {
+            // Dictionary-encode all chunks → flat INT32 codes buffer
+            std::vector<int32_t> codes(static_cast<size_t>(total_scanned));
+            auto& dict = gpu_tbl->dictionaries.col_dicts[c];
+            size_t pos = 0;
+            for (auto& chunk : chunks) {
+              auto& vec = chunk->data[c];
+              auto* strs = duckdb::FlatVector::GetData<duckdb::string_t>(vec);
+              for (size_t r = 0; r < chunk->size() && pos < codes.size(); r++, pos++) {
+                codes[pos] = dict.encode(strs[r].GetString());
+              }
+            }
+            RASTERDB_LOG_DEBUG("[RDB_DEBUG]   col[{}] VARCHAR dict-encoded: {} unique strings",
+                               c, dict.cardinality());
+            // Upload INT32 codes to GPU
+            gpu_tbl->columns[c] = allocate_column(_ctx, rdf_type, total_scanned);
+            gpu_tbl->columns[c].data.copy_from_host(
+                codes.data(), codes.size() * sizeof(int32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          } else {
+            // Fixed-width: flatten all chunks into one buffer, upload
+            size_t elem_size = rdf_type_size(rdf_type.id);
+            std::vector<uint8_t> flat(static_cast<size_t>(total_scanned) * elem_size);
+            size_t off = 0;
+            for (auto& chunk : chunks) {
+              size_t bytes = chunk->size() * elem_size;
+              auto data_ptr = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
+              std::memcpy(flat.data() + off, data_ptr, bytes);
+              off += bytes;
+            }
+            gpu_tbl->columns[c] = allocate_column(_ctx, rdf_type, total_scanned);
+            gpu_tbl->columns[c].data.copy_from_host(
+                flat.data(), flat.size(),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          }
+        }
+      } else {
+        gpu_tbl = gpu_table::from_data_chunks(_ctx, types, chunks);
+      }
       size_t total_bytes = 0;
       for (size_t c = 0; c < gpu_tbl->num_columns(); c++) {
         total_bytes += gpu_tbl->col(c).byte_size();

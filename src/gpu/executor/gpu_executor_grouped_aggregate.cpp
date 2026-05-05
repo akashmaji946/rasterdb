@@ -73,7 +73,8 @@ void gpu_executor::execute_grouped_aggregate(
   std::vector<int64_t> surrogate_id_to_composite;  // INT64 surrogate mapping
 
   bool single_col_int32 =
-    (num_group_cols == 1 && input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT32);
+    (num_group_cols == 1 && (input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT32 ||
+                             input.col(group_col_indices[0]).type.id == rasterdf::type_id::DICTIONARY32));
 
   if (single_col_int32) {
     key_col_ptr = &input.col(group_col_indices[0]);
@@ -914,6 +915,14 @@ void gpu_executor::execute_grouped_aggregate(
       output.columns[out_col_idx] = std::move(sorted_val_col);
     }
   }
+  // Propagate dictionary metadata for GROUP BY key columns
+  for (size_t g = 0; g < num_group_cols; g++) {
+    auto src_idx = group_col_indices[g];
+    if (input.dictionaries.has_dict(src_idx)) {
+      output.dictionaries.col_dicts[g] = input.dictionaries.get(src_idx);
+    }
+  }
+
   RASTERDB_LOG_DEBUG(
     "GROUP BY result: {} groups, {} output cols", num_groups_result, output.columns.size());
 }

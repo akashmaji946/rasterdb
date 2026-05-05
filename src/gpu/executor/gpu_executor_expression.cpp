@@ -15,7 +15,7 @@ namespace gpu {
 gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Expression& expr)
 {
   auto& disp = _ctx.dispatcher();
-  uint32_t n = static_cast<uint32_t>(input.num_rows());
+  auto n = static_cast<uint32_t>(input.num_rows());
 
   // Comparison: column <op> constant or column <op> column
   if (expr.type == duckdb::ExpressionType::COMPARE_LESSTHAN ||
@@ -30,11 +30,11 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
     // Map to shader op code: 0=gt, 1=lt, 2=ge, 3=le, 4=eq, 5=ne
     int32_t cmp_op = 0;
     switch (expr.type) {
-      case duckdb::ExpressionType::COMPARE_GREATERTHAN:         cmp_op = 0; break;
-      case duckdb::ExpressionType::COMPARE_LESSTHAN:            cmp_op = 1; break;
+      case duckdb::ExpressionType::COMPARE_GREATERTHAN:          cmp_op = 0; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHAN:             cmp_op = 1; break;
       case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: cmp_op = 2; break;
-      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:   cmp_op = 3; break;
-      case duckdb::ExpressionType::COMPARE_EQUAL:               cmp_op = 4; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:    cmp_op = 3; break;
+      case duckdb::ExpressionType::COMPARE_EQUAL:                cmp_op = 4; break;
       case duckdb::ExpressionType::COMPARE_NOTEQUAL:            cmp_op = 5; break;
       default: break;
     }
@@ -77,6 +77,38 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         disp.dispatch_compare_int64(pc);
         RASTERDB_LOG_DEBUG("[RDB_DEBUG] HAVING: GPU {} compare on {} rows",
                            col.type.id == rasterdf::type_id::INT64 ? "INT64" : "FLOAT64", n);
+        return result;
+      }
+
+      // ── DICTIONARY32 (VARCHAR) comparison: string constant → dict code → INT32 compare ──
+      if (col.type.id == rasterdf::type_id::DICTIONARY32) {
+        auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, input.num_rows());
+
+        size_t dict_col_idx = col_ref.index;
+        std::string target_str = constant.value.DefaultCastAs(duckdb::LogicalType::VARCHAR).GetValue<std::string>();
+        int32_t threshold = -1;  // -1 = not found → no rows match EQ
+
+        // Look up the constant string in this column's dictionary
+        if (input.dictionaries.has_dict(dict_col_idx)) {
+          const auto& dict = input.dictionaries.get(dict_col_idx);
+          auto it = dict.str_to_code.find(target_str);
+          if (it != dict.str_to_code.end()) {
+            threshold = it->second;
+          }
+          // If not found, threshold stays -1 (no code matches → EQ gives 0, NE gives 1)
+        }
+
+        compare_push_constants pc{};
+        pc.input_addr = col.address();
+        pc.output_addr = result.address();
+        pc.size = n;
+        pc.threshold = threshold;
+        pc.op = cmp_op;
+        pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);
+        disp.dispatch_compare(pc);
+
+        RASTERDB_LOG_DEBUG("[RDB_DEBUG] DICT compare: '{}' → code={}, op={}, {} rows",
+                           target_str, threshold, cmp_op, n);
         return result;
       }
 
@@ -256,14 +288,14 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
 // Used to align mixed-type operands before dispatching the (single-type) binary_op shader.
 static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src)
 {
-  size_t n = static_cast<size_t>(src.num_rows);
+  auto n = static_cast<size_t>(src.num_rows);
   const int32_t* src_int = nullptr;
   std::vector<int32_t> h_int;
 
   auto& bufMgr = GPUBufferManager::GetInstance();
   if (src.cached_address != 0 && src.cached_buffer == bufMgr.cpuStagingBuffer()) {
     // Zero-copy reBAR: data is directly accessible via mapped CPU staging.
-    size_t staging_off = static_cast<size_t>(
+    auto staging_off = static_cast<size_t>(
         src.cached_address - bufMgr.cpuStagingAddress());
     src_int = reinterpret_cast<const int32_t*>(bufMgr.cpuProcessing + staging_off);
   } else {

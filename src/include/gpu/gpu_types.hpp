@@ -30,11 +30,17 @@ inline rasterdf::data_type to_rdf_type(const duckdb::LogicalType& type) {
     case duckdb::LogicalTypeId::TIMESTAMP: return {rasterdf::type_id::TIMESTAMP_MICROSECONDS};
     case duckdb::LogicalTypeId::DECIMAL:   return {rasterdf::type_id::FLOAT32};  // treat DECIMAL as float for GPU
     case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT64};    // best-effort for large int intermediates
+    case duckdb::LogicalTypeId::VARCHAR:   return {rasterdf::type_id::DICTIONARY32}; // dictionary-encoded → INT32 codes on GPU
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported type %s — falling back to CPU",
         type.ToString().c_str());
   }
+}
+
+/// Check if a DuckDB type is a string/varchar type.
+inline bool is_varchar_type(const duckdb::LogicalType& type) {
+  return type.id() == duckdb::LogicalTypeId::VARCHAR;
 }
 
 /// Size in bytes of a single element for the given rasterdf type.
@@ -52,6 +58,7 @@ inline size_t rdf_type_size(rasterdf::type_id tid) {
     case rasterdf::type_id::TIMESTAMP_MILLISECONDS:
     case rasterdf::type_id::TIMESTAMP_MICROSECONDS:
     case rasterdf::type_id::TIMESTAMP_NANOSECONDS: return 8;
+    case rasterdf::type_id::DICTIONARY32:            return 4;  // int32 codes
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported type_id %d for size computation",
@@ -69,6 +76,7 @@ inline int32_t rdf_shader_type_id(rasterdf::type_id tid) {
     case rasterdf::type_id::FLOAT32:          return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT32);
     case rasterdf::type_id::INT64:            return static_cast<int32_t>(rasterdf::ShaderTypeId::INT64);
     case rasterdf::type_id::FLOAT64:          return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT64);
+    case rasterdf::type_id::DICTIONARY32:     return static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // dict codes are int32
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: type_id %d not yet supported in Vulkan shaders — falling back to CPU",

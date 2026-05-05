@@ -84,6 +84,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
     }
   }
 
+  // Propagate dictionary metadata
+  result->dictionaries = input->dictionaries;
+
   return result;
 }
 

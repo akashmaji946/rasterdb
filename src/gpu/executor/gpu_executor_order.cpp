@@ -53,7 +53,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
   auto sorted_table = rasterdf::gather(input->view(), indices_view,
                                        _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
 
-  return gpu_table_from_rdf(std::move(sorted_table), input->duckdb_types);
+  auto result = gpu_table_from_rdf(std::move(sorted_table), input->duckdb_types);
+  // Propagate dictionary metadata (row order changes but dictionaries are unchanged)
+  result->dictionaries = input->dictionaries;
+  return result;
 }
 
 } // namespace gpu
