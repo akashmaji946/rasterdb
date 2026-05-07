@@ -38,7 +38,7 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
       processing_size_per_cpu(cpu_size),
       cpuProcessing(nullptr)
 {
-  RASTERDB_LOG_INFO("Initializing GPUBufferManager: cache={}MB, processing={}MB, staging={}MB",
+  RASTERDB_LOG_INFO("Initializing GPUBufferManager: cache={} MB, processing={} MB, staging={} MB",
                     cache_size / (1024 * 1024),
                     processing_size / (1024 * 1024),
                     cpu_size / (1024 * 1024));

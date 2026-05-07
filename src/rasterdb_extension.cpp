@@ -420,7 +420,9 @@ static void LoadInternal(ExtensionLoader& loader)
 
     // Auto-initialize BufferManager with 2GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024, 2048ULL * 1024 * 1024);
+        2048ULL * 1024 * 1024 * 1, 
+        2048ULL * 1024 * 1024 * 1, 
+        2048ULL * 1024 * 1024 * 1);
     (void)bufMgr;
 
     RasterdbExtension::buffer_is_initialized = true;
