@@ -135,8 +135,9 @@ struct RasterDBQueryData : public TableFunctionData {
   bool finished = false;
   bool attempted = false;
 
-  // Bulk host-side cache: one contiguous buffer per column, downloaded once.
-  std::vector<std::vector<uint8_t>> host_columns_cache;
+  // Zero-copy host pointers: point directly into GPUBufferManager's HOST_CACHED
+  // download buffer after DMA. No heap allocation, no memcpy, no page faults.
+  std::vector<const uint8_t*> host_column_ptrs;
   bool host_cache_ready = false;
 };
 
@@ -217,10 +218,9 @@ static void GPUExecutionFunction(ClientContext& context,
         // All workspace pool columns share ONE VkBuffer with different offsets.
         if (data.result_table && data.result_table->num_rows() > 0) {
           auto t_dl_start = std::chrono::high_resolution_clock::now();
-          // Use batch_download_columns: batches all GPU→staging copies in ONE
-          // Vulkan submit using the pre-allocated staging buffer. Eliminates per-column
-          // VMA alloc/dealloc of ~600MB staging buffers (the bottleneck).
-          data.host_columns_cache = rasterdb::gpu::batch_download_columns(gpu_ctx, *data.result_table);
+          // Zero-copy DMA: batch all columns into download buffer in ONE submit,
+          // return pointers directly into HOST_CACHED memory. No heap alloc, no memcpy.
+          data.host_column_ptrs = rasterdb::gpu::batch_download_columns(gpu_ctx, *data.result_table);
 
           data.host_cache_ready = true;
           auto t_dl_end = std::chrono::high_resolution_clock::now();
@@ -253,9 +253,8 @@ static void GPUExecutionFunction(ClientContext& context,
     if (data.chunk_offset >= available) {
       output.SetCardinality(0);
       data.finished = true;
-      // Release host cache memory
-      data.host_columns_cache.clear();
-      data.host_columns_cache.shrink_to_fit();
+      // Pointers into download buffer — no heap memory to release
+      data.host_column_ptrs.clear();
       return;
     }
     
@@ -267,8 +266,8 @@ static void GPUExecutionFunction(ClientContext& context,
       size_t elem_size = rasterdb::gpu::rdf_type_size(col.type.id);
       auto dst = duckdb::FlatVector::GetData(output.data[c]);
 
-      // Source pointer: from bulk-downloaded host cache
-      const uint8_t* src = data.host_columns_cache[c].data() + data.chunk_offset * elem_size;
+      // Source pointer: directly from HOST_CACHED download buffer (zero-copy)
+      const uint8_t* src = data.host_column_ptrs[c] + data.chunk_offset * elem_size;
 
       auto duckdb_tid = output.data[c].GetType().id();
       auto rdf_tid = col.type.id;

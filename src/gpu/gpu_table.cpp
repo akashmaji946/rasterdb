@@ -100,60 +100,66 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
   return bytes;
 }
 
-std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const gpu_table& table)
+std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_table& table)
 {
   size_t ncols = table.num_columns();
-  std::vector<std::vector<uint8_t>> host_bufs(ncols);
+  std::vector<const uint8_t*> ptrs(ncols, nullptr);
 
-  if (table.num_rows() == 0) return host_bufs;
+  if (table.num_rows() == 0) return ptrs;
 
-  // Compute per-column byte sizes, handle host-only / ReBAR columns immediately.
-  struct DeviceCol { size_t col_idx; size_t bytes; };
-  std::vector<DeviceCol> device_cols;
-  std::vector<size_t> col_bytes(ncols);
+  // Pre-allocated HOST_CACHED download buffer — persistently mapped, zero alloc overhead.
+  // Data lands here via PCIe DMA and stays here for chunk serving (zero-copy).
+  auto& bufmgr = GPUBufferManager::GetInstance();
+  uint8_t* dl_base = bufmgr.cpuDownload;
+  size_t dl_capacity = bufmgr.download_size_per_cpu;
+  size_t dl_offset = 0;  // bump offset into download buffer
 
   for (size_t c = 0; c < ncols; c++) {
     auto& col = table.col(c);
-    col_bytes[c] = static_cast<size_t>(col.num_rows) * rdf_type_size(col.type.id);
-    host_bufs[c].resize(col_bytes[c]);
+    size_t bytes = static_cast<size_t>(col.num_rows) * rdf_type_size(col.type.id);
 
     if (col.is_host_only) {
-      std::memcpy(host_bufs[c].data(), col.host_data.data(), col_bytes[c]);
+      // Host-only: data already in host memory, just point at it
+      ptrs[c] = col.host_data.data();
     } else if (col.data.mapped_data()) {
-      // ReBAR path: direct memcpy from host-visible device memory
-      std::memcpy(host_bufs[c].data(), col.data.mapped_data(), col_bytes[c]);
+      // ReBAR: device memory is host-visible, point directly
+      ptrs[c] = reinterpret_cast<const uint8_t*>(col.data.mapped_data());
     } else {
-      device_cols.push_back({c, col_bytes[c]});
+      // Device-resident: assign a slot in the download buffer, aligned to 64B
+      dl_offset = (dl_offset + 63) & ~size_t(63);
+      if (dl_offset + bytes > dl_capacity) {
+        throw std::runtime_error("batch_download_columns: result exceeds download buffer capacity");
+      }
+
+      // Setup staging info pointing to this column's slot in download buffer.
+      // copy_to_host_with_staging will DMA GPU→download_buffer, then skip
+      // the final memcpy because dst == staging.mapped_ptr (zero-copy mode).
+      rasterdf::allocation_info staging{};
+      staging.buffer     = bufmgr.cpuDownloadBuffer();
+      staging.mapped_ptr = dl_base + dl_offset;
+      staging.offset     = dl_offset;
+      staging.size       = bytes;
+
+      if (col.cached_buffer != VK_NULL_HANDLE) {
+        // Cached column: use download_column to a temp then... actually
+        // we need to handle this differently. For cached cols, fall back
+        // to download_column writing into the download buffer slot directly.
+        // download_column allocates its own staging, so we just point dst there.
+        download_column(ctx, col, dl_base + dl_offset, bytes);
+      } else {
+        // Workspace column: use copy_to_host_with_staging (Vulkan calls in librasterdf).
+        // Pass dst == staging.mapped_ptr to trigger zero-copy (skip memcpy).
+        const_cast<rasterdf::device_buffer&>(col.data).copy_to_host_with_staging(
+          dl_base + dl_offset, bytes, staging,
+          ctx.device(), ctx.queue(), ctx.command_pool());
+      }
+
+      ptrs[c] = dl_base + dl_offset;
+      dl_offset += bytes;
     }
   }
 
-  if (device_cols.empty()) return host_bufs;
-
-  // Use the pre-allocated HOST_CACHED download buffer (4GB, persistently mapped).
-  // Key insight: the old staging buffer was write-combined (WC) memory — CPU reads
-  // from WC are ~260 MB/s. The download buffer uses HOST_CACHED memory so CPU reads
-  // hit full DDR bandwidth (~20 GB/s). Combined with zero VMA alloc/dealloc overhead,
-  // this matches CUDA's cudaMemcpy D2H performance (pure PCIe + memcpy).
-  auto& bufmgr = GPUBufferManager::GetInstance();
-  rasterdf::allocation_info staging{};
-  staging.buffer     = bufmgr.cpuDownloadBuffer();
-  staging.mapped_ptr = bufmgr.cpuDownload;
-  staging.offset     = 0;
-  staging.size       = bufmgr.download_size_per_cpu;
-
-  for (auto& dc : device_cols) {
-    auto& col = table.col(dc.col_idx);
-    if (col.cached_buffer != VK_NULL_HANDLE) {
-      download_column(ctx, col, host_bufs[dc.col_idx].data(), dc.bytes);
-      continue;
-    }
-
-    const_cast<rasterdf::device_buffer&>(col.data).copy_to_host_with_staging(
-      host_bufs[dc.col_idx].data(), dc.bytes, staging,
-      ctx.device(), ctx.queue(), ctx.command_pool());
-  }
-
-  return host_bufs;
+  return ptrs;
 }
 
 /// Upload a flat host buffer to a new gpu_column.
