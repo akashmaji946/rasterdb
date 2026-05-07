@@ -36,7 +36,9 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
     : cache_size_per_gpu(cache_size),
       processing_size_per_gpu(processing_size),
       processing_size_per_cpu(cpu_size),
-      cpuProcessing(nullptr)
+      download_size_per_cpu(cpu_size),
+      cpuProcessing(nullptr),
+      cpuDownload(nullptr)
 {
   RASTERDB_LOG_INFO("Initializing GPUBufferManager: cache={} MB, processing={} MB, staging={} MB",
                     cache_size / (1024 * 1024),
@@ -74,6 +76,24 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
   RASTERDB_LOG_INFO("  CPU staging: {}MB host-visible buffer allocated (mapped={})",
                     cpu_size / (1024 * 1024), (void*)cpuProcessing);
 
+  // 2b. CPU Download: host-cached buffer for fast GPU→CPU readback.
+  //     Unlike cpuStaging (WC, fast writes), this uses HOST_CACHED memory
+  //     so CPU reads achieve full memory bandwidth (~20 GB/s) instead of
+  //     slow WC reads (~0.26 GB/s). Matches CUDA's internal cudaMemcpy D2H staging.
+  _cpu_download_alloc = mr->allocate(
+      cpu_size,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+      VMA_MEMORY_USAGE_CPU_TO_GPU);  // Triggers HOST_CACHED path in vulkan_memory_resource
+  if (!_cpu_download_alloc.mapped_ptr) {
+    mr->deallocate(_cpu_staging_alloc);
+    mr->deallocate(_gpu_cache_alloc);
+    throw std::runtime_error("GPUBufferManager: failed to map CPU download buffer");
+  }
+  cpuDownload = reinterpret_cast<uint8_t*>(_cpu_download_alloc.mapped_ptr);
+  RASTERDB_LOG_INFO("  CPU download: {}MB host-cached buffer allocated (mapped={})",
+                    cpu_size / (1024 * 1024), (void*)cpuDownload);
+
   // 3. GPU Processing: device-local buffer (equivalent of Sirius's RMM pool for gpuProcessing)
   //    Used for intermediate GPU computation results (reset between queries).
   _gpu_processing_alloc = mr->allocate(
@@ -95,6 +115,7 @@ GPUBufferManager::~GPUBufferManager() {
   auto* mr = ctx.host_resource();
   // Deallocate in reverse order
   if (_gpu_processing_alloc.buffer) mr->deallocate(_gpu_processing_alloc);
+  if (_cpu_download_alloc.buffer) mr->deallocate(_cpu_download_alloc);
   if (_cpu_staging_alloc.buffer) mr->deallocate(_cpu_staging_alloc);
   if (_gpu_cache_alloc.buffer) mr->deallocate(_gpu_cache_alloc);
   _initialized = false;

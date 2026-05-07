@@ -111,7 +111,6 @@ std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const
   struct DeviceCol { size_t col_idx; size_t bytes; };
   std::vector<DeviceCol> device_cols;
   std::vector<size_t> col_bytes(ncols);
-  size_t max_device_col_bytes = 0;
 
   for (size_t c = 0; c < ncols; c++) {
     auto& col = table.col(c);
@@ -125,23 +124,22 @@ std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const
       std::memcpy(host_bufs[c].data(), col.data.mapped_data(), col_bytes[c]);
     } else {
       device_cols.push_back({c, col_bytes[c]});
-      max_device_col_bytes = std::max(max_device_col_bytes, col_bytes[c]);
     }
   }
 
   if (device_cols.empty()) return host_bufs;
 
-  // Allocate ONE reusable staging buffer sized to the largest device-resident
-  // column. A single 1.8GB staging allocation was unstable on this path, while
-  // the existing per-column 600MB download_column path is known to work. This
-  // preserves the safe copy size while eliminating repeated VMA alloc/dealloc.
-  auto* mr = ctx.host_resource();
-  auto staging = mr->allocate(max_device_col_bytes,
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
-  if (!staging.mapped_ptr) {
-    mr->deallocate(staging);
-    throw std::runtime_error("batch_download_columns: failed to map staging buffer");
-  }
+  // Use the pre-allocated HOST_CACHED download buffer (4GB, persistently mapped).
+  // Key insight: the old staging buffer was write-combined (WC) memory — CPU reads
+  // from WC are ~260 MB/s. The download buffer uses HOST_CACHED memory so CPU reads
+  // hit full DDR bandwidth (~20 GB/s). Combined with zero VMA alloc/dealloc overhead,
+  // this matches CUDA's cudaMemcpy D2H performance (pure PCIe + memcpy).
+  auto& bufmgr = GPUBufferManager::GetInstance();
+  rasterdf::allocation_info staging{};
+  staging.buffer     = bufmgr.cpuDownloadBuffer();
+  staging.mapped_ptr = bufmgr.cpuDownload;
+  staging.offset     = 0;
+  staging.size       = bufmgr.download_size_per_cpu;
 
   for (auto& dc : device_cols) {
     auto& col = table.col(dc.col_idx);
@@ -155,7 +153,6 @@ std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const
       ctx.device(), ctx.queue(), ctx.command_pool());
   }
 
-  mr->deallocate(staging);
   return host_bufs;
 }
 

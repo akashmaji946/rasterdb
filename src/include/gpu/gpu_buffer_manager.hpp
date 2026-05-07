@@ -50,7 +50,8 @@ public:
 
   // ---- Pre-allocated region pointers ----
   // cpuProcessing is host-mapped (staging); gpuCache/gpuProcessing are device-only.
-  uint8_t* cpuProcessing;        // host-visible, persistently mapped
+  uint8_t* cpuProcessing;        // host-visible, persistently mapped (WC — fast writes)
+  uint8_t* cpuDownload;          // host-cached, persistently mapped (fast CPU reads)
 
   // Bump pointers (byte offsets into each region)
   std::atomic<size_t> gpuCachingPointer{0};
@@ -60,6 +61,7 @@ public:
   size_t cache_size_per_gpu;
   size_t processing_size_per_gpu;
   size_t processing_size_per_cpu;
+  size_t download_size_per_cpu;
 
   // ---- Bump allocators (matching Sirius API) ----
 
@@ -100,6 +102,7 @@ public:
   // ---- Vulkan buffer handles (for vkCmdCopyBuffer) ----
   VkBuffer gpuCacheBuffer()     const { return _gpu_cache_alloc.buffer; }
   VkBuffer cpuStagingBuffer()   const { return _cpu_staging_alloc.buffer; }
+  VkBuffer cpuDownloadBuffer()  const { return _cpu_download_alloc.buffer; }
   VkBuffer gpuProcessingBuffer() const { return _gpu_processing_alloc.buffer; }
 
   VkDeviceAddress gpuCacheAddress()      const { return _gpu_cache_alloc.address; }
@@ -121,6 +124,7 @@ private:
   // VMA allocations (one big buffer per region)
   rasterdf::allocation_info _gpu_cache_alloc{};
   rasterdf::allocation_info _cpu_staging_alloc{};
+  rasterdf::allocation_info _cpu_download_alloc{};   // HOST_CACHED for fast CPU reads
   rasterdf::allocation_info _gpu_processing_alloc{};
 
   static bool _initialized;
