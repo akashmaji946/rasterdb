@@ -24,7 +24,7 @@ static constexpr int32_t GROUPBY_COMPOSITE_M_I32 = 10007;
 static constexpr int64_t GROUPBY_COMPOSITE_M_I64 = 100000007LL;
 
 // Toggle between compute-shader groupby and mesh-shader gfxm groupby
-static constexpr bool USE_SIMPLE_GFX_AGGR = true;
+static constexpr bool USE_SIMPLE_GFX_AGGR = false;
 
 void gpu_executor::execute_grouped_aggregate(
   const gpu_table& input,

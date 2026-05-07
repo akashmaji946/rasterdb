@@ -13,7 +13,7 @@ namespace gpu {
 // ============================================================================
 
 // Toggle between compute-shader hash join and graphics-pipeline simple garuda join
-static constexpr bool USE_SIMPLE_GFX_JOIN = true;
+static constexpr bool USE_SIMPLE_GFX_JOIN = false;
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
