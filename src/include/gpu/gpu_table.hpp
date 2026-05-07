@@ -120,6 +120,11 @@ std::unique_ptr<gpu_table> gpu_table_from_rdf(std::unique_ptr<rasterdf::table> t
 /// Returns the number of bytes written.
 size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_t dst_size);
 
+/// Batch-download all columns of a gpu_table to host vectors using the pre-allocated
+/// GPUBufferManager staging buffer. Avoids per-column VMA staging alloc/dealloc overhead.
+/// Returns a vector of host buffers, one per column.
+std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const gpu_table& table);
+
 /// Allocate a gpu_column of given type and size, uninitialized.
 gpu_column allocate_column(gpu_context& ctx, rasterdf::data_type type, rasterdf::size_type num_rows);
 

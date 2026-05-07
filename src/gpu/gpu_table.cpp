@@ -8,6 +8,7 @@
 #include "log/logging.hpp"
 
 #include <duckdb/common/types/vector.hpp>
+#include <algorithm>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -97,6 +98,65 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
       dst, bytes, ctx.device(), ctx.queue(), ctx.command_pool());
   }
   return bytes;
+}
+
+std::vector<std::vector<uint8_t>> batch_download_columns(gpu_context& ctx, const gpu_table& table)
+{
+  size_t ncols = table.num_columns();
+  std::vector<std::vector<uint8_t>> host_bufs(ncols);
+
+  if (table.num_rows() == 0) return host_bufs;
+
+  // Compute per-column byte sizes, handle host-only / ReBAR columns immediately.
+  struct DeviceCol { size_t col_idx; size_t bytes; };
+  std::vector<DeviceCol> device_cols;
+  std::vector<size_t> col_bytes(ncols);
+  size_t max_device_col_bytes = 0;
+
+  for (size_t c = 0; c < ncols; c++) {
+    auto& col = table.col(c);
+    col_bytes[c] = static_cast<size_t>(col.num_rows) * rdf_type_size(col.type.id);
+    host_bufs[c].resize(col_bytes[c]);
+
+    if (col.is_host_only) {
+      std::memcpy(host_bufs[c].data(), col.host_data.data(), col_bytes[c]);
+    } else if (col.data.mapped_data()) {
+      // ReBAR path: direct memcpy from host-visible device memory
+      std::memcpy(host_bufs[c].data(), col.data.mapped_data(), col_bytes[c]);
+    } else {
+      device_cols.push_back({c, col_bytes[c]});
+      max_device_col_bytes = std::max(max_device_col_bytes, col_bytes[c]);
+    }
+  }
+
+  if (device_cols.empty()) return host_bufs;
+
+  // Allocate ONE reusable staging buffer sized to the largest device-resident
+  // column. A single 1.8GB staging allocation was unstable on this path, while
+  // the existing per-column 600MB download_column path is known to work. This
+  // preserves the safe copy size while eliminating repeated VMA alloc/dealloc.
+  auto* mr = ctx.host_resource();
+  auto staging = mr->allocate(max_device_col_bytes,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+  if (!staging.mapped_ptr) {
+    mr->deallocate(staging);
+    throw std::runtime_error("batch_download_columns: failed to map staging buffer");
+  }
+
+  for (auto& dc : device_cols) {
+    auto& col = table.col(dc.col_idx);
+    if (col.cached_buffer != VK_NULL_HANDLE) {
+      download_column(ctx, col, host_bufs[dc.col_idx].data(), dc.bytes);
+      continue;
+    }
+
+    const_cast<rasterdf::device_buffer&>(col.data).copy_to_host_with_staging(
+      host_bufs[dc.col_idx].data(), dc.bytes, staging,
+      ctx.device(), ctx.queue(), ctx.command_pool());
+  }
+
+  mr->deallocate(staging);
+  return host_bufs;
 }
 
 /// Upload a flat host buffer to a new gpu_column.

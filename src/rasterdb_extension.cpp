@@ -45,6 +45,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 namespace duckdb {
 
@@ -133,6 +134,10 @@ struct RasterDBQueryData : public TableFunctionData {
   string query;
   bool finished = false;
   bool attempted = false;
+
+  // Bulk host-side cache: one contiguous buffer per column, downloaded once.
+  std::vector<std::vector<uint8_t>> host_columns_cache;
+  bool host_cache_ready = false;
 };
 
 static unique_ptr<FunctionData> GPUExecutionBind(ClientContext& context,
@@ -164,6 +169,8 @@ static void GPUExecutionFunction(ClientContext& context,
                                   DataChunk& output)
 {
   auto& data = data_p.bind_data->CastNoConst<RasterDBQueryData>();
+  static std::mutex gpu_execution_mutex;
+  std::lock_guard<std::mutex> gpu_execution_lock(gpu_execution_mutex);
   if (data.finished) { return; }
 
   // First call: attempt GPU execution, fall back to CPU on failure
@@ -201,8 +208,25 @@ static void GPUExecutionFunction(ClientContext& context,
         data.chunk_offset = 0;
 
         auto t_total_end = std::chrono::high_resolution_clock::now();
-        RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", "TOTAL gpu_execute",
+        RASTERDB_LOG_INFO("[TIMER] {:<30s} {:8.2f} ms", "TOTAL gpu_execute",
                 std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count());
+
+        // Bulk-download all GPU result columns to host memory.
+        // Uses the pre-allocated GPUBufferManager staging buffer to avoid
+        // per-column VMA alloc/dealloc of huge staging buffers.
+        // All workspace pool columns share ONE VkBuffer with different offsets.
+        if (data.result_table && data.result_table->num_rows() > 0) {
+          auto t_dl_start = std::chrono::high_resolution_clock::now();
+          // Use batch_download_columns: batches all GPU→staging copies in ONE
+          // Vulkan submit using the pre-allocated staging buffer. Eliminates per-column
+          // VMA alloc/dealloc of ~600MB staging buffers (the bottleneck).
+          data.host_columns_cache = rasterdb::gpu::batch_download_columns(gpu_ctx, *data.result_table);
+
+          data.host_cache_ready = true;
+          auto t_dl_end = std::chrono::high_resolution_clock::now();
+          RASTERDB_LOG_INFO("[TIMER] {:<30s} {:8.2f} ms", "  bulk_download_to_host",
+                  std::chrono::duration<double, std::milli>(t_dl_end - t_dl_start).count());
+        }
 
         RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf)");
       } catch (duckdb::NotImplementedException& e) {
@@ -225,23 +249,26 @@ static void GPUExecutionFunction(ClientContext& context,
 
   // Fetch next chunk from whichever result we have
   if (data.result_table) {
-    // GPU LAZY STREAMING PIPELINE!
     idx_t available = data.result_table->num_rows();
     if (data.chunk_offset >= available) {
       output.SetCardinality(0);
       data.finished = true;
+      // Release host cache memory
+      data.host_columns_cache.clear();
+      data.host_columns_cache.shrink_to_fit();
       return;
     }
     
     idx_t chunk_size = duckdb::MinValue<idx_t>(STANDARD_VECTOR_SIZE, available - data.chunk_offset);
     output.SetCardinality(chunk_size);
-    
-    auto& gpu_ctx = rasterdb::gpu::gpu_context::instance();
 
     for (size_t c = 0; c < data.result_table->num_columns(); c++) {
       auto& col = data.result_table->col(c);
       size_t elem_size = rasterdb::gpu::rdf_type_size(col.type.id);
       auto dst = duckdb::FlatVector::GetData(output.data[c]);
+
+      // Source pointer: from bulk-downloaded host cache
+      const uint8_t* src = data.host_columns_cache[c].data() + data.chunk_offset * elem_size;
 
       auto duckdb_tid = output.data[c].GetType().id();
       auto rdf_tid = col.type.id;
@@ -254,31 +281,15 @@ static void GPUExecutionFunction(ClientContext& context,
       if (rdf_tid == rasterdf::type_id::FLOAT64 && duckdb_tid == duckdb::LogicalTypeId::DOUBLE) types_match = true;
 
       if (types_match) {
-        // Direct copy — types match in layout
-        if (col.is_host_only) {
-          std::memcpy(dst, col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
-        } else {
-          const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
-              dst, chunk_size * elem_size, data.chunk_offset * elem_size,
-              gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
-        }
+        // Direct memcpy from host cache — no GPU transfer needed
+        std::memcpy(dst, src, chunk_size * elem_size);
       } else {
-        // Need type conversion — download to temp buffer first
-        std::vector<uint8_t> tmp(chunk_size * elem_size);
-        if (col.is_host_only) {
-            std::memcpy(tmp.data(), col.host_data.data() + data.chunk_offset * elem_size, chunk_size * elem_size);
-        } else {
-            const_cast<rasterdf::device_buffer&>(col.data).copy_to_host(
-                tmp.data(), chunk_size * elem_size, data.chunk_offset * elem_size,
-                gpu_ctx.device(), gpu_ctx.queue(), gpu_ctx.command_pool());
-        }
-
+        // Type conversion from host cache
         if (duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
-          // INT64 or INT32 → HUGEINT
           if (rdf_tid == rasterdf::type_id::INT64) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int64_t val;
-                std::memcpy(&val, tmp.data() + r * sizeof(int64_t), sizeof(int64_t));
+                std::memcpy(&val, src + r * sizeof(int64_t), sizeof(int64_t));
                 duckdb::hugeint_t hval;
                 hval.lower = static_cast<uint64_t>(val);
                 hval.upper = val < 0 ? -1 : 0;
@@ -287,7 +298,7 @@ static void GPUExecutionFunction(ClientContext& context,
           } else {
             for (size_t r = 0; r < chunk_size; r++) {
                 int32_t val;
-                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
                 duckdb::hugeint_t hval;
                 hval.lower = static_cast<uint64_t>(val < 0 ? -static_cast<int64_t>(-val) : val);
                 hval.upper = val < 0 ? -1 : 0;
@@ -295,48 +306,43 @@ static void GPUExecutionFunction(ClientContext& context,
             }
           }
         } else if (duckdb_tid == duckdb::LogicalTypeId::DOUBLE) {
-          // INT64 → DOUBLE or FLOAT32 → DOUBLE or INT32 → DOUBLE
           if (rdf_tid == rasterdf::type_id::INT64) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int64_t val;
-                std::memcpy(&val, tmp.data() + r * sizeof(int64_t), sizeof(int64_t));
+                std::memcpy(&val, src + r * sizeof(int64_t), sizeof(int64_t));
                 double dval = static_cast<double>(val);
                 std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
             }
           } else if (rdf_tid == rasterdf::type_id::FLOAT32) {
             for (size_t r = 0; r < chunk_size; r++) {
                 float val;
-                std::memcpy(&val, tmp.data() + r * sizeof(float), sizeof(float));
+                std::memcpy(&val, src + r * sizeof(float), sizeof(float));
                 double dval = static_cast<double>(val);
                 std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
             }
           } else if (rdf_tid == rasterdf::type_id::INT32) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int32_t val;
-                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
                 double dval = static_cast<double>(val);
                 std::memcpy(dst + r * sizeof(double), &dval, sizeof(double));
             }
           } else {
-            // FLOAT64 → DOUBLE: same layout, direct copy
-            std::memcpy(dst, tmp.data(), chunk_size * elem_size);
+            std::memcpy(dst, src, chunk_size * elem_size);
           }
         } else if (duckdb_tid == duckdb::LogicalTypeId::BIGINT) {
-          // INT32 → BIGINT
           if (rdf_tid == rasterdf::type_id::INT32) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int32_t val;
-                std::memcpy(&val, tmp.data() + r * sizeof(int32_t), sizeof(int32_t));
+                std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
                 int64_t wide = static_cast<int64_t>(val);
                 std::memcpy(dst + r * sizeof(int64_t), &wide, sizeof(int64_t));
             }
           } else {
-            // INT64 → BIGINT: same layout
-            std::memcpy(dst, tmp.data(), chunk_size * elem_size);
+            std::memcpy(dst, src, chunk_size * elem_size);
           }
         } else {
-          // Fallback: direct copy (sizes should match)
-          std::memcpy(dst, tmp.data(), chunk_size * elem_size);
+          std::memcpy(dst, src, chunk_size * elem_size);
         }
       }
     }
@@ -420,9 +426,9 @@ static void LoadInternal(ExtensionLoader& loader)
 
     // Auto-initialize BufferManager with 2GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        2048ULL * 1024 * 1024 * 1, 
-        2048ULL * 1024 * 1024 * 1, 
-        2048ULL * 1024 * 1024 * 1);
+        2048ULL * 1024 * 1024 * 2, 
+        2048ULL * 1024 * 1024 * 2, 
+        2048ULL * 1024 * 1024 * 2);
     (void)bufMgr;
 
     RasterdbExtension::buffer_is_initialized = true;
