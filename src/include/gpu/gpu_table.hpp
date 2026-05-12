@@ -34,6 +34,12 @@ struct gpu_column {
   std::vector<uint8_t> host_data;
   bool is_host_only{false};
 
+  /// String column support: offsets (num_rows+1 int32) + chars (flat UTF-8 bytes)
+  rasterdf::device_buffer str_offsets;
+  rasterdf::device_buffer str_chars;
+  int32_t str_total_chars{0};
+  bool is_string() const { return type.id == rasterdf::type_id::STRING; }
+
   /// For columns backed by GPUBufferManager cache (no owned device_buffer).
   /// When > 0, this column references a sub-region of the buffer manager's gpuCache.
   VkDeviceAddress cached_address{0};

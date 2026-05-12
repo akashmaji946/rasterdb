@@ -73,8 +73,40 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   auto left_key_idx  = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
   auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
 
-  auto left_key_view  = left_table->col(left_key_idx).view();
-  auto right_key_view = right_table->col(right_key_idx).view();
+  // If join keys are STRING, hash them to INT32 first
+  gpu_column left_hash_col, right_hash_col;
+  bool string_join = left_table->col(left_key_idx).is_string();
+
+  if (string_join) {
+    auto& lk = left_table->col(left_key_idx);
+    auto& rk = right_table->col(right_key_idx);
+    uint32_t ln = static_cast<uint32_t>(lk.num_rows);
+    uint32_t rn = static_cast<uint32_t>(rk.num_rows);
+
+    left_hash_col = allocate_column(_ctx, {rasterdf::type_id::INT32}, ln);
+    right_hash_col = allocate_column(_ctx, {rasterdf::type_id::INT32}, rn);
+
+    string_hash_pc lhpc{};
+    lhpc.offsets_ptr = lk.str_offsets.data();
+    lhpc.chars_ptr = lk.str_chars.data();
+    lhpc.output_ptr = left_hash_col.address();
+    lhpc.num_rows = ln;
+    _ctx.dispatcher().dispatch_string_hash(lhpc);
+
+    string_hash_pc rhpc{};
+    rhpc.offsets_ptr = rk.str_offsets.data();
+    rhpc.chars_ptr = rk.str_chars.data();
+    rhpc.output_ptr = right_hash_col.address();
+    rhpc.num_rows = rn;
+    _ctx.dispatcher().dispatch_string_hash(rhpc);
+
+    RASTERDB_LOG_DEBUG("[RDB_DEBUG] STRING JOIN: hashed L={} R={} rows", ln, rn);
+  }
+
+  auto left_key_view  = string_join ? left_hash_col.view()
+                                     : left_table->col(left_key_idx).view();
+  auto right_key_view = string_join ? right_hash_col.view()
+                                     : right_table->col(right_key_idx).view();
   RASTERDB_LOG_DEBUG(
     "[RDB_DEBUG] JOIN keys: L col[{}] addr=0x{:x} size={}, R col[{}] addr=0x{:x} size={}",
     static_cast<size_t>(left_key_idx),
@@ -153,32 +185,123 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   auto left_idx_view  = left_indices->view();
   auto right_idx_view = right_indices->view();
 
-  // Gather from both tables using the matched indices
-  auto left_gathered = rasterdf::gather(
-    left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-  auto right_gathered = rasterdf::gather(
-    right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+  // Helper: gather a single string column using index array
+  auto gather_string_col = [&](const gpu_column& in_col, const rasterdf::column_view& idx_view,
+                                rasterdf::size_type count) -> gpu_column {
+    auto& disp = _ctx.dispatcher();
+    auto* mr = _ctx.workspace_mr();
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    uint32_t nc = static_cast<uint32_t>(count);
 
-  auto left_cols  = left_gathered->extract();
-  auto right_cols = right_gathered->extract();
+    string_lengths_pc lpc{};
+    lpc.offsets_ptr = in_col.str_offsets.data();
+    lpc.indices_ptr = idx_view.data();
+    lpc.num_indices = nc;
+    rasterdf::device_buffer lengths_buf(mr, nc * sizeof(int32_t), usage);
+    lpc.output_ptr = lengths_buf.data();
+    disp.dispatch_string_lengths(lpc);
 
-  // Build result: left columns then right columns
-  auto result          = std::make_unique<gpu_table>();
+    rasterdf::device_buffer out_offsets(mr, (nc + 1) * sizeof(int32_t), usage);
+    disp.fill_buffer(out_offsets.buffer(), 0, (nc + 1) * sizeof(int32_t));
+    disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(), nc * sizeof(int32_t), 0, sizeof(int32_t));
+
+    uint32_t scan_elems = nc + 1;
+    uint32_t scan_ngroups = (scan_elems + 255) / 256;
+    rasterdf::device_buffer scan_bsums(mr, scan_ngroups * sizeof(uint32_t), usage);
+    rasterdf::device_buffer scan_total(mr, sizeof(uint32_t), usage);
+    prefix_scan_pc opc{};
+    opc.data_ptr = out_offsets.data();
+    opc.block_sums_ptr = scan_bsums.data();
+    opc.total_sum_ptr = scan_total.data();
+    opc.numElements = scan_elems;
+    opc.blockCount = scan_ngroups;
+    disp.dispatch_prefix_scan_local(opc, scan_ngroups);
+    disp.dispatch_prefix_scan_global(opc);
+    disp.dispatch_prefix_scan_add(opc, scan_ngroups);
+
+    int32_t total_chars = 0;
+    scan_total.copy_to_host(&total_chars, sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+    rasterdf::device_buffer out_chars(mr, std::max(total_chars, 1), usage);
+    string_copy_pc cpc{};
+    cpc.in_offsets_ptr = in_col.str_offsets.data();
+    cpc.in_chars_ptr = in_col.str_chars.data();
+    cpc.indices_ptr = idx_view.data();
+    cpc.out_offsets_ptr = out_offsets.data();
+    cpc.out_chars_ptr = out_chars.data();
+    cpc.num_indices = nc;
+    disp.dispatch_string_copy(cpc);
+
+    gpu_column out;
+    out.type = rasterdf::data_type{rasterdf::type_id::STRING};
+    out.num_rows = count;
+    out.str_offsets = std::move(out_offsets);
+    out.str_chars = std::move(out_chars);
+    out.str_total_chars = total_chars;
+    return out;
+  };
+
+  // Check if any columns are STRING — if so, we can't use rasterdf::gather for them
+  bool any_left_string = false, any_right_string = false;
+  for (size_t i = 0; i < left_table->num_columns(); i++)
+    if (left_table->col(i).is_string()) { any_left_string = true; break; }
+  for (size_t i = 0; i < right_table->num_columns(); i++)
+    if (right_table->col(i).is_string()) { any_right_string = true; break; }
+
+  // Build result table
+  auto result = std::make_unique<gpu_table>();
   result->duckdb_types = op.types;
-
-  size_t total_cols = left_cols.size() + right_cols.size();
+  size_t total_cols = left_table->num_columns() + right_table->num_columns();
   result->columns.resize(total_cols);
-  for (size_t i = 0; i < left_cols.size(); i++) {
-    result->columns[i] = gpu_column_from_rdf(std::move(*left_cols[i]));
+
+  if (!any_left_string) {
+    auto left_gathered = rasterdf::gather(
+      left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    auto left_cols = left_gathered->extract();
+    for (size_t i = 0; i < left_cols.size(); i++)
+      result->columns[i] = gpu_column_from_rdf(std::move(*left_cols[i]));
+  } else {
+    for (size_t i = 0; i < left_table->num_columns(); i++) {
+      if (left_table->col(i).is_string()) {
+        result->columns[i] = gather_string_col(left_table->col(i), left_idx_view, match_count);
+      } else {
+        auto col_view = left_table->col(i).view();
+        std::vector<rasterdf::column_view> cv = {col_view};
+        rasterdf::table_view tv(cv);
+        auto gathered = rasterdf::gather(tv, left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+        auto cols = gathered->extract();
+        result->columns[i] = gpu_column_from_rdf(std::move(*cols[0]));
+      }
+    }
   }
-  for (size_t i = 0; i < right_cols.size(); i++) {
-    result->columns[left_cols.size() + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
+
+  if (!any_right_string) {
+    auto right_gathered = rasterdf::gather(
+      right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    auto right_cols = right_gathered->extract();
+    for (size_t i = 0; i < right_cols.size(); i++)
+      result->columns[left_table->num_columns() + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
+  } else {
+    for (size_t i = 0; i < right_table->num_columns(); i++) {
+      if (right_table->col(i).is_string()) {
+        result->columns[left_table->num_columns() + i] =
+            gather_string_col(right_table->col(i), right_idx_view, match_count);
+      } else {
+        auto col_view = right_table->col(i).view();
+        std::vector<rasterdf::column_view> cv = {col_view};
+        rasterdf::table_view tv(cv);
+        auto gathered = rasterdf::gather(tv, right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+        auto cols = gathered->extract();
+        result->columns[left_table->num_columns() + i] = gpu_column_from_rdf(std::move(*cols[0]));
+      }
+    }
   }
 
   RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} cols", match_count, total_cols);
 
   // Post-filter on remaining conditions (multi-condition join)
-  size_t num_left_cols = left_cols.size();
+  size_t num_left_cols = left_table->num_columns();
   for (size_t ci = 1; ci < op.conditions.size(); ci++) {
     auto& cond  = op.conditions[ci];
     auto lk_idx = unwrap_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;

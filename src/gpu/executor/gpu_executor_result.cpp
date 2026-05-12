@@ -4,6 +4,7 @@
  */
 
 #include "gpu/gpu_executor_internal.hpp"
+#include <duckdb/common/types/vector.hpp>
 
 namespace rasterdb {
 namespace gpu {
@@ -33,6 +34,9 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
   // Download all column data to host buffers
   auto t_dl = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<uint8_t>> host_data(num_cols);
+  // String column host data: offsets + chars
+  std::vector<std::vector<int32_t>> host_str_offsets(num_cols);
+  std::vector<std::vector<uint8_t>> host_str_chars(num_cols);
   size_t total_dl_bytes = 0;
   for (size_t c = 0; c < num_cols; c++) {
     auto& col = table->col(c);
@@ -41,6 +45,28 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
       host_data[c] = col.host_data;
       RASTERDB_LOG_DEBUG("[RDB_DEBUG]     col[{}] host-only, {} bytes (no GPU download)",
                          c, host_data[c].size());
+    } else if (col.is_string()) {
+      // String column: download offsets + chars separately
+      size_t offsets_bytes = (static_cast<size_t>(col.num_rows) + 1) * sizeof(int32_t);
+      size_t chars_bytes = static_cast<size_t>(col.str_total_chars);
+      host_str_offsets[c].resize(col.num_rows + 1);
+      host_str_chars[c].resize(chars_bytes);
+      if (offsets_bytes > 0) {
+        // Download offsets
+        gpu_column tmp_offsets_col;
+        tmp_offsets_col.data = rasterdf::device_buffer(); // empty
+        tmp_offsets_col.type = rasterdf::data_type{rasterdf::type_id::INT32};
+        tmp_offsets_col.num_rows = col.num_rows + 1;
+        // Use direct VkBuffer copy
+        col.str_offsets.copy_to_host(host_str_offsets[c].data(), offsets_bytes,
+                                      _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        total_dl_bytes += offsets_bytes;
+      }
+      if (chars_bytes > 0) {
+        col.str_chars.copy_to_host(host_str_chars[c].data(), chars_bytes,
+                                    _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        total_dl_bytes += chars_bytes;
+      }
     } else {
       size_t bytes = col.byte_size();
       host_data[c].resize(bytes);
@@ -68,13 +94,30 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
     chunk.SetCardinality(count);
 
     for (size_t c = 0; c < num_cols; c++) {
-      size_t rdf_elem_size = rdf_type_size(table->col(c).type.id);
+      auto rdf_tid = table->col(c).type.id;
+      auto duckdb_tid = types[c].id();
+
+      // String column: reconstruct DuckDB strings from offsets + chars
+      if (rdf_tid == rasterdf::type_id::STRING) {
+        auto& offsets = host_str_offsets[c];
+        auto& chars = host_str_chars[c];
+        auto str_dst = duckdb::FlatVector::GetData<duckdb::string_t>(chunk.data[c]);
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          int32_t str_start = offsets[offset + r];
+          int32_t str_end = offsets[offset + r + 1];
+          int32_t str_len = str_end - str_start;
+          str_dst[r] = duckdb::StringVector::AddString(
+              chunk.data[c],
+              reinterpret_cast<const char*>(chars.data() + str_start),
+              static_cast<uint32_t>(str_len));
+        }
+        continue;
+      }
+
+      size_t rdf_elem_size = rdf_type_size(rdf_tid);
       size_t byte_offset = static_cast<size_t>(offset) * rdf_elem_size;
       const uint8_t* src = host_data[c].data() + byte_offset;
       auto dst = reinterpret_cast<uint8_t*>(chunk.data[c].GetData());
-
-      auto rdf_tid = table->col(c).type.id;
-      auto duckdb_tid = types[c].id();
 
       // If the rasterdf type matches the DuckDB type in size, direct copy
       bool needs_cast = false;

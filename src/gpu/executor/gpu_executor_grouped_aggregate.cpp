@@ -1,7 +1,7 @@
 /*
  * Copyright 2025, RasterDB Contributors.
  * Split from src/gpu/gpu_executor.cpp.
- */
+*/
 
 #include "gpu/gpu_executor_internal.hpp"
 
@@ -75,7 +75,26 @@ void gpu_executor::execute_grouped_aggregate(
   bool single_col_int32 =
     (num_group_cols == 1 && input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT32);
 
-  if (single_col_int32) {
+  // STRING groupby key: hash string keys to INT32, then groupby on hashes
+  bool single_col_string =
+    (num_group_cols == 1 && input.col(group_col_indices[0]).is_string());
+  gpu_column string_hash_key;  // keeps hash column alive
+
+  if (single_col_string) {
+    // Hash strings → INT32 for groupby
+    auto& str_col = input.col(group_col_indices[0]);
+    string_hash_key = allocate_column(_ctx, {rasterdf::type_id::INT32}, n_rows);
+
+    string_hash_pc hpc{};
+    hpc.offsets_ptr = str_col.str_offsets.data();
+    hpc.chars_ptr = str_col.str_chars.data();
+    hpc.output_ptr = string_hash_key.address();
+    hpc.num_rows = static_cast<uint32_t>(n_rows);
+    _ctx.dispatcher().dispatch_string_hash(hpc);
+
+    key_col_ptr = &string_hash_key;
+    RASTERDB_LOG_DEBUG("[RDB_DEBUG] GROUP BY: hashed STRING key -> INT32, {} rows", n_rows);
+  } else if (single_col_int32) {
     key_col_ptr = &input.col(group_col_indices[0]);
   } else if (num_group_cols == 1 && !USE_SIMPLE_GFX_AGGR &&
              input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT64) {
@@ -613,7 +632,95 @@ void gpu_executor::execute_grouped_aggregate(
             "     [GFXM] Upload sorted keys time: {:.2f} ms",
             std::chrono::duration<double, std::milli>(t_upload_keys_end - t_upload_keys_start)
               .count());
-          output.columns[0] = std::move(sorted_key_col);
+          if (single_col_string) {
+            // Replace INT32 hash keys with original STRING keys via gather
+            // Find first occurrence of each unique hash in the original hash array
+            auto& str_col = input.col(group_col_indices[0]);
+            auto& hash_keys = sorted_key_col; // these are the unique hash INT32 keys
+
+            rasterdf::device_buffer first_idx_buf(
+                _ctx.workspace_mr(), out_num_groups * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+            find_first_index_pc fpc{};
+            fpc.all_keys_ptr = string_hash_key.address(); // full hash array
+            fpc.unique_keys_ptr = hash_keys.address();    // unique hash keys
+            fpc.first_idx_ptr = first_idx_buf.data();
+            fpc.numElements = static_cast<uint32_t>(n_rows);
+            fpc.numUnique = out_num_groups;
+            _ctx.dispatcher().dispatch_find_first_index(fpc, (out_num_groups + 255) / 256);
+
+            // Gather original strings using first_idx
+            string_lengths_pc lpc{};
+            lpc.offsets_ptr = str_col.str_offsets.data();
+            lpc.indices_ptr = first_idx_buf.data();
+            lpc.num_indices = out_num_groups;
+
+            rasterdf::device_buffer lengths_buf(
+                _ctx.workspace_mr(), out_num_groups * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            lpc.output_ptr = lengths_buf.data();
+            _ctx.dispatcher().dispatch_string_lengths(lpc);
+
+            rasterdf::device_buffer out_offsets(
+                _ctx.workspace_mr(), (out_num_groups + 1) * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0, (out_num_groups + 1) * sizeof(int32_t));
+            _ctx.dispatcher().copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
+                         out_num_groups * sizeof(int32_t), 0, sizeof(int32_t));
+
+            uint32_t scan_elems = out_num_groups + 1;
+            uint32_t scan_ngroups = (scan_elems + 255) / 256;
+            rasterdf::device_buffer scan_bsums(
+                _ctx.workspace_mr(), scan_ngroups * sizeof(uint32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            rasterdf::device_buffer scan_total(
+                _ctx.workspace_mr(), sizeof(uint32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+            prefix_scan_pc opc{};
+            opc.data_ptr = out_offsets.data();
+            opc.block_sums_ptr = scan_bsums.data();
+            opc.total_sum_ptr = scan_total.data();
+            opc.numElements = scan_elems;
+            opc.blockCount = scan_ngroups;
+            _ctx.dispatcher().dispatch_prefix_scan_local(opc, scan_ngroups);
+            _ctx.dispatcher().dispatch_prefix_scan_global(opc);
+            _ctx.dispatcher().dispatch_prefix_scan_add(opc, scan_ngroups);
+
+            int32_t total_out_chars = 0;
+            scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
+                                    _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+            rasterdf::device_buffer out_chars(
+                _ctx.workspace_mr(), std::max(total_out_chars, 1),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+            string_copy_pc cpc{};
+            cpc.in_offsets_ptr = str_col.str_offsets.data();
+            cpc.in_chars_ptr = str_col.str_chars.data();
+            cpc.indices_ptr = first_idx_buf.data();
+            cpc.out_offsets_ptr = out_offsets.data();
+            cpc.out_chars_ptr = out_chars.data();
+            cpc.num_indices = out_num_groups;
+            _ctx.dispatcher().dispatch_string_copy(cpc);
+
+            output.columns[0].type = rasterdf::data_type{rasterdf::type_id::STRING};
+            output.columns[0].num_rows = static_cast<rasterdf::size_type>(out_num_groups);
+            output.columns[0].str_offsets = std::move(out_offsets);
+            output.columns[0].str_chars = std::move(out_chars);
+            output.columns[0].str_total_chars = total_out_chars;
+            RASTERDB_LOG_DEBUG("[GFXM] STRING groupby: {} unique groups, {} total chars",
+                               out_num_groups, total_out_chars);
+          } else {
+            output.columns[0] = std::move(sorted_key_col);
+          }
         } else {
           // Mixed-radix decomposition or Surrogate mapping back
           RASTERDB_LOG_DEBUG("     [GFXM] Mixed-radix decomposition / Surrogate map-back");
@@ -841,7 +948,79 @@ void gpu_executor::execute_grouped_aggregate(
                                              _ctx.device(),
                                              _ctx.queue(),
                                              _ctx.command_pool());
-          output.columns[0] = std::move(sorted_key_col);
+          if (single_col_string) {
+            // Same string key reconstruction as GFXM path
+            auto& str_col = input.col(group_col_indices[0]);
+            rasterdf::device_buffer first_idx_buf(
+                _ctx.workspace_mr(), ng * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            find_first_index_pc fpc{};
+            fpc.all_keys_ptr = string_hash_key.address();
+            fpc.unique_keys_ptr = sorted_key_col.address();
+            fpc.first_idx_ptr = first_idx_buf.data();
+            fpc.numElements = static_cast<uint32_t>(n_rows);
+            fpc.numUnique = static_cast<uint32_t>(ng);
+            _ctx.dispatcher().dispatch_find_first_index(fpc, (ng + 255) / 256);
+
+            string_lengths_pc lpc{};
+            lpc.offsets_ptr = str_col.str_offsets.data();
+            lpc.indices_ptr = first_idx_buf.data();
+            lpc.num_indices = static_cast<uint32_t>(ng);
+            rasterdf::device_buffer lengths_buf(
+                _ctx.workspace_mr(), ng * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            lpc.output_ptr = lengths_buf.data();
+            _ctx.dispatcher().dispatch_string_lengths(lpc);
+
+            rasterdf::device_buffer out_offsets(
+                _ctx.workspace_mr(), (ng + 1) * sizeof(int32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0, (ng + 1) * sizeof(int32_t));
+            _ctx.dispatcher().copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
+                         ng * sizeof(int32_t), 0, sizeof(int32_t));
+            uint32_t scan_elems = static_cast<uint32_t>(ng) + 1;
+            uint32_t scan_ngroups = (scan_elems + 255) / 256;
+            rasterdf::device_buffer scan_bsums(_ctx.workspace_mr(), scan_ngroups * sizeof(uint32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            rasterdf::device_buffer scan_total(_ctx.workspace_mr(), sizeof(uint32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            prefix_scan_pc opc{};
+            opc.data_ptr = out_offsets.data();
+            opc.block_sums_ptr = scan_bsums.data();
+            opc.total_sum_ptr = scan_total.data();
+            opc.numElements = scan_elems;
+            opc.blockCount = scan_ngroups;
+            _ctx.dispatcher().dispatch_prefix_scan_local(opc, scan_ngroups);
+            _ctx.dispatcher().dispatch_prefix_scan_global(opc);
+            _ctx.dispatcher().dispatch_prefix_scan_add(opc, scan_ngroups);
+            int32_t total_out_chars = 0;
+            scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
+                                    _ctx.device(), _ctx.queue(), _ctx.command_pool());
+            rasterdf::device_buffer out_chars(
+                _ctx.workspace_mr(), std::max(total_out_chars, 1),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            string_copy_pc cpc{};
+            cpc.in_offsets_ptr = str_col.str_offsets.data();
+            cpc.in_chars_ptr = str_col.str_chars.data();
+            cpc.indices_ptr = first_idx_buf.data();
+            cpc.out_offsets_ptr = out_offsets.data();
+            cpc.out_chars_ptr = out_chars.data();
+            cpc.num_indices = static_cast<uint32_t>(ng);
+            _ctx.dispatcher().dispatch_string_copy(cpc);
+            output.columns[0].type = rasterdf::data_type{rasterdf::type_id::STRING};
+            output.columns[0].num_rows = static_cast<rasterdf::size_type>(ng);
+            output.columns[0].str_offsets = std::move(out_offsets);
+            output.columns[0].str_chars = std::move(out_chars);
+            output.columns[0].str_total_chars = total_out_chars;
+          } else {
+            output.columns[0] = std::move(sorted_key_col);
+          }
         } else {
           // Mixed-radix decomposition (INT64 composite keys, handles INT32 + FLOAT32)
           std::vector<int64_t> sorted_composite_i64(ng);

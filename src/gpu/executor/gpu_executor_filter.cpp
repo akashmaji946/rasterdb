@@ -152,55 +152,213 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
 
   // --- Step 4: Scatter each column using prefix sums ----------------------
   uint32_t scatter_groups = (n + 255) / 256;
-  
+
+  // Build gather index array from prefix scan (needed for string columns and tiny outputs)
+  // indices[j] = i where prefix[i+1] > prefix[i], i.e. the rows that passed
+  auto build_gather_indices = [&]() -> rasterdf::device_buffer {
+    // Download prefix to host, build index array, upload
+    std::vector<uint32_t> host_prefix(prefix_count);
+    prefix_buf.copy_to_host(host_prefix.data(), prefix_count * sizeof(uint32_t),
+                            _ctx.device(), _ctx.queue(), _ctx.command_pool());
+    std::vector<int32_t> indices(output_count);
+    for (uint32_t i = 0; i < n; i++) {
+      if (host_prefix[i + 1] > host_prefix[i]) {
+        indices[host_prefix[i]] = static_cast<int32_t>(i);
+      }
+    }
+    rasterdf::device_buffer idx_buf(mr, output_count * sizeof(int32_t),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+    idx_buf.copy_from_host(indices.data(), output_count * sizeof(int32_t),
+                           _ctx.device(), _ctx.queue(), _ctx.command_pool());
+    return idx_buf;
+  };
+
+  // Check if any column is STRING — if so, we need gather indices
+  bool has_string_col = false;
+  for (size_t c = 0; c < input.num_columns(); c++) {
+    if (input.col(c).is_string()) { has_string_col = true; break; }
+  }
+
+  rasterdf::device_buffer gather_idx_buf;
+  if (has_string_col || output_count < 256) {
+    gather_idx_buf = build_gather_indices();
+  }
+
   // Skip GPU scatter for very small output tables (driver crash on tiny dispatches)
   // For tiny outputs, use CPU-based scatter
   if (output_count < 256) {
     RASTERDB_LOG_DEBUG("Filter (CPU scatter for tiny output): {} -> {} rows", n, output_count);
     for (size_t c = 0; c < input.num_columns(); c++) {
       auto& in_col = input.col(c);
-      result->columns[c] = allocate_column(_ctx, in_col.type,
-                                            static_cast<rasterdf::size_type>(output_count));
-      
-      // Copy prefix to host to find which rows passed
-      std::vector<uint32_t> host_prefix(prefix_count);
-      prefix_buf.copy_to_host(host_prefix.data(), prefix_count * sizeof(uint32_t),
-                             _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      
-      // Copy input column to host (need non-const access)
-      size_t elem_size = rdf_type_size(in_col.type.id);
-      std::vector<uint8_t> host_input(n * elem_size);
-      const_cast<rasterdf::device_buffer&>(in_col.data).copy_to_host(host_input.data(), n * elem_size,
+
+      if (in_col.is_string()) {
+        // String column: use string_gather via dispatcher
+        string_lengths_pc lpc{};
+        lpc.offsets_ptr = in_col.str_offsets.data();
+        lpc.indices_ptr = gather_idx_buf.data();
+        lpc.output_ptr = 0; // will set below
+        lpc.num_indices = output_count;
+
+        rasterdf::device_buffer lengths_buf(mr, output_count * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        lpc.output_ptr = lengths_buf.data();
+        disp.dispatch_string_lengths(lpc);
+
+        // Prefix scan on lengths -> output offsets
+        rasterdf::device_buffer out_offsets(mr, (output_count + 1) * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        disp.fill_buffer(out_offsets.buffer(), 0, (output_count + 1) * sizeof(int32_t));
+        disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
+                         output_count * sizeof(int32_t), 0, sizeof(int32_t));
+
+        uint32_t scan_elems = output_count + 1;
+        uint32_t scan_ngroups = (scan_elems + 255) / 256;
+        rasterdf::device_buffer scan_bsums(mr, scan_ngroups * sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        rasterdf::device_buffer scan_total(mr, sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+        prefix_scan_pc opc{};
+        opc.data_ptr = out_offsets.data();
+        opc.block_sums_ptr = scan_bsums.data();
+        opc.total_sum_ptr = scan_total.data();
+        opc.numElements = scan_elems;
+        opc.blockCount = scan_ngroups;
+        disp.dispatch_prefix_scan_local(opc, scan_ngroups);
+        disp.dispatch_prefix_scan_global(opc);
+        disp.dispatch_prefix_scan_add(opc, scan_ngroups);
+
+        // Read total chars
+        int32_t total_out_chars = 0;
+        scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
+                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+        // Gather chars
+        rasterdf::device_buffer out_chars(mr, std::max(total_out_chars, 1),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+        string_copy_pc cpc{};
+        cpc.in_offsets_ptr = in_col.str_offsets.data();
+        cpc.in_chars_ptr = in_col.str_chars.data();
+        cpc.indices_ptr = gather_idx_buf.data();
+        cpc.out_offsets_ptr = out_offsets.data();
+        cpc.out_chars_ptr = out_chars.data();
+        cpc.num_indices = output_count;
+        disp.dispatch_string_copy(cpc);
+
+        result->columns[c].type = in_col.type;
+        result->columns[c].num_rows = static_cast<rasterdf::size_type>(output_count);
+        result->columns[c].str_offsets = std::move(out_offsets);
+        result->columns[c].str_chars = std::move(out_chars);
+        result->columns[c].str_total_chars = total_out_chars;
+      } else {
+        result->columns[c] = allocate_column(_ctx, in_col.type,
+                                              static_cast<rasterdf::size_type>(output_count));
+
+        // CPU scatter for fixed-width
+        std::vector<uint32_t> host_prefix(prefix_count);
+        prefix_buf.copy_to_host(host_prefix.data(), prefix_count * sizeof(uint32_t),
                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      
-      // Scatter on CPU
-      std::vector<uint8_t> host_output(output_count * elem_size);
-      for (uint32_t i = 0; i < n; i++) {
-        if (host_prefix[i + 1] > host_prefix[i]) {
-          uint32_t dst_idx = host_prefix[i];
-          memcpy(&host_output[dst_idx * elem_size], &host_input[i * elem_size], elem_size);
+        size_t elem_size = rdf_type_size(in_col.type.id);
+        std::vector<uint8_t> host_input(n * elem_size);
+        const_cast<rasterdf::device_buffer&>(in_col.data).copy_to_host(host_input.data(), n * elem_size,
+                                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        std::vector<uint8_t> host_output(output_count * elem_size);
+        for (uint32_t i = 0; i < n; i++) {
+          if (host_prefix[i + 1] > host_prefix[i]) {
+            uint32_t dst_idx = host_prefix[i];
+            memcpy(&host_output[dst_idx * elem_size], &host_input[i * elem_size], elem_size);
+          }
         }
+        result->columns[c].data.copy_from_host(host_output.data(), output_count * elem_size,
+                                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
       }
-      
-      // Copy output to GPU
-      result->columns[c].data.copy_from_host(host_output.data(), output_count * elem_size,
-                                            _ctx.device(), _ctx.queue(), _ctx.command_pool());
     }
   } else {
     for (size_t c = 0; c < input.num_columns(); c++) {
       auto& in_col = input.col(c);
-      result->columns[c] = allocate_column(_ctx, in_col.type,
-                                            static_cast<rasterdf::size_type>(output_count));
 
-      scatter_if_pc spc{};
-      spc.input_ptr = in_col.address();
-      spc.prefix_ptr = prefix_buf.data();
-      spc.output_ptr = result->columns[c].address();
-      spc.size = n;
-      if (rdf_type_size(in_col.type.id) == 8) {
-        disp.dispatch_scatter_if_64(spc, scatter_groups);
+      if (in_col.is_string()) {
+        // String column: same gather approach as tiny path
+        string_lengths_pc lpc{};
+        lpc.offsets_ptr = in_col.str_offsets.data();
+        lpc.indices_ptr = gather_idx_buf.data();
+        lpc.num_indices = output_count;
+
+        rasterdf::device_buffer lengths_buf(mr, output_count * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        lpc.output_ptr = lengths_buf.data();
+        disp.dispatch_string_lengths(lpc);
+
+        rasterdf::device_buffer out_offsets(mr, (output_count + 1) * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        disp.fill_buffer(out_offsets.buffer(), 0, (output_count + 1) * sizeof(int32_t));
+        disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
+                         output_count * sizeof(int32_t), 0, sizeof(int32_t));
+
+        uint32_t scan_elems = output_count + 1;
+        uint32_t scan_ngroups = (scan_elems + 255) / 256;
+        rasterdf::device_buffer scan_bsums(mr, scan_ngroups * sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        rasterdf::device_buffer scan_total(mr, sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+        prefix_scan_pc opc{};
+        opc.data_ptr = out_offsets.data();
+        opc.block_sums_ptr = scan_bsums.data();
+        opc.total_sum_ptr = scan_total.data();
+        opc.numElements = scan_elems;
+        opc.blockCount = scan_ngroups;
+        disp.dispatch_prefix_scan_local(opc, scan_ngroups);
+        disp.dispatch_prefix_scan_global(opc);
+        disp.dispatch_prefix_scan_add(opc, scan_ngroups);
+
+        int32_t total_out_chars = 0;
+        scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
+                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+        rasterdf::device_buffer out_chars(mr, std::max(total_out_chars, 1),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+
+        string_copy_pc cpc{};
+        cpc.in_offsets_ptr = in_col.str_offsets.data();
+        cpc.in_chars_ptr = in_col.str_chars.data();
+        cpc.indices_ptr = gather_idx_buf.data();
+        cpc.out_offsets_ptr = out_offsets.data();
+        cpc.out_chars_ptr = out_chars.data();
+        cpc.num_indices = output_count;
+        disp.dispatch_string_copy(cpc);
+
+        result->columns[c].type = in_col.type;
+        result->columns[c].num_rows = static_cast<rasterdf::size_type>(output_count);
+        result->columns[c].str_offsets = std::move(out_offsets);
+        result->columns[c].str_chars = std::move(out_chars);
+        result->columns[c].str_total_chars = total_out_chars;
       } else {
-        disp.dispatch_scatter_if(spc, scatter_groups);
+        result->columns[c] = allocate_column(_ctx, in_col.type,
+                                              static_cast<rasterdf::size_type>(output_count));
+
+        scatter_if_pc spc{};
+        spc.input_ptr = in_col.address();
+        spc.prefix_ptr = prefix_buf.data();
+        spc.output_ptr = result->columns[c].address();
+        spc.size = n;
+        if (rdf_type_size(in_col.type.id) == 8) {
+          disp.dispatch_scatter_if_64(spc, scatter_groups);
+        } else {
+          disp.dispatch_scatter_if(spc, scatter_groups);
+        }
       }
     }
   }

@@ -30,6 +30,7 @@ inline rasterdf::data_type to_rdf_type(const duckdb::LogicalType& type) {
     case duckdb::LogicalTypeId::TIMESTAMP: return {rasterdf::type_id::TIMESTAMP_MICROSECONDS};
     case duckdb::LogicalTypeId::DECIMAL:   return {rasterdf::type_id::FLOAT32};  // treat DECIMAL as float for GPU
     case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT64};    // best-effort for large int intermediates
+    case duckdb::LogicalTypeId::VARCHAR:   return {rasterdf::type_id::STRING};
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported type %s — falling back to CPU",
@@ -52,6 +53,7 @@ inline size_t rdf_type_size(rasterdf::type_id tid) {
     case rasterdf::type_id::TIMESTAMP_MILLISECONDS:
     case rasterdf::type_id::TIMESTAMP_MICROSECONDS:
     case rasterdf::type_id::TIMESTAMP_NANOSECONDS: return 8;
+    case rasterdf::type_id::STRING:               return 0; // variable-width; use offsets+chars
     default:
       throw duckdb::NotImplementedException(
         "RasterDB GPU: unsupported type_id %d for size computation",

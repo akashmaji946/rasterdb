@@ -162,6 +162,48 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
   return ptrs;
 }
 
+/// Upload a string column from host offsets + chars to GPU.
+static gpu_column upload_string_column(gpu_context& ctx,
+                                       rasterdf::size_type num_rows,
+                                       const std::vector<int32_t>& offsets,
+                                       const std::vector<uint8_t>& chars)
+{
+  gpu_column col;
+  col.type = rasterdf::data_type{rasterdf::type_id::STRING};
+  col.num_rows = num_rows;
+  col.str_total_chars = static_cast<int32_t>(chars.size());
+
+  size_t offsets_bytes = offsets.size() * sizeof(int32_t);
+  size_t chars_bytes = chars.empty() ? 1 : chars.size(); // at least 1 byte
+
+  col.str_offsets = rasterdf::device_buffer(ctx.workspace_mr(), offsets_bytes);
+  col.str_chars = rasterdf::device_buffer(ctx.workspace_mr(), chars_bytes);
+
+  col.str_offsets.copy_from_host(offsets.data(), offsets_bytes,
+                                  ctx.device(), ctx.queue(), ctx.command_pool());
+  if (!chars.empty()) {
+    col.str_chars.copy_from_host(chars.data(), chars.size(),
+                                  ctx.device(), ctx.queue(), ctx.command_pool());
+  }
+  return col;
+}
+
+/// Flatten a DuckDB string Vector into host offsets + chars arrays.
+static void flatten_string_vector(const duckdb::Vector& vec,
+                                  rasterdf::size_type count,
+                                  std::vector<int32_t>& offsets,
+                                  std::vector<uint8_t>& chars)
+{
+  auto str_data = duckdb::FlatVector::GetData<duckdb::string_t>(vec);
+  for (rasterdf::size_type i = 0; i < count; i++) {
+    auto& s = str_data[i];
+    auto ptr = reinterpret_cast<const uint8_t*>(s.GetData());
+    auto len = static_cast<size_t>(s.GetSize());
+    chars.insert(chars.end(), ptr, ptr + len);
+    offsets.push_back(static_cast<int32_t>(chars.size()));
+  }
+}
+
 /// Upload a flat host buffer to a new gpu_column.
 static gpu_column upload_column(gpu_context& ctx, rasterdf::data_type type,
                                 rasterdf::size_type num_rows, const void* host_data)
@@ -256,30 +298,59 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
   if (num_cols == 1 || num_threads == 1) {
     // Single-threaded path for simplicity with few columns
     for (size_t c = 0; c < num_cols; c++) {
-      std::vector<uint8_t> host_buf;
-      host_buf.reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
+      if (rdf_types[c].id == rasterdf::type_id::STRING) {
+        // String column: build offsets + chars
+        std::vector<int32_t> offsets;
+        std::vector<uint8_t> chars;
+        offsets.reserve(total_rows + 1);
+        offsets.push_back(0); // offsets[0] = 0
+        for (auto& chunk : chunks) {
+          chunk->Flatten();
+          flatten_string_vector(chunk->data[c],
+                                static_cast<rasterdf::size_type>(chunk->size()),
+                                offsets, chars);
+        }
+        table->columns[c] = upload_string_column(ctx, total_rows, offsets, chars);
+      } else {
+        std::vector<uint8_t> host_buf;
+        host_buf.reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
 
-      for (auto& chunk : chunks) {
-        chunk->Flatten(); // ensure flat vectors
-        flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
-                       rdf_types[c], host_buf);
+        for (auto& chunk : chunks) {
+          chunk->Flatten(); // ensure flat vectors
+          flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
+                         rdf_types[c], host_buf);
+        }
+        table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_buf.data());
       }
-      table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_buf.data());
     }
   } else {
     // Multi-threaded path: parallelize across columns
     std::vector<std::vector<uint8_t>> host_bufs(num_cols);
+    // String column data (per-column)
+    std::vector<std::vector<int32_t>> str_offsets_bufs(num_cols);
+    std::vector<std::vector<uint8_t>> str_chars_bufs(num_cols);
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
 
     // Create work items: each thread processes a subset of columns
     auto worker = [&](size_t start_col, size_t end_col) {
       for (size_t c = start_col; c < end_col; c++) {
-        host_bufs[c].reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
-        for (auto& chunk : chunks) {
-          chunk->Flatten(); // ensure flat vectors
-          flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
-                         rdf_types[c], host_bufs[c]);
+        if (rdf_types[c].id == rasterdf::type_id::STRING) {
+          str_offsets_bufs[c].reserve(total_rows + 1);
+          str_offsets_bufs[c].push_back(0);
+          for (auto& chunk : chunks) {
+            chunk->Flatten();
+            flatten_string_vector(chunk->data[c],
+                                  static_cast<rasterdf::size_type>(chunk->size()),
+                                  str_offsets_bufs[c], str_chars_bufs[c]);
+          }
+        } else {
+          host_bufs[c].reserve(static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id));
+          for (auto& chunk : chunks) {
+            chunk->Flatten(); // ensure flat vectors
+            flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
+                           rdf_types[c], host_bufs[c]);
+          }
         }
       }
     };
@@ -304,7 +375,12 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
 
     // Upload columns to GPU (can also be parallelized, but keep simple for now)
     for (size_t c = 0; c < num_cols; c++) {
-      table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_bufs[c].data());
+      if (rdf_types[c].id == rasterdf::type_id::STRING) {
+        table->columns[c] = upload_string_column(ctx, total_rows,
+                                                  str_offsets_bufs[c], str_chars_bufs[c]);
+      } else {
+        table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_bufs[c].data());
+      }
     }
   }
 
@@ -354,6 +430,11 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
   std::vector<size_t> upload_sizes;
 
   for (size_t c = 0; c < num_cols; c++) {
+    // STRING columns are variable-width — fall back to from_data_chunks path
+    if (rdf_types[c].id == rasterdf::type_id::STRING) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: VARCHAR columns not yet supported via buffer_manager path — falling back to CPU");
+    }
     size_t col_bytes = static_cast<size_t>(total_rows) * rdf_type_size(rdf_types[c].id);
 
     if (bufMgr.checkIfColumnCached(table_name, column_names[c])) {

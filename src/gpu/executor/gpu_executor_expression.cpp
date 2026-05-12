@@ -51,6 +51,37 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       auto& constant = right.Cast<duckdb::BoundConstantExpression>();
       auto& col = input.col(col_ref.index);
 
+      // ── STRING GPU comparison ──
+      if (col.is_string()) {
+        uint32_t str_n = static_cast<uint32_t>(col.num_rows);
+        auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, str_n);
+
+        // Upload target string to GPU
+        auto target_str = constant.value.DefaultCastAs(duckdb::LogicalType::VARCHAR)
+                              .GetValue<duckdb::string>();
+        auto target_len = static_cast<uint32_t>(target_str.size());
+        rasterdf::device_buffer target_buf(
+            _ctx.workspace_mr(), std::max(target_len, 1u),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        if (target_len > 0) {
+          target_buf.copy_from_host(target_str.data(), target_len,
+                                    _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        }
+
+        string_compare_pc spc{};
+        spc.offsets_ptr = col.str_offsets.data();
+        spc.chars_ptr = col.str_chars.data();
+        spc.output_ptr = result.address();
+        spc.target_ptr = target_buf.data();
+        spc.num_rows = str_n;
+        spc.target_len = target_len;
+        spc.op = cmp_op;
+        disp.dispatch_string_compare(spc);
+        RASTERDB_LOG_DEBUG("[RDB_DEBUG] STRING compare: {} rows, target='{}', op={}",
+                           str_n, target_str, cmp_op);
+        return result;
+      }
+
       // ── INT64 / FLOAT64 GPU comparison (for HAVING and wide types) ──
       // Uses the compare_int64 compute shader which handles both INT64 and FLOAT64.
       if (col.type.id == rasterdf::type_id::INT64 ||
