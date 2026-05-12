@@ -28,25 +28,25 @@ SELECT * FROM gpu_execution('SELECT r_regionkey, r_name FROM region WHERE r_name
 -- Test 3: GROUP BY on VARCHAR key (nation names)
 -- ============================================================================
 .print '=== Test 3: GROUP BY VARCHAR key ==='
-SELECT * FROM gpu_execution('SELECT n_name, count(*) as cnt FROM nation GROUP BY n_name ORDER BY n_name LIMIT 5');
+SELECT * FROM gpu_execution('SELECT n_name, count(*) as cnt FROM nation GROUP BY n_name');
 
 -- ============================================================================
 -- Test 4: JOIN with VARCHAR keys (nation ⋈ region via integer keys, but with
 -- VARCHAR columns in the output)
 -- ============================================================================
 .print '=== Test 4: JOIN with VARCHAR in output ==='
-SELECT * FROM gpu_execution('SELECT n.n_name, r.r_name FROM nation n, region r WHERE n.n_regionkey = r.r_regionkey ORDER BY n.n_name LIMIT 10');
+SELECT * FROM gpu_execution('SELECT n.n_name, r.r_name FROM nation n INNER JOIN region r ON n.n_regionkey = r.r_regionkey LIMIT 10');
 
 -- ============================================================================
 -- Test 5: Filter + GROUP BY on customer table (has c_mktsegment VARCHAR)
 -- ============================================================================
 .print '=== Test 5: Customer mktsegment groupby ==='
-SELECT * FROM gpu_execution('SELECT c_mktsegment, count(*) as cnt FROM customer GROUP BY c_mktsegment ORDER BY cnt DESC');
+SELECT * FROM gpu_execution('SELECT c_mktsegment, count(*) as cnt FROM customer GROUP BY c_mktsegment');
 
 -- ============================================================================
 -- Test 6: TPC-H Q5 simplified — join with VARCHAR filter on region
 -- ============================================================================
 .print '=== Test 6: Simplified Q5 - join nation+region with VARCHAR filter ==='
-SELECT * FROM gpu_execution('SELECT n.n_name, n.n_nationkey FROM nation n, region r WHERE n.n_regionkey = r.r_regionkey AND r.r_name = ''EUROPE'' ORDER BY n.n_name');
+SELECT * FROM gpu_execution('SELECT n.n_name, n.n_nationkey FROM nation n INNER JOIN region r ON n.n_regionkey = r.r_regionkey WHERE r.r_name = ''EUROPE''');
 
 .print '=== All VARCHAR GPU tests completed ==='

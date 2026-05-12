@@ -40,6 +40,16 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
         continue;
       }
 
+      // STRING columns: move the offsets+chars buffers directly (zero-copy alias)
+      if (src.is_string()) {
+        result->columns[i].type = src.type;
+        result->columns[i].num_rows = src.num_rows;
+        result->columns[i].str_offsets = std::move(const_cast<gpu_column&>(src).str_offsets);
+        result->columns[i].str_chars = std::move(const_cast<gpu_column&>(src).str_chars);
+        result->columns[i].str_total_chars = src.str_total_chars;
+        continue;
+      }
+
       // Copy column to output — use shader for INT32/FLOAT32, buffer copy otherwise
       result->columns[i] = allocate_column(_ctx, src.type, src.num_rows);
       bool has_shader = (src.type.id == rasterdf::type_id::INT32 ||

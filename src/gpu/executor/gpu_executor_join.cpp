@@ -194,17 +194,16 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     uint32_t nc = static_cast<uint32_t>(count);
 
+    rasterdf::device_buffer out_offsets(mr, (nc + 1) * sizeof(int32_t), usage);
+    // Write lengths into out_offsets[0..N-1]
     string_lengths_pc lpc{};
     lpc.offsets_ptr = in_col.str_offsets.data();
     lpc.indices_ptr = idx_view.data();
     lpc.num_indices = nc;
-    rasterdf::device_buffer lengths_buf(mr, nc * sizeof(int32_t), usage);
-    lpc.output_ptr = lengths_buf.data();
+    lpc.output_ptr = out_offsets.data();
     disp.dispatch_string_lengths(lpc);
-
-    rasterdf::device_buffer out_offsets(mr, (nc + 1) * sizeof(int32_t), usage);
-    disp.fill_buffer(out_offsets.buffer(), 0, (nc + 1) * sizeof(int32_t));
-    disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(), nc * sizeof(int32_t), 0, sizeof(int32_t));
+    // Zero element N, then exclusive prefix scan on N+1 elements
+    disp.fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t), out_offsets.offset() + nc * sizeof(int32_t));
 
     uint32_t scan_elems = nc + 1;
     uint32_t scan_ngroups = (scan_elems + 255) / 256;

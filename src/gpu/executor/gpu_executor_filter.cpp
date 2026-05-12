@@ -193,26 +193,25 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
       auto& in_col = input.col(c);
 
       if (in_col.is_string()) {
-        // String column: use string_gather via dispatcher
-        string_lengths_pc lpc{};
-        lpc.offsets_ptr = in_col.str_offsets.data();
-        lpc.indices_ptr = gather_idx_buf.data();
-        lpc.output_ptr = 0; // will set below
-        lpc.num_indices = output_count;
-
-        rasterdf::device_buffer lengths_buf(mr, output_count * sizeof(int32_t),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-        lpc.output_ptr = lengths_buf.data();
-        disp.dispatch_string_lengths(lpc);
-
-        // Prefix scan on lengths -> output offsets
+        // String column: gather using string_lengths → exclusive prefix scan → string_copy
+        // Step 1: compute lengths of gathered strings
         rasterdf::device_buffer out_offsets(mr, (output_count + 1) * sizeof(int32_t),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-        disp.fill_buffer(out_offsets.buffer(), 0, (output_count + 1) * sizeof(int32_t));
-        disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
-                         output_count * sizeof(int32_t), 0, sizeof(int32_t));
+
+        // Write lengths into out_offsets[0..N-1]
+        string_lengths_pc lpc{};
+        lpc.offsets_ptr = in_col.str_offsets.data();
+        lpc.indices_ptr = gather_idx_buf.data();
+        lpc.output_ptr = out_offsets.data();  // write lengths at [0..N-1]
+        lpc.num_indices = output_count;
+        disp.dispatch_string_lengths(lpc);
+
+        // Step 2: exclusive prefix scan on N+1 elements (last element = 0 sentinel)
+        // After scan: out_offsets[i] = sum of lengths[0..i-1], out_offsets[N] = total
+        // Set out_offsets[N] = 0 before scan (sentinel for exclusive scan)
+        disp.fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
+                         out_offsets.offset() + output_count * sizeof(int32_t)); // zero last element
 
         uint32_t scan_elems = output_count + 1;
         uint32_t scan_ngroups = (scan_elems + 255) / 256;
@@ -233,12 +232,12 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
         disp.dispatch_prefix_scan_global(opc);
         disp.dispatch_prefix_scan_add(opc, scan_ngroups);
 
-        // Read total chars
+        // Read total chars from scan total_sum
         int32_t total_out_chars = 0;
         scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
                                 _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-        // Gather chars
+        // Step 3: copy chars using gathered offsets
         rasterdf::device_buffer out_chars(mr, std::max(total_out_chars, 1),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
@@ -285,24 +284,22 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
       auto& in_col = input.col(c);
 
       if (in_col.is_string()) {
-        // String column: same gather approach as tiny path
-        string_lengths_pc lpc{};
-        lpc.offsets_ptr = in_col.str_offsets.data();
-        lpc.indices_ptr = gather_idx_buf.data();
-        lpc.num_indices = output_count;
-
-        rasterdf::device_buffer lengths_buf(mr, output_count * sizeof(int32_t),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-        lpc.output_ptr = lengths_buf.data();
-        disp.dispatch_string_lengths(lpc);
-
+        // String column: gather using string_lengths → exclusive prefix scan → string_copy
         rasterdf::device_buffer out_offsets(mr, (output_count + 1) * sizeof(int32_t),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-        disp.fill_buffer(out_offsets.buffer(), 0, (output_count + 1) * sizeof(int32_t));
-        disp.copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
-                         output_count * sizeof(int32_t), 0, sizeof(int32_t));
+
+        // Write lengths into out_offsets[0..N-1]
+        string_lengths_pc lpc{};
+        lpc.offsets_ptr = in_col.str_offsets.data();
+        lpc.indices_ptr = gather_idx_buf.data();
+        lpc.output_ptr = out_offsets.data();
+        lpc.num_indices = output_count;
+        disp.dispatch_string_lengths(lpc);
+
+        // Zero the N-th element, then exclusive prefix scan on N+1 elements
+        disp.fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
+                         out_offsets.offset() + output_count * sizeof(int32_t));
 
         uint32_t scan_elems = output_count + 1;
         uint32_t scan_ngroups = (scan_elems + 255) / 256;

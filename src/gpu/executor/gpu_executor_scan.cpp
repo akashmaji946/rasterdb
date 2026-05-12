@@ -111,6 +111,17 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
   bool use_buffer_manager = GPUBufferManager::is_initialized();
 
+  // STRING columns cannot use the buffer manager zero-copy path (variable-width);
+  // fall back to from_data_chunks which handles string flattening properly.
+  if (use_buffer_manager) {
+    for (auto& t : scan_types) {
+      if (to_rdf_type(t).id == rasterdf::type_id::STRING) {
+        use_buffer_manager = false;
+        break;
+      }
+    }
+  }
+
   if (use_buffer_manager) {
     // ── FAST PATH: Pipelined scan with direct reBAR staging write ──
     // Scan chunks from DuckDB and flatten each chunk directly into pre-allocated

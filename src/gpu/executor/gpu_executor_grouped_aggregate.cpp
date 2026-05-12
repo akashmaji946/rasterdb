@@ -642,6 +642,26 @@ void gpu_executor::execute_grouped_aggregate(
                 _ctx.workspace_mr(), out_num_groups * sizeof(int32_t),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            // Initialize to 0xFFFFFFFF so atomicMin in shader works correctly
+            _ctx.dispatcher().fill_buffer(first_idx_buf.buffer(), 0xFFFFFFFFu,
+                         out_num_groups * sizeof(int32_t), first_idx_buf.offset());
+
+            // Debug: dump all_keys and unique_keys
+            {
+              std::vector<int32_t> dbg_all(n_rows), dbg_uniq(out_num_groups);
+              const_cast<rasterdf::device_buffer&>(string_hash_key.data).copy_to_host(
+                dbg_all.data(), n_rows * sizeof(int32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+              sorted_key_col.data.copy_to_host(
+                dbg_uniq.data(), out_num_groups * sizeof(int32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+              RASTERDB_LOG_INFO("[RDB_DEBUG] all_keys addr={}, unique_keys addr={}",
+                                string_hash_key.address(), hash_keys.address());
+              for (size_t i = 0; i < std::min((size_t)n_rows, (size_t)5); i++)
+                RASTERDB_LOG_INFO("[RDB_DEBUG]   all_keys[{}] = {}", i, dbg_all[i]);
+              for (size_t i = 0; i < std::min((size_t)out_num_groups, (size_t)5); i++)
+                RASTERDB_LOG_INFO("[RDB_DEBUG]   unique_keys[{}] = {}", i, dbg_uniq[i]);
+            }
 
             find_first_index_pc fpc{};
             fpc.all_keys_ptr = string_hash_key.address(); // full hash array
@@ -649,7 +669,16 @@ void gpu_executor::execute_grouped_aggregate(
             fpc.first_idx_ptr = first_idx_buf.data();
             fpc.numElements = static_cast<uint32_t>(n_rows);
             fpc.numUnique = out_num_groups;
-            _ctx.dispatcher().dispatch_find_first_index(fpc, (out_num_groups + 255) / 256);
+            _ctx.dispatcher().dispatch_find_first_index(fpc, (n_rows + 255) / 256);
+
+            // Debug: dump first_idx results
+            {
+              std::vector<uint32_t> dbg_idx(out_num_groups);
+              first_idx_buf.copy_to_host(dbg_idx.data(), out_num_groups * sizeof(uint32_t),
+                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+              for (size_t i = 0; i < std::min((size_t)out_num_groups, (size_t)5); i++)
+                RASTERDB_LOG_INFO("[RDB_DEBUG]   first_idx[{}] = {}", i, dbg_idx[i]);
+            }
 
             // Gather original strings using first_idx
             string_lengths_pc lpc{};
@@ -657,20 +686,16 @@ void gpu_executor::execute_grouped_aggregate(
             lpc.indices_ptr = first_idx_buf.data();
             lpc.num_indices = out_num_groups;
 
-            rasterdf::device_buffer lengths_buf(
-                _ctx.workspace_mr(), out_num_groups * sizeof(int32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            lpc.output_ptr = lengths_buf.data();
-            _ctx.dispatcher().dispatch_string_lengths(lpc);
-
             rasterdf::device_buffer out_offsets(
                 _ctx.workspace_mr(), (out_num_groups + 1) * sizeof(int32_t),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0, (out_num_groups + 1) * sizeof(int32_t));
-            _ctx.dispatcher().copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
-                         out_num_groups * sizeof(int32_t), 0, sizeof(int32_t));
+            // Write lengths into out_offsets[0..N-1]
+            lpc.output_ptr = out_offsets.data();
+            _ctx.dispatcher().dispatch_string_lengths(lpc);
+            // Zero element N, then exclusive prefix scan on N+1 elements
+            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
+                         out_offsets.offset() + out_num_groups * sizeof(int32_t));
 
             uint32_t scan_elems = out_num_groups + 1;
             uint32_t scan_ngroups = (scan_elems + 255) / 256;
@@ -955,32 +980,31 @@ void gpu_executor::execute_grouped_aggregate(
                 _ctx.workspace_mr(), ng * sizeof(int32_t),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            // Initialize to 0xFFFFFFFF so atomicMin in shader works correctly
+            _ctx.dispatcher().fill_buffer(first_idx_buf.buffer(), 0xFFFFFFFFu,
+                         ng * sizeof(int32_t), first_idx_buf.offset());
             find_first_index_pc fpc{};
             fpc.all_keys_ptr = string_hash_key.address();
             fpc.unique_keys_ptr = sorted_key_col.address();
             fpc.first_idx_ptr = first_idx_buf.data();
             fpc.numElements = static_cast<uint32_t>(n_rows);
             fpc.numUnique = static_cast<uint32_t>(ng);
-            _ctx.dispatcher().dispatch_find_first_index(fpc, (ng + 255) / 256);
-
-            string_lengths_pc lpc{};
-            lpc.offsets_ptr = str_col.str_offsets.data();
-            lpc.indices_ptr = first_idx_buf.data();
-            lpc.num_indices = static_cast<uint32_t>(ng);
-            rasterdf::device_buffer lengths_buf(
-                _ctx.workspace_mr(), ng * sizeof(int32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            lpc.output_ptr = lengths_buf.data();
-            _ctx.dispatcher().dispatch_string_lengths(lpc);
+            _ctx.dispatcher().dispatch_find_first_index(fpc, (n_rows + 255) / 256);
 
             rasterdf::device_buffer out_offsets(
                 _ctx.workspace_mr(), (ng + 1) * sizeof(int32_t),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0, (ng + 1) * sizeof(int32_t));
-            _ctx.dispatcher().copy_buffer(lengths_buf.buffer(), out_offsets.buffer(),
-                         ng * sizeof(int32_t), 0, sizeof(int32_t));
+            // Write lengths into out_offsets[0..N-1]
+            string_lengths_pc lpc{};
+            lpc.offsets_ptr = str_col.str_offsets.data();
+            lpc.indices_ptr = first_idx_buf.data();
+            lpc.num_indices = static_cast<uint32_t>(ng);
+            lpc.output_ptr = out_offsets.data();
+            _ctx.dispatcher().dispatch_string_lengths(lpc);
+            // Zero element N, then exclusive prefix scan on N+1 elements
+            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
+                         out_offsets.offset() + ng * sizeof(int32_t));
             uint32_t scan_elems = static_cast<uint32_t>(ng) + 1;
             uint32_t scan_ngroups = (scan_elems + 255) / 256;
             rasterdf::device_buffer scan_bsums(_ctx.workspace_mr(), scan_ngroups * sizeof(uint32_t),

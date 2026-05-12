@@ -70,6 +70,58 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
 
   for (size_t c = 0; c < input->num_columns(); c++) {
     auto& in_col = input->col(c);
+
+    if (in_col.is_string()) {
+      // String column: use string_lengths + prefix scan + string_copy
+      auto* mr = _ctx.workspace_mr();
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      uint32_t nc = static_cast<uint32_t>(count);
+
+      rasterdf::device_buffer out_offsets(mr, (nc + 1) * sizeof(int32_t), usage);
+      string_lengths_pc lpc{};
+      lpc.offsets_ptr = in_col.str_offsets.data();
+      lpc.indices_ptr = indices.address();
+      lpc.output_ptr = out_offsets.data();
+      lpc.num_indices = nc;
+      disp.dispatch_string_lengths(lpc);
+      disp.fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t), out_offsets.offset() + nc * sizeof(int32_t));
+
+      uint32_t scan_elems = nc + 1;
+      uint32_t scan_ngroups = (scan_elems + 255) / 256;
+      rasterdf::device_buffer scan_bsums(mr, scan_ngroups * sizeof(uint32_t), usage);
+      rasterdf::device_buffer scan_total(mr, sizeof(uint32_t), usage);
+      prefix_scan_pc opc{};
+      opc.data_ptr = out_offsets.data();
+      opc.block_sums_ptr = scan_bsums.data();
+      opc.total_sum_ptr = scan_total.data();
+      opc.numElements = scan_elems;
+      opc.blockCount = scan_ngroups;
+      disp.dispatch_prefix_scan_local(opc, scan_ngroups);
+      disp.dispatch_prefix_scan_global(opc);
+      disp.dispatch_prefix_scan_add(opc, scan_ngroups);
+
+      int32_t total_chars = 0;
+      scan_total.copy_to_host(&total_chars, sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+
+      rasterdf::device_buffer out_chars(mr, std::max(total_chars, 1), usage);
+      string_copy_pc cpc{};
+      cpc.in_offsets_ptr = in_col.str_offsets.data();
+      cpc.in_chars_ptr = in_col.str_chars.data();
+      cpc.indices_ptr = indices.address();
+      cpc.out_offsets_ptr = out_offsets.data();
+      cpc.out_chars_ptr = out_chars.data();
+      cpc.num_indices = nc;
+      disp.dispatch_string_copy(cpc);
+
+      result->columns[c].type = in_col.type;
+      result->columns[c].num_rows = count;
+      result->columns[c].str_offsets = std::move(out_offsets);
+      result->columns[c].str_chars = std::move(out_chars);
+      result->columns[c].str_total_chars = total_chars;
+      continue;
+    }
+
     result->columns[c] = allocate_column(_ctx, in_col.type, count);
 
     gather_indices_pc gc{};

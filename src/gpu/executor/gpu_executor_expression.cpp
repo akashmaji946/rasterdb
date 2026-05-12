@@ -209,9 +209,16 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
     gpu_column col;
     col.type = src.type;
     col.num_rows = src.num_rows;
-    // Don't copy device_buffer (deleted copy). Use cached address to alias.
-    col.cached_address = src.address();
-    col.cached_buffer = src.cached_buffer;
+    if (src.is_string()) {
+      // For STRING columns, alias the offsets and chars device addresses
+      col.str_total_chars = src.str_total_chars;
+      // We can't copy device_buffer, so cache the addresses for downstream use
+      col.cached_address = 0; // no fixed-width data
+    } else {
+      // Don't copy device_buffer (deleted copy). Use cached address to alias.
+      col.cached_address = src.address();
+      col.cached_buffer = src.cached_buffer;
+    }
     col.is_host_only = src.is_host_only;
     col.host_data = src.host_data;
     return col;

@@ -22,6 +22,24 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 
   if (input->num_rows() <= 1) return input;
 
+  // Check for STRING sort keys or STRING columns in table — not yet supported
+  for (auto& order : op.orders) {
+    auto& expr = unwrap_cast(*order.expression);
+    if (expr.type == duckdb::ExpressionType::BOUND_REF) {
+      auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
+      if (input->col(ref.index).is_string()) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: ORDER BY on STRING columns not yet supported");
+      }
+    }
+  }
+  for (size_t c = 0; c < input->num_columns(); c++) {
+    if (input->col(c).is_string()) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: ORDER BY with STRING columns in table not yet supported");
+    }
+  }
+
   // Build key views and order vectors for all sort columns
   std::vector<rasterdf::column_view> key_views;
   std::vector<rasterdf::order> col_order;

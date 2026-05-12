@@ -41,6 +41,7 @@
 #include "gpu/gpu_context.hpp"
 #include "gpu/gpu_buffer_manager.hpp"
 #include "gpu/gpu_executor.hpp"
+#include <duckdb/common/types/vector.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -228,7 +229,7 @@ static void GPUExecutionFunction(ClientContext& context,
                   std::chrono::duration<double, std::milli>(t_dl_end - t_dl_start).count());
         }
 
-        RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf)");
+        RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf).");
       } catch (duckdb::NotImplementedException& e) {
         // Unsupported operator — fall back to CPU
         RASTERDB_LOG_INFO("RasterDB: GPU fallback to CPU — {}", e.what());
@@ -263,6 +264,26 @@ static void GPUExecutionFunction(ClientContext& context,
 
     for (size_t c = 0; c < data.result_table->num_columns(); c++) {
       auto& col = data.result_table->col(c);
+      auto rdf_tid = col.type.id;
+
+      // STRING column: reconstruct DuckDB strings from downloaded offsets+chars
+      if (rdf_tid == rasterdf::type_id::STRING) {
+        const uint8_t* base = data.host_column_ptrs[c];
+        size_t offsets_bytes = (static_cast<size_t>(col.num_rows) + 1) * sizeof(int32_t);
+        const auto* offsets = reinterpret_cast<const int32_t*>(base);
+        const auto* chars = reinterpret_cast<const char*>(base + offsets_bytes);
+        auto str_dst = duckdb::FlatVector::GetData<duckdb::string_t>(output.data[c]);
+        for (size_t r = 0; r < chunk_size; r++) {
+          idx_t row = data.chunk_offset + r;
+          int32_t str_start = offsets[row];
+          int32_t str_end = offsets[row + 1];
+          int32_t str_len = str_end - str_start;
+          str_dst[r] = duckdb::StringVector::AddString(
+              output.data[c], chars + str_start, static_cast<uint32_t>(str_len));
+        }
+        continue;
+      }
+
       size_t elem_size = rasterdb::gpu::rdf_type_size(col.type.id);
       auto dst = duckdb::FlatVector::GetData(output.data[c]);
 
@@ -270,7 +291,6 @@ static void GPUExecutionFunction(ClientContext& context,
       const uint8_t* src = data.host_column_ptrs[c] + data.chunk_offset * elem_size;
 
       auto duckdb_tid = output.data[c].GetType().id();
-      auto rdf_tid = col.type.id;
 
       // Determine if a type cast is needed between rdf column and DuckDB output
       bool types_match = false;

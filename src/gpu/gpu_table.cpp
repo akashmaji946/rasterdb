@@ -116,12 +116,51 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
 
   for (size_t c = 0; c < ncols; c++) {
     auto& col = table.col(c);
-    size_t bytes = static_cast<size_t>(col.num_rows) * rdf_type_size(col.type.id);
 
     if (col.is_host_only) {
       // Host-only: data already in host memory, just point at it
       ptrs[c] = col.host_data.data();
-    } else if (col.data.mapped_data()) {
+      continue;
+    }
+
+    if (col.is_string()) {
+      // STRING column: download offsets + chars into download buffer
+      // Layout: [offsets (num_rows+1 * int32)] [chars (str_total_chars bytes)]
+      size_t offsets_bytes = (static_cast<size_t>(col.num_rows) + 1) * sizeof(int32_t);
+      size_t chars_bytes = static_cast<size_t>(col.str_total_chars);
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG] batch_download STRING col[{}]: num_rows={}, str_total_chars={}, offsets_bytes={}, chars_bytes={}, offsets_buf={}, chars_buf={}",
+                         c, col.num_rows, col.str_total_chars, offsets_bytes, chars_bytes,
+                         col.str_offsets.data(), col.str_chars.data());
+      size_t total_bytes = offsets_bytes + chars_bytes;
+
+      dl_offset = (dl_offset + 63) & ~size_t(63);
+      if (dl_offset + total_bytes > dl_capacity) {
+        throw std::runtime_error("batch_download_columns: string result exceeds download buffer");
+      }
+
+      uint8_t* dst = dl_base + dl_offset;
+      if (col.str_offsets.data() == 0 || col.str_offsets.size() == 0) {
+        // Empty/moved-from string buffer — zero out offsets so strings appear empty
+        std::memset(dst, 0, offsets_bytes);
+      } else {
+        // Download offsets
+        const_cast<rasterdf::device_buffer&>(col.str_offsets).copy_to_host(
+          dst, offsets_bytes, ctx.device(), ctx.queue(), ctx.command_pool());
+        // Download chars
+        if (chars_bytes > 0 && col.str_chars.data() != 0) {
+          const_cast<rasterdf::device_buffer&>(col.str_chars).copy_to_host(
+            dst + offsets_bytes, chars_bytes, ctx.device(), ctx.queue(), ctx.command_pool());
+        }
+      }
+
+      ptrs[c] = dst;
+      dl_offset += total_bytes;
+      continue;
+    }
+
+    size_t bytes = static_cast<size_t>(col.num_rows) * rdf_type_size(col.type.id);
+
+    if (col.data.mapped_data()) {
       // ReBAR: device memory is host-visible, point directly
       ptrs[c] = reinterpret_cast<const uint8_t*>(col.data.mapped_data());
     } else {
@@ -194,6 +233,11 @@ static void flatten_string_vector(const duckdb::Vector& vec,
                                   std::vector<int32_t>& offsets,
                                   std::vector<uint8_t>& chars)
 {
+  // offsets array has N+1 entries: offsets[0]=0, offsets[i] = byte offset of string i's start
+  // So offsets = [0, end0, end1, ...] where end_i = start of string i+1
+  if (offsets.empty()) {
+    offsets.push_back(0); // leading zero
+  }
   auto str_data = duckdb::FlatVector::GetData<duckdb::string_t>(vec);
   for (rasterdf::size_type i = 0; i < count; i++) {
     auto& s = str_data[i];
