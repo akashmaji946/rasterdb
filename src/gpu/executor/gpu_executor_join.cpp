@@ -15,6 +15,14 @@ namespace gpu {
 // Toggle between compute-shader hash join and graphics-pipeline simple garuda join
 static constexpr bool USE_SIMPLE_GFX_JOIN = true;
 
+// Use the optimized instanced-probe variant (parallel inner loop).
+// When true, USE_SIMPLE_GFX_JOIN must also be true.
+static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = false;
+
+// Hash bits for Simple Garuda join: num_slots = 1 << k.
+// Higher k = more slots = less collisions but more memory.
+static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
+
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
   RASTERDB_LOG_DEBUG("GPU execute_join (simple_garuda={})", USE_SIMPLE_GFX_JOIN ? "true" : "false");
@@ -85,13 +93,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     uint32_t left_n  = static_cast<uint32_t>(left_key_view.size());
     uint32_t right_n = static_cast<uint32_t>(right_key_view.size());
 
-    auto sg_result = rasterdf::simple_garuda_inner_join(left_key_view.data(),
-                                                        left_n,
-                                                        right_key_view.data(),
-                                                        right_n,
-                                                        _ctx.vk_context(),
-                                                        _ctx.dispatcher(),
-                                                        _ctx.workspace_mr());
+    auto sg_result = USE_SIMPLE_GFX_JOIN_OPT
+        ? rasterdf::simple_garuda_inner_join_opt(left_key_view.data(),
+                                                  left_n,
+                                                  right_key_view.data(),
+                                                  right_n,
+                                                  _ctx.vk_context(),
+                                                  _ctx.dispatcher(),
+                                                  _ctx.workspace_mr(),
+                                                  USE_SIMPLE_GFX_JOIN_K)
+        : rasterdf::simple_garuda_inner_join(left_key_view.data(),
+                                              left_n,
+                                              right_key_view.data(),
+                                              right_n,
+                                              _ctx.vk_context(),
+                                              _ctx.dispatcher(),
+                                              _ctx.workspace_mr(),
+                                              USE_SIMPLE_GFX_JOIN_K);
 
     match_count = static_cast<rasterdf::size_type>(sg_result.num_matches);
 
