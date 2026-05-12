@@ -44,6 +44,7 @@
 #include "sirius_interface.hpp"
 #include "util/segfault_backtrace.hpp"
 
+#include <chrono>
 #include <cstdlib>
 
 namespace duckdb {
@@ -359,7 +360,7 @@ unique_ptr<FunctionData> SiriusExtension::GPUExecutionBind(ClientContext& contex
   auto result              = make_uniq<SiriusTableFunctionData>();
   result->conn             = make_uniq<Connection>(*context.db);
   result->query            = input.inputs[0].ToString();
-  result->enable_optimizer = true;
+  result->enable_optimizer = false;  // Use unoptimized plan to avoid spurious FILTER nodes
   result->sirius_iface     = make_uniq<::sirius::sirius_interface>(context);
   if (input.inputs[0].IsNull()) {
     throw BinderException("gpu_execution cannot be called with a NULL parameter");

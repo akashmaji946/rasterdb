@@ -42,6 +42,12 @@ class GPUResultCollection {
   size_t num_rows;
   size_t write_idx;
   size_t read_idx;
+  size_t rows_added = 0;
+  size_t add_chunk_count = 0;
+  size_t get_next_count = 0;
+  double add_chunk_total_ms = 0.0;
+  double get_next_total_ms = 0.0;
+  bool summary_logged = false;
 };
 
 // The reason we need to implement our own QueryResult is that duckdb's MaterializedQueryResult

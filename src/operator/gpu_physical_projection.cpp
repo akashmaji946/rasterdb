@@ -37,7 +37,11 @@ OperatorResultType GPUPhysicalProjection::Execute(GPUIntermediateRelation& input
 
   // The new executor...
   sirius::GpuExpressionExecutor gpu_expression_executor(select_list);
+  auto t_exec_start = std::chrono::high_resolution_clock::now();
   gpu_expression_executor.Execute(input_relation, output_relation);
+  auto t_exec_end = std::chrono::high_resolution_clock::now();
+  double exec_ms = std::chrono::duration<double, std::milli>(t_exec_end - t_exec_start).count();
+  fprintf(stderr, "[SIRIUS_TIMER]     projection: expr_exec       %8.2f ms\n", exec_ms);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

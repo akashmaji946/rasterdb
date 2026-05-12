@@ -27,8 +27,21 @@
 #include "operator/gpu_physical_table_scan.hpp"
 
 #include <stdio.h>
+#include <chrono>
 
 namespace duckdb {
+
+// Per-stage timing helper for Sirius — mirrors RasterDB's [TIMER] format
+struct sirius_timer {
+  const char* name;
+  std::chrono::high_resolution_clock::time_point t0;
+  sirius_timer(const char* n) : name(n), t0(std::chrono::high_resolution_clock::now()) {}
+  ~sirius_timer() {
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    fprintf(stderr, "[SIRIUS_TIMER] %-30s %8.2f ms\n", name, ms);
+  }
+};
 
 void GPUExecutor::Reset()
 {
@@ -59,6 +72,7 @@ void GPUExecutor::Initialize(unique_ptr<GPUPhysicalOperator> plan)
 
 void GPUExecutor::Execute()
 {
+  sirius_timer t_total("TOTAL gpu_execute");
   // Check if we should fall back to duckdb execution.
   if (Config::ENABLE_FALLBACK_CHECK) {
     FallbackChecker fallback_checker(scheduled);
@@ -70,7 +84,9 @@ void GPUExecutor::Execute()
 
   SIRIUS_LOG_DEBUG("Total meta pipelines {}", scheduled.size());
 
+  int pipeline_idx = 0;
   for (const auto& pipeline : scheduled) {
+    fprintf(stderr, "[SIR_DEBUG] --- pipeline %d ---\n", pipeline_idx);
     // TODO: This is temporary solution
     // if (pipeline->source->type == PhysicalOperatorType::HASH_JOIN || pipeline->source->type ==
     // PhysicalOperatorType::RESULT_COLLECTOR) { 	continue;
@@ -128,13 +144,22 @@ void GPUExecutor::Execute()
     SIRIUS_LOG_DEBUG("pipeline source type {}", PhysicalOperatorToString(source_type));
     if (source_type == PhysicalOperatorType::TABLE_SCAN) {
       // initialize pipeline
+      auto t_scan_start = std::chrono::high_resolution_clock::now();
       Pipeline duckdb_pipeline(*executor);
       ThreadContext thread_context(context);
       ExecutionContext exec_context(context, thread_context, &duckdb_pipeline);
       auto& table_scan = pipeline->source->Cast<GPUPhysicalTableScan>();
       table_scan.GetDataDuckDB(exec_context);
+      {
+        auto t_scan_end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t_scan_end - t_scan_start).count();
+        fprintf(stderr, "[SIRIUS_TIMER]   cpu_scan                     %8.2f ms\n", ms);
+      }
     }
-    pipeline->source->GetData(*source_relation);
+    {
+      sirius_timer t_source("  source->GetData (gpu_upload)");
+      pipeline->source->GetData(*source_relation);
+    }
     // SIRIUS_LOG_DEBUG("source relation size {}", source_relation->columns.size());
     // for (auto col : source_relation->columns) {
     // 	SIRIUS_LOG_DEBUG("source relation column size {} column name {}", col->column_length,
@@ -171,7 +196,14 @@ void GPUExecutor::Execute()
       // *current_operator.op_state,
       //                                        *intermediate_states[current_intermediate - 1]);
 
+      auto op_name_str = std::string("  op: ") + PhysicalOperatorToString(op_type);
+      auto t_op_start = std::chrono::high_resolution_clock::now();
       auto result = current_operator.get().Execute(*prev_relation, *current_relation);
+      {
+        auto t_op_end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t_op_end - t_op_start).count();
+        fprintf(stderr, "[SIRIUS_TIMER]   %-28s %8.2f ms\n", op_name_str.c_str(), ms);
+      }
       // EndOperator(current_operator, &current_chunk);
     }
     if (pipeline->sink) {
@@ -191,8 +223,12 @@ void GPUExecutor::Execute()
       // auto local_sink_state = pipeline->sink->GetLocalSinkState(exec_context);
       // OperatorSinkInput sink_input {*pipeline->sink->sink_state, *local_sink_state,
       // interrupt_state}; pipeline->sink->Sink(exec_context, *sink_relation, sink_input);
-      pipeline->sink->Sink(*sink_relation);
+      {
+        sirius_timer t_sink("  sink");
+        pipeline->sink->Sink(*sink_relation);
+      }
     }
+    pipeline_idx++;
   }
 }
 

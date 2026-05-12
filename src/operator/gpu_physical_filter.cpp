@@ -49,7 +49,11 @@ OperatorResultType GPUPhysicalFilter::Execute(GPUIntermediateRelation& input_rel
 
   // The new executor...
   sirius::GpuExpressionExecutor gpu_expression_executor(*expression.get());
+  auto t_eval_start = std::chrono::high_resolution_clock::now();
   gpu_expression_executor.Select(input_relation, output_relation);
+  auto t_eval_end = std::chrono::high_resolution_clock::now();
+  double eval_ms = std::chrono::duration<double, std::milli>(t_eval_end - t_eval_start).count();
+  fprintf(stderr, "[SIRIUS_TIMER]     filter: expr_eval            %8.2f ms\n", eval_ms);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

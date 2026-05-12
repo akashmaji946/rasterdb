@@ -50,9 +50,10 @@ cuda = "12"
 cuda-version = "12.*"
 
 [feature.cuda12.activation.env]
-# GPU architectures: Turing through Hopper (75, 80, 86, 90a)
-CUDAARCHS = "75-real;80-real;86-real;90a-real"
+# GPU architectures: Turing through Ada Lovelace (75, 80, 86, 89, 90a)
+CUDAARCHS = "75-real;80-real;86-real;89-real;90a-real"
 
 [environments]
-default = ["cuda13"]
-cuda12 = ["cuda12"]
+default = ["cuda12"]
+cuda13 = ["cuda13"]
+

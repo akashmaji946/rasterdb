@@ -572,6 +572,7 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   // if (conditions.size() > 1) throw NotImplementedException("Multiple conditions not supported
   // yet");
 
+  auto t_mat_probe_start = std::chrono::high_resolution_clock::now();
   for (idx_t cond_idx = 0; cond_idx < conditions.size(); cond_idx++) {
     auto& condition     = conditions[cond_idx];
     auto join_key_index = condition.left->Cast<BoundReferenceExpression>().index;
@@ -580,8 +581,11 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
     probe_key[cond_idx] =
       HandleMaterializeExpression(input_relation.columns[join_key_index], gpuBufferManager);
   }
+  auto t_mat_probe_end = std::chrono::high_resolution_clock::now();
+  double mat_probe_ms = std::chrono::duration<double, std::milli>(t_mat_probe_end - t_mat_probe_start).count();
 
   // probing hash table
+  auto t_probe_start = std::chrono::high_resolution_clock::now();
   SIRIUS_LOG_DEBUG("Probing hash table");
   if (join_type == JoinType::INNER || join_type == JoinType::LEFT) {
     // check if there is a non-equality condition
@@ -657,8 +661,11 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   } else {
     throw NotImplementedException("Unsupported join type");
   }
+  auto t_probe_end = std::chrono::high_resolution_clock::now();
+  double probe_ms = std::chrono::duration<double, std::milli>(t_probe_end - t_probe_start).count();
 
   // materialize columns from the left table
+  auto t_mat_lhs_start = std::chrono::high_resolution_clock::now();
   if (join_type == JoinType::SEMI || join_type == JoinType::ANTI || join_type == JoinType::INNER ||
       join_type == JoinType::RIGHT || join_type == JoinType::LEFT || join_type == JoinType::OUTER) {
     SIRIUS_LOG_DEBUG("Writing LHS columns to output relation");
@@ -738,8 +745,11 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
   } else {
     throw NotImplementedException("Unsupported join type");
   }
+  auto t_mat_lhs_end = std::chrono::high_resolution_clock::now();
+  double mat_lhs_ms = std::chrono::duration<double, std::milli>(t_mat_lhs_end - t_mat_lhs_start).count();
 
   // materialize columns from the right tables
+  auto t_mat_rhs_start = std::chrono::high_resolution_clock::now();
   if (join_type == JoinType::INNER || join_type == JoinType::RIGHT || join_type == JoinType::LEFT ||
       join_type == JoinType::OUTER) {
     SIRIUS_LOG_DEBUG("Writing row IDs from RHS to output relation");
@@ -800,6 +810,13 @@ OperatorResultType GPUPhysicalHashJoin::Execute(GPUIntermediateRelation& input_r
         0, hash_table_result->columns[rhs_col]->data_wrapper.type, nullptr, nullptr);
     }
   }
+  auto t_mat_rhs_end = std::chrono::high_resolution_clock::now();
+  double mat_rhs_ms = std::chrono::duration<double, std::milli>(t_mat_rhs_end - t_mat_rhs_start).count();
+
+  fprintf(stderr, "[SIRIUS_TIMER]     join: materialize_probe_keys   %8.2f ms\n", mat_probe_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     join: probe_hash_table        %8.2f ms\n", probe_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     join: materialize_lhs_cols    %8.2f ms\n", mat_lhs_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     join: materialize_rhs_cols    %8.2f ms\n", mat_rhs_ms);
 
   if (join_type == JoinType::INNER || join_type == JoinType::SEMI || join_type == JoinType::MARK) {
     if (gpu_hash_table != nullptr)

@@ -406,6 +406,7 @@ SinkResultType GPUPhysicalGroupedAggregate::Sink(GPUIntermediateRelation& input_
   }
 
   // Reading groupby columns based on the grouping set
+  auto t_mat_group_start = std::chrono::high_resolution_clock::now();
   for (idx_t i = 0; i < groupings.size(); i++) {
     auto& grouping = groupings[i];
     int idx        = 0;
@@ -421,8 +422,11 @@ SinkResultType GPUPhysicalGroupedAggregate::Sink(GPUIntermediateRelation& input_
       idx++;
     }
   }
+  auto t_mat_group_end = std::chrono::high_resolution_clock::now();
+  double mat_group_ms = std::chrono::duration<double, std::milli>(t_mat_group_end - t_mat_group_start).count();
 
   int aggr_idx = 0;
+  auto t_mat_agg_start = std::chrono::high_resolution_clock::now();
   for (auto& aggregate : aggregates) {
     auto& aggr = aggregate->Cast<BoundAggregateExpression>();
     SIRIUS_LOG_DEBUG("Aggregate type: {}", aggr.function.name);
@@ -459,8 +463,11 @@ SinkResultType GPUPhysicalGroupedAggregate::Sink(GPUIntermediateRelation& input_
     }
     aggr_idx++;
   }
+  auto t_mat_agg_end = std::chrono::high_resolution_clock::now();
+  double mat_agg_ms = std::chrono::duration<double, std::milli>(t_mat_agg_end - t_mat_agg_start).count();
 
   // Execute only if input is not empty
+  auto t_cudf_start = std::chrono::high_resolution_clock::now();
   if (column_size > 0) {
     // bool can_use_sirius_impl = CheckGroupKeyTypesForSiriusImpl(group_by_column);
     if (aggregates.size() == 0) {
@@ -491,8 +498,11 @@ SinkResultType GPUPhysicalGroupedAggregate::Sink(GPUIntermediateRelation& input_
       }
     }
   }
+  auto t_cudf_end = std::chrono::high_resolution_clock::now();
+  double cudf_ms = std::chrono::duration<double, std::milli>(t_cudf_end - t_cudf_start).count();
 
   // Reading groupby columns based on the grouping set
+  auto t_combine_start = std::chrono::high_resolution_clock::now();
   for (idx_t i = 0; i < groupings.size(); i++) {
     for (int idx = 0; idx < grouping_sets[i].size(); idx++) {
       // TODO: has to fix this for columns with partially NULL values
@@ -558,6 +568,13 @@ SinkResultType GPUPhysicalGroupedAggregate::Sink(GPUIntermediateRelation& input_
       }
     }
   }
+  auto t_combine_end = std::chrono::high_resolution_clock::now();
+  double combine_ms = std::chrono::duration<double, std::milli>(t_combine_end - t_combine_start).count();
+
+  fprintf(stderr, "[SIRIUS_TIMER]     groupby: materialize_group_keys %8.2f ms\n", mat_group_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     groupby: materialize_aggregates %8.2f ms\n", mat_agg_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     groupby: cudf_groupby           %8.2f ms\n", cudf_ms);
+  fprintf(stderr, "[SIRIUS_TIMER]     groupby: combine_results        %8.2f ms\n", combine_ms);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

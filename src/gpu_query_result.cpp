@@ -18,6 +18,9 @@
 
 #include "duckdb/common/box_renderer.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "log/logging.hpp"
+
+#include <chrono>
 
 namespace duckdb {
 
@@ -25,16 +28,31 @@ void GPUResultCollection::SetCapacity(size_t capacity) { data_chunks = new DataC
 
 void GPUResultCollection::AddChunk(DataChunk& chunk)
 {
+  auto start = std::chrono::high_resolution_clock::now();
   num_rows += chunk.size();
+  rows_added += chunk.size();
   data_chunks[write_idx].Move(chunk);
   write_idx += 1;
+  auto end = std::chrono::high_resolution_clock::now();
+  add_chunk_count += 1;
+  add_chunk_total_ms += std::chrono::duration<double, std::milli>(end - start).count();
 }
 
 unique_ptr<DataChunk> GPUResultCollection::GetNext()
 {
   // We have returned all of the values then return the empty result
-  if (read_idx >= write_idx) { return nullptr; }
+  if (read_idx >= write_idx) {
+    if (!summary_logged) {
+      SIRIUS_LOG_INFO("[SIRIUS_TIMER]   result_collection.add_chunks {:8.2f} ms chunks={} rows={}",
+                      add_chunk_total_ms, add_chunk_count, rows_added);
+      SIRIUS_LOG_INFO("[SIRIUS_TIMER]   result_collection.get_next   {:8.2f} ms chunks={}",
+                      get_next_total_ms, get_next_count);
+      summary_logged = true;
+    }
+    return nullptr;
+  }
 
+  auto start = std::chrono::high_resolution_clock::now();
   // Create a result that references the value in the buffer
   DataChunk& return_chunk            = data_chunks[read_idx];
   unique_ptr<DataChunk> result_value = make_uniq<DataChunk>();
@@ -46,6 +64,9 @@ unique_ptr<DataChunk> GPUResultCollection::GetNext()
   }
   read_idx += 1;
   num_rows -= result_value->size();
+  auto end = std::chrono::high_resolution_clock::now();
+  get_next_count += 1;
+  get_next_total_ms += std::chrono::duration<double, std::milli>(end - start).count();
 
   return result_value;
 }
