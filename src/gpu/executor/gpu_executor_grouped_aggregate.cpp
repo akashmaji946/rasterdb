@@ -646,23 +646,6 @@ void gpu_executor::execute_grouped_aggregate(
             _ctx.dispatcher().fill_buffer(first_idx_buf.buffer(), 0xFFFFFFFFu,
                          out_num_groups * sizeof(int32_t), first_idx_buf.offset());
 
-            // Debug: dump all_keys and unique_keys
-            {
-              std::vector<int32_t> dbg_all(n_rows), dbg_uniq(out_num_groups);
-              const_cast<rasterdf::device_buffer&>(string_hash_key.data).copy_to_host(
-                dbg_all.data(), n_rows * sizeof(int32_t),
-                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-              sorted_key_col.data.copy_to_host(
-                dbg_uniq.data(), out_num_groups * sizeof(int32_t),
-                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-              RASTERDB_LOG_INFO("[RDB_DEBUG] all_keys addr={}, unique_keys addr={}",
-                                string_hash_key.address(), hash_keys.address());
-              for (size_t i = 0; i < std::min((size_t)n_rows, (size_t)5); i++)
-                RASTERDB_LOG_INFO("[RDB_DEBUG]   all_keys[{}] = {}", i, dbg_all[i]);
-              for (size_t i = 0; i < std::min((size_t)out_num_groups, (size_t)5); i++)
-                RASTERDB_LOG_INFO("[RDB_DEBUG]   unique_keys[{}] = {}", i, dbg_uniq[i]);
-            }
-
             find_first_index_pc fpc{};
             fpc.all_keys_ptr = string_hash_key.address(); // full hash array
             fpc.unique_keys_ptr = hash_keys.address();    // unique hash keys
@@ -670,15 +653,6 @@ void gpu_executor::execute_grouped_aggregate(
             fpc.numElements = static_cast<uint32_t>(n_rows);
             fpc.numUnique = out_num_groups;
             _ctx.dispatcher().dispatch_find_first_index(fpc, (n_rows + 255) / 256);
-
-            // Debug: dump first_idx results
-            {
-              std::vector<uint32_t> dbg_idx(out_num_groups);
-              first_idx_buf.copy_to_host(dbg_idx.data(), out_num_groups * sizeof(uint32_t),
-                _ctx.device(), _ctx.queue(), _ctx.command_pool());
-              for (size_t i = 0; i < std::min((size_t)out_num_groups, (size_t)5); i++)
-                RASTERDB_LOG_INFO("[RDB_DEBUG]   first_idx[{}] = {}", i, dbg_idx[i]);
-            }
 
             // Gather original strings using first_idx
             string_lengths_pc lpc{};

@@ -1,13 +1,17 @@
 -- Test VARCHAR/STRING GPU operations end-to-end
 -- Run with: ./build/release/duckdb -unsigned < test/test_varchar_gpu.sql
 
+
+
+-- /home/akashmaji/Device/IMPORTANT/rasterdb/build/release/duckdb -unsigned < /home/akashmaji/Device/IMPORTANT/rasterdb/test/test_varchar_gpu.sql
+
 -- Load extension
 LOAD '/home/akashmaji/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
 
 -- Generate TPC-H SF0.01 data using built-in tpch extension
 INSTALL tpch;
 LOAD tpch;
-CALL dbgen(sf=0.01);
+CALL dbgen(sf=10);
 
 -- Init GPU buffers (skip if no discrete GPU available)
 -- CALL gpu_buffer_init('1 GB', '1 GB');
