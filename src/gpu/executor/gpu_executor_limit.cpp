@@ -102,7 +102,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
       disp.dispatch_prefix_scan_add(opc, scan_ngroups);
 
       int32_t total_chars = 0;
-      scan_total.copy_to_host(&total_chars, sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      out_offsets.copy_to_host(&total_chars, sizeof(int32_t),
+          static_cast<size_t>(nc) * sizeof(int32_t),
+          _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
       rasterdf::device_buffer out_chars(mr, std::max(total_chars, 1), usage);
       string_copy_pc cpc{};

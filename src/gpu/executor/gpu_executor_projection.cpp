@@ -65,14 +65,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
         pc.type_id = rdf_shader_type_id(src.type.id);
         _ctx.dispatcher().dispatch_binary_op(pc);
       } else {
-        // Fallback: host round-trip copy for types without shader support (e.g. INT64/FLOAT64)
-        // Only used for small aggregate results so overhead is negligible.
+        // GPU-side buffer copy for types without shader support (e.g. INT64/FLOAT64)
         size_t byte_count = static_cast<size_t>(src.num_rows) * rdf_type_size(src.type.id);
-        std::vector<uint8_t> tmp(byte_count);
-        src.data.copy_to_host(tmp.data(), byte_count,
-                              _ctx.device(), _ctx.queue(), _ctx.command_pool());
-        result->columns[i].data.copy_from_host(tmp.data(), byte_count,
-                                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        _ctx.dispatcher().copy_buffer(src.data.buffer(), result->columns[i].data.buffer(),
+                                      byte_count, src.data.offset(),
+                                      result->columns[i].data.offset());
       }
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {
       result->columns[i] = evaluate_binary_op(*input, expr);

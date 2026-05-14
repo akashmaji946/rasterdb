@@ -113,23 +113,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 
     if (sk.is_string) {
       // ── Multi-pass prefix radix sort for this string column ──────
-      // Determine max string length (download offsets[0] and offsets[N])
-      int32_t first_off = 0, last_off = 0;
-      col.str_offsets.copy_to_host(&first_off, sizeof(int32_t),
+      // Compute max string length on GPU via atomicMax reduction.
+      rasterdf::device_buffer max_len_buf(mr, sizeof(uint32_t), usage);
+      // Zero-initialize the output buffer
+      uint32_t zero = 0;
+      max_len_buf.copy_from_host(&zero, sizeof(uint32_t),
           _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      col.str_offsets.copy_to_host(&last_off, sizeof(int32_t),
-          static_cast<size_t>(n) * sizeof(int32_t),
+
+      string_max_length_pc mlpc{};
+      mlpc.offsets_ptr = col.str_offsets.data();
+      mlpc.output_ptr  = max_len_buf.data();
+      mlpc.num_rows    = n;
+      disp.dispatch_string_max_length(mlpc);
+
+      uint32_t max_len = 0;
+      max_len_buf.copy_to_host(&max_len, sizeof(uint32_t),
           _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      int32_t total_chars = last_off - first_off;
-      // Conservative max string length: use total_chars as upper bound.
-      // For TPC-H this is small. A tighter bound would scan all offsets.
-      uint32_t max_len = static_cast<uint32_t>(std::max(total_chars, 1));
-      // Clamp: strings are at most total_chars bytes long
-      // A more precise approach: max_len = max(offsets[i+1]-offsets[i]) for all i
-      // But for correctness of LSD sort, over-estimating just adds harmless
-      // zero-prefix passes. Use str_total_chars as rough upper bound.
-      if (col.str_total_chars > 0)
-        max_len = static_cast<uint32_t>(col.str_total_chars);
+      if (max_len == 0) max_len = 1;
 
       uint32_t num_passes = (max_len + 7) / 8;
       if (num_passes == 0) num_passes = 1;
@@ -306,7 +306,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
       disp.dispatch_prefix_scan_add(opc, scan_ngroups);
 
       int32_t total_chars = 0;
-      scan_total.copy_to_host(&total_chars, sizeof(int32_t),
+      out_offsets.copy_to_host(&total_chars, sizeof(int32_t),
+          static_cast<size_t>(nc) * sizeof(int32_t),
           _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
       rasterdf::device_buffer out_chars(mr, std::max(total_chars, 1), usage);

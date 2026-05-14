@@ -50,6 +50,7 @@ private:
 
   // Scan hints (set by pre-analysis or parent operators)
   int64_t _scan_limit = -1;          // -1 = no limit pushdown
+  int64_t _join_limit = -1;
   bool    _scan_count_star_only = false; // true = only need row count, scan 1 col
 
   // Pre-analyze plan tree to set scan hints

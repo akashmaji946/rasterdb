@@ -17,7 +17,7 @@ static constexpr bool USE_SIMPLE_GFX_JOIN = true;
 
 // Use the optimized instanced-probe variant (parallel inner loop).
 // When true, USE_SIMPLE_GFX_JOIN must also be true.
-static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = false;
+static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 
 // Hash bits for Simple Garuda join: num_slots = 1 << k.
 // Higher k = more slots = less collisions but more memory.
@@ -125,23 +125,46 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     uint32_t left_n  = static_cast<uint32_t>(left_key_view.size());
     uint32_t right_n = static_cast<uint32_t>(right_key_view.size());
 
+    const bool int64_join_keys =
+        !string_join &&
+        left_key_view.type().id == rasterdf::type_id::INT64 &&
+        right_key_view.type().id == rasterdf::type_id::INT64;
+
     auto sg_result = USE_SIMPLE_GFX_JOIN_OPT
-        ? rasterdf::simple_garuda_inner_join_opt(left_key_view.data(),
-                                                  left_n,
-                                                  right_key_view.data(),
-                                                  right_n,
-                                                  _ctx.vk_context(),
-                                                  _ctx.dispatcher(),
-                                                  _ctx.workspace_mr(),
-                                                  USE_SIMPLE_GFX_JOIN_K)
-        : rasterdf::simple_garuda_inner_join(left_key_view.data(),
-                                              left_n,
-                                              right_key_view.data(),
-                                              right_n,
-                                              _ctx.vk_context(),
-                                              _ctx.dispatcher(),
-                                              _ctx.workspace_mr(),
-                                              USE_SIMPLE_GFX_JOIN_K);
+        ? (int64_join_keys
+               ? rasterdf::simple_garuda_inner_join_opt_int64(left_key_view.data(),
+                                                               left_n,
+                                                               right_key_view.data(),
+                                                               right_n,
+                                                               _ctx.vk_context(),
+                                                               _ctx.dispatcher(),
+                                                               _ctx.workspace_mr(),
+                                                               USE_SIMPLE_GFX_JOIN_K)
+               : rasterdf::simple_garuda_inner_join_opt(left_key_view.data(),
+                                                         left_n,
+                                                         right_key_view.data(),
+                                                         right_n,
+                                                         _ctx.vk_context(),
+                                                         _ctx.dispatcher(),
+                                                         _ctx.workspace_mr(),
+                                                         USE_SIMPLE_GFX_JOIN_K))
+        : (int64_join_keys
+               ? rasterdf::simple_garuda_inner_join_int64(left_key_view.data(),
+                                                           left_n,
+                                                           right_key_view.data(),
+                                                           right_n,
+                                                           _ctx.vk_context(),
+                                                           _ctx.dispatcher(),
+                                                           _ctx.workspace_mr(),
+                                                           USE_SIMPLE_GFX_JOIN_K)
+               : rasterdf::simple_garuda_inner_join(left_key_view.data(),
+                                                     left_n,
+                                                     right_key_view.data(),
+                                                     right_n,
+                                                     _ctx.vk_context(),
+                                                     _ctx.dispatcher(),
+                                                     _ctx.workspace_mr(),
+                                                     USE_SIMPLE_GFX_JOIN_K));
 
     match_count = static_cast<rasterdf::size_type>(sg_result.num_matches);
 
@@ -182,8 +205,18 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     return result;
   }
 
-  auto left_idx_view  = left_indices->view();
-  auto right_idx_view = right_indices->view();
+  if (_join_limit >= 0 && match_count > static_cast<rasterdf::size_type>(_join_limit)) {
+    RASTERDB_LOG_DEBUG("JOIN: limiting materialized output from {} to {} rows",
+                       match_count, _join_limit);
+    match_count = static_cast<rasterdf::size_type>(_join_limit);
+  }
+
+  rasterdf::column_view left_idx_view(
+      rasterdf::data_type{rasterdf::type_id::INT32}, match_count,
+      left_indices->view().data(), 0, 0, 0);
+  rasterdf::column_view right_idx_view(
+      rasterdf::data_type{rasterdf::type_id::INT32}, match_count,
+      right_indices->view().data(), 0, 0, 0);
 
   // Helper: gather a single string column using index array
   auto gather_string_col = [&](const gpu_column& in_col, const rasterdf::column_view& idx_view,
@@ -220,7 +253,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     disp.dispatch_prefix_scan_add(opc, scan_ngroups);
 
     int32_t total_chars = 0;
-    scan_total.copy_to_host(&total_chars, sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+    out_offsets.copy_to_host(&total_chars, sizeof(int32_t),
+                             static_cast<size_t>(nc) * sizeof(int32_t),
+                             _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
     rasterdf::device_buffer out_chars(mr, std::max(total_chars, 1), usage);
     string_copy_pc cpc{};

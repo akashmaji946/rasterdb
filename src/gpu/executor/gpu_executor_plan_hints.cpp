@@ -11,6 +11,7 @@ namespace gpu {
 void gpu_executor::analyze_plan_hints(duckdb::LogicalOperator& plan)
 {
   _scan_limit = -1;
+  _join_limit = -1;
   _scan_count_star_only = false;
 
   // Walk down the plan to find patterns
@@ -39,6 +40,9 @@ void gpu_executor::analyze_plan_hints(duckdb::LogicalOperator& plan)
       if (child->type == duckdb::LogicalOperatorType::LOGICAL_GET) {
         _scan_limit = limit_val + offset_val;
         RASTERDB_LOG_DEBUG("[TIMER]   hint: LIMIT pushdown = {} rows", _scan_limit);
+      } else if (child->type == duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+        _join_limit = limit_val + offset_val;
+        RASTERDB_LOG_DEBUG("[TIMER]   hint: JOIN output LIMIT pushdown = {} rows", _join_limit);
       }
     }
   }
