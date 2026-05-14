@@ -63,6 +63,13 @@ void gpu_executor::execute_grouped_aggregate(
     RASTERDB_LOG_DEBUG("{}", oss.str());
   }
 
+  // Early return for empty input — nothing to group
+  if (input.num_rows() == 0) {
+    RASTERDB_LOG_DEBUG("GROUP BY: 0 input rows, returning empty result");
+    output.set_num_rows(0);
+    return;
+  }
+
   // Build the effective group key column (single or composite)
   auto n_rows = input.num_rows();
   gpu_column composite_key_storage;  // owns memory for multi-col case
