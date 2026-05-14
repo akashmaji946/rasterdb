@@ -381,6 +381,118 @@ void gpu_executor::execute_grouped_aggregate(
   std::vector<rasterdf::column_view> key_views = {group_key_view};
   rasterdf::table_view keys_tv(key_views);
 
+  if (aggregates.empty()) {
+    rasterdf::data_type key_type = key_col_ptr->type;
+    if (single_col_string) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: zero-aggregate GROUP BY on STRING key not supported");
+    }
+
+    if (key_type.id == rasterdf::type_id::INT32) {
+      std::vector<int32_t> h_keys(static_cast<size_t>(n_rows));
+      download_column(_ctx, *key_col_ptr, h_keys.data(), h_keys.size() * sizeof(int32_t));
+      std::sort(h_keys.begin(), h_keys.end());
+      h_keys.erase(std::unique(h_keys.begin(), h_keys.end()), h_keys.end());
+
+      auto ng = static_cast<rasterdf::size_type>(h_keys.size());
+      if (num_group_cols == 1 && surrogate_id_to_composite.empty()) {
+        output.columns[0] = allocate_column(_ctx, key_type, ng);
+        output.columns[0].data.copy_from_host(h_keys.data(),
+                                              h_keys.size() * sizeof(int32_t),
+                                              _ctx.device(),
+                                              _ctx.queue(),
+                                              _ctx.command_pool());
+      } else {
+        std::vector<int64_t> sorted_composite_i64(ng);
+        if (!surrogate_id_to_composite.empty()) {
+          for (rasterdf::size_type j = 0; j < ng; j++) {
+            int32_t id = h_keys[static_cast<size_t>(j)];
+            if (id < 0 || static_cast<size_t>(id) >= surrogate_id_to_composite.size()) {
+              throw duckdb::NotImplementedException(
+                "RasterDB GPU: invalid surrogate GROUP BY key id %d", id);
+            }
+            sorted_composite_i64[static_cast<size_t>(j)] =
+              surrogate_id_to_composite[static_cast<size_t>(id)];
+          }
+        } else {
+          for (rasterdf::size_type j = 0; j < ng; j++) {
+            sorted_composite_i64[static_cast<size_t>(j)] =
+              static_cast<int64_t>(h_keys[static_cast<size_t>(j)]);
+          }
+        }
+
+        auto get_col_type = [&](size_t g) -> rasterdf::type_id {
+          if (g < _group_col_types.size()) return _group_col_types[g];
+          return rasterdf::type_id::INT32;
+        };
+
+        if (num_group_cols == 2) {
+          std::vector<int32_t> col0(ng), col1(ng);
+          for (rasterdf::size_type j = 0; j < ng; j++) {
+            col1[static_cast<size_t>(j)] =
+              static_cast<int32_t>(sorted_composite_i64[static_cast<size_t>(j)] %
+                                   decompose_base1);
+            col0[static_cast<size_t>(j)] =
+              static_cast<int32_t>(sorted_composite_i64[static_cast<size_t>(j)] /
+                                   decompose_base1);
+          }
+          output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
+          output.columns[0].data.copy_from_host(
+            col0.data(), col0.size() * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
+          output.columns[1].data.copy_from_host(
+            col1.data(), col1.size() * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        } else {
+          std::vector<int32_t> col0(ng), col1(ng), col2(ng);
+          for (rasterdf::size_type j = 0; j < ng; j++) {
+            int64_t c = sorted_composite_i64[static_cast<size_t>(j)];
+            col2[static_cast<size_t>(j)] = static_cast<int32_t>(c % decompose_base2);
+            c /= decompose_base2;
+            col1[static_cast<size_t>(j)] = static_cast<int32_t>(c % decompose_base1);
+            col0[static_cast<size_t>(j)] = static_cast<int32_t>(c / decompose_base1);
+          }
+          output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
+          output.columns[0].data.copy_from_host(
+            col0.data(), col0.size() * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
+          output.columns[1].data.copy_from_host(
+            col1.data(), col1.size() * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+          output.columns[2] = allocate_column(_ctx, {get_col_type(2)}, ng);
+          output.columns[2].data.copy_from_host(
+            col2.data(), col2.size() * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        }
+      }
+      output.set_num_rows(ng);
+      RASTERDB_LOG_DEBUG("GROUP BY distinct result: {} groups, {} output cols",
+                         ng,
+                         output.columns.size());
+      return;
+    }
+
+    if (key_type.id == rasterdf::type_id::INT64) {
+      std::vector<int64_t> h_keys(static_cast<size_t>(n_rows));
+      download_column(_ctx, *key_col_ptr, h_keys.data(), h_keys.size() * sizeof(int64_t));
+      std::sort(h_keys.begin(), h_keys.end());
+      h_keys.erase(std::unique(h_keys.begin(), h_keys.end()), h_keys.end());
+      auto ng = static_cast<rasterdf::size_type>(h_keys.size());
+      output.columns[0] = allocate_column(_ctx, key_type, ng);
+      output.columns[0].data.copy_from_host(h_keys.data(),
+                                            h_keys.size() * sizeof(int64_t),
+                                            _ctx.device(),
+                                            _ctx.queue(),
+                                            _ctx.command_pool());
+      output.set_num_rows(ng);
+      RASTERDB_LOG_DEBUG("GROUP BY distinct result: {} groups, {} output cols",
+                         ng,
+                         output.columns.size());
+      return;
+    }
+
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: unsupported zero-aggregate GROUP BY key type_id %d",
+      static_cast<int>(key_type.id));
+  }
+
   // Process each aggregate expression using GFXM mesh shader or compute shader
   // Result layout: [group_key_cols..., agg_cols...]
 
