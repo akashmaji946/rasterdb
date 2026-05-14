@@ -196,10 +196,36 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 // Handles: BOUND_REF, VALUE_CONSTANT, BOUND_FUNCTION, BOUND_CAST
 // ============================================================================
 
+static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src);
+static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src);
+
 gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Expression& raw_expr)
 {
-  // Strip casts
-  auto& expr = unwrap_cast(raw_expr);
+  if (raw_expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+    auto& cast = raw_expr.Cast<duckdb::BoundCastExpression>();
+    auto child_col = evaluate_expression(input, *cast.child);
+    rasterdf::data_type target_type = to_rdf_type(raw_expr.return_type);
+    if (target_type.id == rasterdf::type_id::FLOAT64) {
+      target_type = {rasterdf::type_id::FLOAT32};
+    }
+    if (child_col.type.id == target_type.id) {
+      return child_col;
+    }
+    if (target_type.id == rasterdf::type_id::INT32 &&
+        child_col.type.id == rasterdf::type_id::FLOAT32) {
+      return cast_float32_to_int32(_ctx, child_col);
+    }
+    if (target_type.id == rasterdf::type_id::FLOAT32 &&
+        child_col.type.id == rasterdf::type_id::INT32) {
+      return cast_int32_to_float32(_ctx, child_col);
+    }
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: unsupported cast from type_id %d to %s",
+      static_cast<int>(child_col.type.id),
+      raw_expr.return_type.ToString().c_str());
+  }
+
+  auto& expr = raw_expr;
 
   switch (expr.type) {
   case duckdb::ExpressionType::BOUND_REF: {
@@ -315,6 +341,20 @@ static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src)
   for (size_t i = 0; i < n; i++) h_flt[i] = static_cast<float>(src_int[i]);
   auto out = allocate_column(ctx, {rasterdf::type_id::FLOAT32}, static_cast<rasterdf::size_type>(n));
   out.data.copy_from_host(h_flt.data(), n * sizeof(float),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
+static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  std::vector<float> h_flt(n);
+  download_column(ctx, src, h_flt.data(), n * sizeof(float));
+
+  std::vector<int32_t> h_int(n);
+  for (size_t i = 0; i < n; i++) h_int[i] = static_cast<int32_t>(h_flt[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::INT32}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_int.data(), n * sizeof(int32_t),
                           ctx.device(), ctx.queue(), ctx.command_pool());
   return out;
 }
