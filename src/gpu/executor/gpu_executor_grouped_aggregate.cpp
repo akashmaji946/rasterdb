@@ -387,6 +387,41 @@ void gpu_executor::execute_grouped_aggregate(
     }
 
     if (key_type.id == rasterdf::type_id::INT32) {
+      if (num_group_cols == 1 && surrogate_id_to_composite.empty()) {
+        rasterdf::gfx_groupby_engine_init(_ctx.vk_context());
+
+        rasterdf::device_buffer out_keys(
+          _ctx.workspace_mr(),
+          0,
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        rasterdf::device_buffer out_values(
+          _ctx.workspace_mr(),
+          0,
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        uint32_t out_num_groups = 0;
+
+        rasterdf::gfxm_groupby_aggregate(1,
+                                         key_col_ptr->address(),
+                                         0,
+                                         static_cast<uint32_t>(n_rows),
+                                         _ctx.dispatcher(),
+                                         _ctx.workspace_mr(),
+                                         out_keys,
+                                         out_values,
+                                         out_num_groups,
+                                         0,
+                                         rasterdf::type_id::INT32);
+
+        output.columns[0].type = key_type;
+        output.columns[0].num_rows = static_cast<rasterdf::size_type>(out_num_groups);
+        output.columns[0].data = std::move(out_keys);
+        output.set_num_rows(static_cast<rasterdf::size_type>(out_num_groups));
+        RASTERDB_LOG_DEBUG("GROUP BY distinct GPU result: {} groups, {} output cols",
+                           out_num_groups,
+                           output.columns.size());
+        return;
+      }
+
       std::vector<int32_t> h_keys(static_cast<size_t>(n_rows));
       download_column(_ctx, *key_col_ptr, h_keys.data(), h_keys.size() * sizeof(int32_t));
       std::sort(h_keys.begin(), h_keys.end());
