@@ -67,8 +67,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
       } else {
         // GPU-side buffer copy for types without shader support (e.g. INT64/FLOAT64)
         size_t byte_count = static_cast<size_t>(src.num_rows) * rdf_type_size(src.type.id);
-        _ctx.dispatcher().copy_buffer(src.data.buffer(), result->columns[i].data.buffer(),
-                                      byte_count, src.data.offset(),
+        VkBuffer src_buf = src.data.buffer() != VK_NULL_HANDLE ? src.data.buffer() : src.cached_buffer;
+        VkDeviceSize src_off = src.data.buffer() != VK_NULL_HANDLE ? src.data.offset() : src.cached_offset;
+        _ctx.dispatcher().copy_buffer(src_buf, result->columns[i].data.buffer(),
+                                      byte_count, src_off,
                                       result->columns[i].data.offset());
       }
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {

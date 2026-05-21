@@ -552,6 +552,7 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
       table->columns[c].num_rows = static_cast<rasterdf::size_type>(cached->num_rows);
       table->columns[c].cached_address = bufMgr.gpuCacheAddress() + cached->gpu_offset;
       table->columns[c].cached_buffer = bufMgr.gpuCacheBuffer();
+      table->columns[c].cached_offset = cached->gpu_offset;
       RASTERDB_LOG_DEBUG("  col {} ({}) CACHED at offset {} ({} bytes)",
                          c, column_names[c], cached->gpu_offset, cached->byte_size);
     } else {
@@ -568,6 +569,7 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
       table->columns[c].num_rows = total_rows;
       table->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging_off;
       table->columns[c].cached_buffer = bufMgr.cpuStagingBuffer();
+      table->columns[c].cached_offset = staging_off;
     }
   }
 

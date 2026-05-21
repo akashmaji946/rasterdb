@@ -245,16 +245,22 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       col = allocate_column(_ctx, src.type, src.num_rows);
       size_t bytes = src.byte_size();
       if (bytes > 0) {
-        if (src.cached_address != 0 || src.data.buffer() == VK_NULL_HANDLE) {
-          std::vector<uint8_t> h(bytes);
-          download_column(_ctx, src, h.data(), bytes);
-          col.data.copy_from_host(h.data(), bytes, _ctx.device(), _ctx.queue(), _ctx.command_pool());
-        } else {
+        if (src.data.buffer() != VK_NULL_HANDLE) {
           _ctx.dispatcher().copy_buffer(src.data.buffer(),
                                         col.data.buffer(),
                                         bytes,
                                         src.data.offset(),
                                         col.data.offset());
+        } else if (src.cached_buffer != VK_NULL_HANDLE) {
+          _ctx.dispatcher().copy_buffer(src.cached_buffer,
+                                        col.data.buffer(),
+                                        bytes,
+                                        src.cached_offset,
+                                        col.data.offset());
+        } else {
+          std::vector<uint8_t> h(bytes);
+          download_column(_ctx, src, h.data(), bytes);
+          col.data.copy_from_host(h.data(), bytes, _ctx.device(), _ctx.queue(), _ctx.command_pool());
         }
       }
     } else {

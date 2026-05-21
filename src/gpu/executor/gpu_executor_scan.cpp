@@ -195,6 +195,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
         gpu_tbl->columns[c].num_rows       = static_cast<rasterdf::size_type>(cached->num_rows);
         gpu_tbl->columns[c].cached_address = bufMgr.gpuCacheAddress() + cached->gpu_offset;
         gpu_tbl->columns[c].cached_buffer  = bufMgr.gpuCacheBuffer();
+        gpu_tbl->columns[c].cached_offset  = cached->gpu_offset;
       } else {
         all_cached = false;
       }
@@ -332,6 +333,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           gpu_tbl->columns[c].num_rows       = total_scanned;
           gpu_tbl->columns[c].cached_address = bufMgr.cpuStagingAddress() + staging[c].staging_off;
           gpu_tbl->columns[c].cached_buffer  = bufMgr.cpuStagingBuffer();
+          gpu_tbl->columns[c].cached_offset  = staging[c].staging_off;
         }
       }
       gpu_tbl->set_num_rows(total_scanned);
