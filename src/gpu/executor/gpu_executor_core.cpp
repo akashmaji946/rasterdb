@@ -92,6 +92,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_operator(duckdb::LogicalOperato
     case duckdb::LogicalOperatorType::LOGICAL_LIMIT:
       result = execute_limit(op.Cast<duckdb::LogicalLimit>());
       break;
+    case duckdb::LogicalOperatorType::LOGICAL_TOP_N:
+      result = execute_top_n(op.Cast<duckdb::LogicalTopN>());
+      break;
     case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
       result = execute_join(op.Cast<duckdb::LogicalComparisonJoin>());
       break;

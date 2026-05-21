@@ -202,10 +202,10 @@ static void GPUExecutionFunction(ClientContext& context,
         Optimizer optimizer(*planner.binder, context);
         auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
 
+        optimized_plan->ResolveOperatorTypes();
         ColumnBindingResolver resolver;
         resolver.Verify(*optimized_plan);
         resolver.VisitOperator(*optimized_plan);
-        optimized_plan->ResolveOperatorTypes();
 
         auto& plan = *optimized_plan;
         std::string resolved_plan_text;

@@ -197,13 +197,11 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
   }
 
   rasterdf::device_buffer gather_idx_buf;
-  if (has_string_col || output_count < 256) {
+  if (has_string_col) {
     gather_idx_buf = build_gather_indices();
   }
 
-  // Skip GPU scatter for very small output tables (driver crash on tiny dispatches)
-  // For tiny outputs, use CPU-based scatter
-  if (output_count < 256) {
+  if (has_string_col && output_count < 256) {
     RASTERDB_LOG_DEBUG("Filter (CPU scatter for tiny output): {} -> {} rows", n, output_count);
     for (size_t c = 0; c < input.num_columns(); c++) {
       auto& in_col = input.col(c);

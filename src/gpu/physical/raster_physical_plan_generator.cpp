@@ -27,6 +27,8 @@ raster_physical_plan_generator::map_type(duckdb::LogicalOperatorType type) const
     return raster_physical_operator_type::ORDER_BY;
   case duckdb::LogicalOperatorType::LOGICAL_LIMIT:
     return raster_physical_operator_type::LIMIT;
+  case duckdb::LogicalOperatorType::LOGICAL_TOP_N:
+    return raster_physical_operator_type::TOP_N;
   case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
     return raster_physical_operator_type::COMPARISON_JOIN;
   default:

@@ -679,11 +679,6 @@ void gpu_executor::execute_grouped_aggregate(
 
       RASTERDB_LOG_DEBUG("     [GFXM] Output groups: {}", out_num_groups);
 
-      // Convert device buffers to rasterdf columns
-      // Keys are INT32 surrogate IDs or original INT32s
-      rasterdf::data_type key_type = key_col_ptr->type;
-      rasterdf::column key_col_rdf(key_type, out_num_groups, std::move(out_keys));
-
       rasterdf::data_type val_type;
       if (gfxm_agg_type == 0) {
         val_type = rasterdf::data_type{value_type_id == rasterdf::type_id::FLOAT32
@@ -694,6 +689,22 @@ void gpu_executor::execute_grouped_aggregate(
       } else {
         val_type = rasterdf::data_type{rasterdf::type_id::INT32};
       }
+
+      rasterdf::data_type key_type = key_col_ptr->type;
+      if (aggregates.size() == 1 && num_group_cols == 1 && surrogate_id_to_composite.empty() &&
+          !single_col_string) {
+        num_groups_result = out_num_groups;
+        output.columns[0].type = key_type;
+        output.columns[0].num_rows = static_cast<rasterdf::size_type>(out_num_groups);
+        output.columns[0].data = std::move(out_keys);
+        output.columns[1].type = val_type;
+        output.columns[1].num_rows = static_cast<rasterdf::size_type>(out_num_groups);
+        output.columns[1].data = std::move(out_values);
+        keys_set = true;
+        continue;
+      }
+
+      rasterdf::column key_col_rdf(key_type, out_num_groups, std::move(out_keys));
       rasterdf::column val_col_rdf(val_type, out_num_groups, std::move(out_values));
 
       // Download keys for sorting
@@ -1243,6 +1254,7 @@ void gpu_executor::execute_grouped_aggregate(
       output.columns[out_col_idx] = std::move(sorted_val_col);
     }
   }
+  output.set_num_rows(num_groups_result);
   RASTERDB_LOG_DEBUG(
     "GROUP BY result: {} groups, {} output cols", num_groups_result, output.columns.size());
 }
