@@ -326,7 +326,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       RASTERDB_LOG_DEBUG(
         "[TIMER]   scan: {} {} rows x {} cols", table_name, total_scanned, types.size());
 
-      // Set column metadata (staging addresses for GPU to read via reBAR zero-copy)
+      // Set column metadata — staging IS in VRAM (reBAR device-local+host-visible)
+      // GPU reads at full VRAM bandwidth, no DMA copy needed.
       for (size_t c = 0; c < num_cols; c++) {
         if (staging[c].staging_dst) {
           gpu_tbl->columns[c].type           = rdf_types[c];
@@ -342,10 +343,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       for (size_t c = 0; c < num_cols; c++) {
         total_bytes += gpu_tbl->col(c).byte_size();
       }
-      RASTERDB_LOG_DEBUG("[RDB_DEBUG]     gpu_upload_detail: {} cols, {} bytes (zero-copy reBAR)",
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG]     gpu_upload_detail: {} cols, {} bytes (reBAR zero-copy VRAM)",
                          gpu_tbl->num_columns(),
                          total_bytes);
-      RASTERDB_LOG_DEBUG("[TIMER]   gpu_upload                        0.00 ms (zero-copy)");
+      RASTERDB_LOG_DEBUG("[TIMER]   gpu_upload                        0.00 ms (reBAR zero-copy)");
     }
   } else {
     // ── FALLBACK: Standard scan + device upload ──

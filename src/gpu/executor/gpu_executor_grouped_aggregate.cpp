@@ -1000,15 +1000,19 @@ void gpu_executor::execute_grouped_aggregate(
 
   }  // end if constexpr (USE_SIMPLE_GFX_AGGR)
   else {
-    // ── Compute Shader Groupby (rasterdf::groupby) ──
-    RASTERDB_LOG_DEBUG("     [COMPUTE] Using compute shader groupby");
+    // ── Compute Shader Groupby (rasterdf::groupby) — FUSED single-pass ──
+    RASTERDB_LOG_DEBUG("     [COMPUTE] Using compute shader groupby (fused)");
+
+    // 1. Parse all aggregates and evaluate value expressions up-front
+    std::vector<gpu_column> val_temps(aggregates.size());
+    std::vector<rasterdf::aggregation_request> requests;
+    requests.reserve(aggregates.size());
 
     for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
       auto& expr  = aggregates[i]->Cast<duckdb::BoundAggregateExpression>();
       auto& fname = expr.function.name;
 
       bool is_count_star = false;
-
       if (expr.children.empty()) {
         is_count_star = (fname == "count" || fname == "count_star");
         if (!is_count_star) {
@@ -1017,7 +1021,6 @@ void gpu_executor::execute_grouped_aggregate(
         }
       }
 
-      // Map aggregate name to rasterdf kind
       rasterdf::aggregation_kind kind;
       if (fname == "sum" || fname == "sum_no_overflow") {
         kind = rasterdf::aggregation_kind::SUM;
@@ -1034,219 +1037,213 @@ void gpu_executor::execute_grouped_aggregate(
                                               fname.c_str());
       }
 
-      // Build aggregation request
-      rasterdf::groupby gb(keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-
-      std::vector<rasterdf::aggregation_request> requests;
       rasterdf::aggregation_request req;
-
-      // Evaluate the value expression (may be column ref or complex expression)
-      gpu_column val_temp;  // keep alive for view validity
       if (is_count_star) {
         req.values = key_col_ptr->view();
       } else {
-        val_temp   = evaluate_expression(input, *expr.children[0]);
-        req.values = val_temp.view();
+        val_temps[i] = evaluate_expression(input, *expr.children[0]);
+        req.values   = val_temps[i].view();
       }
       req.aggregations.push_back(std::make_unique<rasterdf::groupby_aggregation>(kind));
       requests.push_back(std::move(req));
+    }
 
-      auto agg_result = gb.aggregate(std::move(requests));
+    // 2. Single fused groupby call — builds hash table ONCE, scans data ONCE
+    rasterdf::groupby gb(keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    auto agg_result = gb.aggregate(std::move(requests));
 
-      // Extract keys + value from this aggregate call
-      auto this_key_cols = agg_result.keys->extract();
-      if (this_key_cols.empty() || agg_result.results.empty() || !agg_result.results[0]) {
-        throw duckdb::NotImplementedException(
-          "RasterDB GPU: grouped aggregate '%s' produced empty keys/results", fname.c_str());
-      }
-      auto ng = this_key_cols[0]->size();
+    // 3. Extract keys (produced once) and validate
+    auto result_key_cols = agg_result.keys->extract();
+    if (result_key_cols.empty()) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: fused grouped aggregate produced empty keys");
+    }
+    auto& key_col_rdf    = *result_key_cols[0];
+    auto ng              = key_col_rdf.size();
+    size_t key_elem_size = rasterdf::size_of(key_col_rdf.type());
+    bool keys_are_int64  = (key_col_rdf.type().id == rasterdf::type_id::INT64);
 
-      // Download keys to CPU for sorting (INT32 or INT64 depending on key type)
-      auto& key_col_rdf    = *this_key_cols[0];
-      auto& val_col_rdf    = *agg_result.results[0];
-      size_t key_elem_size = rasterdf::size_of(key_col_rdf.type());
-      bool keys_are_int64  = (key_col_rdf.type().id == rasterdf::type_id::INT64);
+    // 4. Download keys and build sort permutation (ONCE for all aggregates)
+    std::vector<uint8_t> h_keys_raw(ng * key_elem_size);
+    key_col_rdf.device_data().copy_to_host(
+      h_keys_raw.data(), ng * key_elem_size, 0, _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-      std::vector<uint8_t> h_keys_raw(ng * key_elem_size);
-      key_col_rdf.device_data().copy_to_host(
-        h_keys_raw.data(), ng * key_elem_size, 0, _ctx.device(), _ctx.queue(), _ctx.command_pool());
+    std::vector<size_t> perm(ng);
+    std::iota(perm.begin(), perm.end(), 0);
+    if (keys_are_int64) {
+      auto* kp = reinterpret_cast<const int64_t*>(h_keys_raw.data());
+      std::sort(perm.begin(), perm.end(), [kp](size_t a, size_t b) { return kp[a] < kp[b]; });
+    } else {
+      auto* kp = reinterpret_cast<const int32_t*>(h_keys_raw.data());
+      std::sort(perm.begin(), perm.end(), [kp](size_t a, size_t b) { return kp[a] < kp[b]; });
+    }
 
-      // Build a sort permutation (ascending by key)
-      std::vector<size_t> perm(ng);
-      std::iota(perm.begin(), perm.end(), 0);
-      if (keys_are_int64) {
-        auto* kp = reinterpret_cast<const int64_t*>(h_keys_raw.data());
-        std::sort(perm.begin(), perm.end(), [kp](size_t a, size_t b) { return kp[a] < kp[b]; });
+    // 5. Sort keys and store in output (ONCE)
+    std::vector<uint8_t> sorted_keys_raw(ng * key_elem_size);
+    for (size_t j = 0; j < ng; j++) {
+      std::memcpy(sorted_keys_raw.data() + j * key_elem_size,
+                  h_keys_raw.data() + perm[j] * key_elem_size,
+                  key_elem_size);
+    }
+
+    num_groups_result = ng;
+    if (num_group_cols == 1) {
+      auto sorted_key_col = allocate_column(_ctx, key_col_rdf.type(), ng);
+      sorted_key_col.data.copy_from_host(sorted_keys_raw.data(),
+                                         ng * key_elem_size,
+                                         _ctx.device(),
+                                         _ctx.queue(),
+                                         _ctx.command_pool());
+      if (single_col_string) {
+        auto& str_col = input.col(group_col_indices[0]);
+        rasterdf::device_buffer first_idx_buf(
+            _ctx.workspace_mr(), ng * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        _ctx.dispatcher().fill_buffer(first_idx_buf.buffer(), 0xFFFFFFFFu,
+                     ng * sizeof(int32_t), first_idx_buf.offset());
+        find_first_index_pc fpc{};
+        fpc.all_keys_ptr = string_hash_key.address();
+        fpc.unique_keys_ptr = sorted_key_col.address();
+        fpc.first_idx_ptr = first_idx_buf.data();
+        fpc.numElements = static_cast<uint32_t>(n_rows);
+        fpc.numUnique = static_cast<uint32_t>(ng);
+        _ctx.dispatcher().dispatch_find_first_index(fpc, (n_rows + 255) / 256);
+
+        rasterdf::device_buffer out_offsets(
+            _ctx.workspace_mr(), (ng + 1) * sizeof(int32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        string_lengths_pc lpc{};
+        lpc.offsets_ptr = str_col.str_offsets.data();
+        lpc.indices_ptr = first_idx_buf.data();
+        lpc.num_indices = static_cast<uint32_t>(ng);
+        lpc.output_ptr = out_offsets.data();
+        _ctx.dispatcher().dispatch_string_lengths(lpc);
+        _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
+                     out_offsets.offset() + ng * sizeof(int32_t));
+        uint32_t scan_elems = static_cast<uint32_t>(ng) + 1;
+        uint32_t scan_ngroups = (scan_elems + 255) / 256;
+        rasterdf::device_buffer scan_bsums(_ctx.workspace_mr(), scan_ngroups * sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        rasterdf::device_buffer scan_total(_ctx.workspace_mr(), sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        prefix_scan_pc opc{};
+        opc.data_ptr = out_offsets.data();
+        opc.block_sums_ptr = scan_bsums.data();
+        opc.total_sum_ptr = scan_total.data();
+        opc.numElements = scan_elems;
+        opc.blockCount = scan_ngroups;
+        _ctx.dispatcher().dispatch_prefix_scan_local(opc, scan_ngroups);
+        _ctx.dispatcher().dispatch_prefix_scan_global(opc);
+        _ctx.dispatcher().dispatch_prefix_scan_add(opc, scan_ngroups);
+        int32_t total_out_chars = 0;
+        scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
+                                _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        rasterdf::device_buffer out_chars(
+            _ctx.workspace_mr(), std::max(total_out_chars, 1),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        string_copy_pc cpc{};
+        cpc.in_offsets_ptr = str_col.str_offsets.data();
+        cpc.in_chars_ptr = str_col.str_chars.data();
+        cpc.indices_ptr = first_idx_buf.data();
+        cpc.out_offsets_ptr = out_offsets.data();
+        cpc.out_chars_ptr = out_chars.data();
+        cpc.num_indices = static_cast<uint32_t>(ng);
+        _ctx.dispatcher().dispatch_string_copy(cpc);
+        output.columns[0].type = rasterdf::data_type{rasterdf::type_id::STRING};
+        output.columns[0].num_rows = static_cast<rasterdf::size_type>(ng);
+        output.columns[0].str_offsets = std::move(out_offsets);
+        output.columns[0].str_chars = std::move(out_chars);
+        output.columns[0].str_total_chars = total_out_chars;
       } else {
-        auto* kp = reinterpret_cast<const int32_t*>(h_keys_raw.data());
-        std::sort(perm.begin(), perm.end(), [kp](size_t a, size_t b) { return kp[a] < kp[b]; });
+        output.columns[0] = std::move(sorted_key_col);
+      }
+    } else {
+      // Mixed-radix decomposition (INT64 composite keys, handles INT32 + FLOAT32)
+      std::vector<int64_t> sorted_composite_i64(ng);
+      if (keys_are_int64) {
+        auto* p = reinterpret_cast<const int64_t*>(sorted_keys_raw.data());
+        for (rasterdf::size_type j = 0; j < ng; j++)
+          sorted_composite_i64[j] = p[j];
+      } else if (!surrogate_id_to_composite.empty()) {
+        auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
+        for (rasterdf::size_type j = 0; j < ng; j++) {
+          int32_t id = p[j];
+          if (id < 0 || static_cast<size_t>(id) >= surrogate_id_to_composite.size()) {
+            throw duckdb::NotImplementedException(
+              "RasterDB GPU: invalid surrogate GROUP BY key id %d", id);
+          }
+          sorted_composite_i64[j] = surrogate_id_to_composite[static_cast<size_t>(id)];
+        }
+      } else {
+        auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
+        for (rasterdf::size_type j = 0; j < ng; j++)
+          sorted_composite_i64[j] = static_cast<int64_t>(p[j]);
       }
 
-      // Download value column to CPU, apply permutation, re-upload
+      auto get_col_type = [&](size_t g) -> rasterdf::type_id {
+        if (g < _group_col_types.size()) return _group_col_types[g];
+        return rasterdf::type_id::INT32;
+      };
+
+      if (num_group_cols == 2) {
+        std::vector<int32_t> col0(ng), col1(ng);
+        for (rasterdf::size_type j = 0; j < ng; j++) {
+          col1[j] = static_cast<int32_t>(sorted_composite_i64[j] % decompose_base1);
+          col0[j] = static_cast<int32_t>(sorted_composite_i64[j] / decompose_base1);
+        }
+        output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
+        output.columns[0].data.copy_from_host(
+          col0.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
+        output.columns[1].data.copy_from_host(
+          col1.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      } else {
+        std::vector<int32_t> col0(ng), col1(ng), col2(ng);
+        for (rasterdf::size_type j = 0; j < ng; j++) {
+          int64_t c = sorted_composite_i64[j];
+          col2[j]   = static_cast<int32_t>(c % decompose_base2);
+          c /= decompose_base2;
+          col1[j] = static_cast<int32_t>(c % decompose_base1);
+          col0[j] = static_cast<int32_t>(c / decompose_base1);
+        }
+        output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
+        output.columns[0].data.copy_from_host(
+          col0.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
+        output.columns[1].data.copy_from_host(
+          col1.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        output.columns[2] = allocate_column(_ctx, {get_col_type(2)}, ng);
+        output.columns[2].data.copy_from_host(
+          col2.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+      }
+    }
+    keys_set = true;
+
+    // 6. Apply sort permutation to each value column and store in output
+    for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
+      if (i >= agg_result.results.size() || !agg_result.results[i]) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: fused grouped aggregate produced empty result for agg %zu", (size_t)i);
+      }
+      auto& val_col_rdf   = *agg_result.results[i];
       size_t val_elem_size = rasterdf::size_of(val_col_rdf.type());
+
       std::vector<uint8_t> h_vals(ng * val_elem_size);
       val_col_rdf.device_data().copy_to_host(
         h_vals.data(), ng * val_elem_size, 0, _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-      // Apply permutation to keys and values
-      std::vector<uint8_t> sorted_keys_raw(ng * key_elem_size);
       std::vector<uint8_t> sorted_vals(ng * val_elem_size);
       for (size_t j = 0; j < ng; j++) {
-        std::memcpy(sorted_keys_raw.data() + j * key_elem_size,
-                    h_keys_raw.data() + perm[j] * key_elem_size,
-                    key_elem_size);
         std::memcpy(sorted_vals.data() + j * val_elem_size,
                     h_vals.data() + perm[j] * val_elem_size,
                     val_elem_size);
       }
 
-      // On first aggregate, store the sorted keys
-      if (!keys_set) {
-        num_groups_result = ng;
-        if (num_group_cols == 1) {
-          auto sorted_key_col = allocate_column(_ctx, key_col_rdf.type(), ng);
-          sorted_key_col.data.copy_from_host(sorted_keys_raw.data(),
-                                             ng * key_elem_size,
-                                             _ctx.device(),
-                                             _ctx.queue(),
-                                             _ctx.command_pool());
-          if (single_col_string) {
-            // Same string key reconstruction as GFXM path
-            auto& str_col = input.col(group_col_indices[0]);
-            rasterdf::device_buffer first_idx_buf(
-                _ctx.workspace_mr(), ng * sizeof(int32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            // Initialize to 0xFFFFFFFF so atomicMin in shader works correctly
-            _ctx.dispatcher().fill_buffer(first_idx_buf.buffer(), 0xFFFFFFFFu,
-                         ng * sizeof(int32_t), first_idx_buf.offset());
-            find_first_index_pc fpc{};
-            fpc.all_keys_ptr = string_hash_key.address();
-            fpc.unique_keys_ptr = sorted_key_col.address();
-            fpc.first_idx_ptr = first_idx_buf.data();
-            fpc.numElements = static_cast<uint32_t>(n_rows);
-            fpc.numUnique = static_cast<uint32_t>(ng);
-            _ctx.dispatcher().dispatch_find_first_index(fpc, (n_rows + 255) / 256);
-
-            rasterdf::device_buffer out_offsets(
-                _ctx.workspace_mr(), (ng + 1) * sizeof(int32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            // Write lengths into out_offsets[0..N-1]
-            string_lengths_pc lpc{};
-            lpc.offsets_ptr = str_col.str_offsets.data();
-            lpc.indices_ptr = first_idx_buf.data();
-            lpc.num_indices = static_cast<uint32_t>(ng);
-            lpc.output_ptr = out_offsets.data();
-            _ctx.dispatcher().dispatch_string_lengths(lpc);
-            // Zero element N, then exclusive prefix scan on N+1 elements
-            _ctx.dispatcher().fill_buffer(out_offsets.buffer(), 0u, sizeof(int32_t),
-                         out_offsets.offset() + ng * sizeof(int32_t));
-            uint32_t scan_elems = static_cast<uint32_t>(ng) + 1;
-            uint32_t scan_ngroups = (scan_elems + 255) / 256;
-            rasterdf::device_buffer scan_bsums(_ctx.workspace_mr(), scan_ngroups * sizeof(uint32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            rasterdf::device_buffer scan_total(_ctx.workspace_mr(), sizeof(uint32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            prefix_scan_pc opc{};
-            opc.data_ptr = out_offsets.data();
-            opc.block_sums_ptr = scan_bsums.data();
-            opc.total_sum_ptr = scan_total.data();
-            opc.numElements = scan_elems;
-            opc.blockCount = scan_ngroups;
-            _ctx.dispatcher().dispatch_prefix_scan_local(opc, scan_ngroups);
-            _ctx.dispatcher().dispatch_prefix_scan_global(opc);
-            _ctx.dispatcher().dispatch_prefix_scan_add(opc, scan_ngroups);
-            int32_t total_out_chars = 0;
-            scan_total.copy_to_host(&total_out_chars, sizeof(int32_t),
-                                    _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            rasterdf::device_buffer out_chars(
-                _ctx.workspace_mr(), std::max(total_out_chars, 1),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-            string_copy_pc cpc{};
-            cpc.in_offsets_ptr = str_col.str_offsets.data();
-            cpc.in_chars_ptr = str_col.str_chars.data();
-            cpc.indices_ptr = first_idx_buf.data();
-            cpc.out_offsets_ptr = out_offsets.data();
-            cpc.out_chars_ptr = out_chars.data();
-            cpc.num_indices = static_cast<uint32_t>(ng);
-            _ctx.dispatcher().dispatch_string_copy(cpc);
-            output.columns[0].type = rasterdf::data_type{rasterdf::type_id::STRING};
-            output.columns[0].num_rows = static_cast<rasterdf::size_type>(ng);
-            output.columns[0].str_offsets = std::move(out_offsets);
-            output.columns[0].str_chars = std::move(out_chars);
-            output.columns[0].str_total_chars = total_out_chars;
-          } else {
-            output.columns[0] = std::move(sorted_key_col);
-          }
-        } else {
-          // Mixed-radix decomposition (INT64 composite keys, handles INT32 + FLOAT32)
-          std::vector<int64_t> sorted_composite_i64(ng);
-          if (keys_are_int64) {
-            auto* p = reinterpret_cast<const int64_t*>(sorted_keys_raw.data());
-            for (rasterdf::size_type j = 0; j < ng; j++)
-              sorted_composite_i64[j] = p[j];
-          } else if (!surrogate_id_to_composite.empty()) {
-            auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
-            for (rasterdf::size_type j = 0; j < ng; j++) {
-              int32_t id = p[j];
-              if (id < 0 || static_cast<size_t>(id) >= surrogate_id_to_composite.size()) {
-                throw duckdb::NotImplementedException(
-                  "RasterDB GPU: invalid surrogate GROUP BY key id %d", id);
-              }
-              sorted_composite_i64[j] = surrogate_id_to_composite[static_cast<size_t>(id)];
-            }
-          } else {
-            auto* p = reinterpret_cast<const int32_t*>(sorted_keys_raw.data());
-            for (rasterdf::size_type j = 0; j < ng; j++)
-              sorted_composite_i64[j] = static_cast<int64_t>(p[j]);
-          }
-
-          // Decompose and assign correct type (FLOAT32 cols get their original type)
-          auto get_col_type = [&](size_t g) -> rasterdf::type_id {
-            if (g < _group_col_types.size()) return _group_col_types[g];
-            return rasterdf::type_id::INT32;
-          };
-
-          if (num_group_cols == 2) {
-            std::vector<int32_t> col0(ng), col1(ng);
-            for (rasterdf::size_type j = 0; j < ng; j++) {
-              col1[j] = static_cast<int32_t>(sorted_composite_i64[j] % decompose_base1);
-              col0[j] = static_cast<int32_t>(sorted_composite_i64[j] / decompose_base1);
-            }
-            output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
-            output.columns[0].data.copy_from_host(
-              col0.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
-            output.columns[1].data.copy_from_host(
-              col1.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
-          } else {
-            std::vector<int32_t> col0(ng), col1(ng), col2(ng);
-            for (rasterdf::size_type j = 0; j < ng; j++) {
-              int64_t c = sorted_composite_i64[j];
-              col2[j]   = static_cast<int32_t>(c % decompose_base2);
-              c /= decompose_base2;
-              col1[j] = static_cast<int32_t>(c % decompose_base1);
-              col0[j] = static_cast<int32_t>(c / decompose_base1);
-            }
-            output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, ng);
-            output.columns[0].data.copy_from_host(
-              col0.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, ng);
-            output.columns[1].data.copy_from_host(
-              col1.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
-            output.columns[2] = allocate_column(_ctx, {get_col_type(2)}, ng);
-            output.columns[2].data.copy_from_host(
-              col2.data(), ng * sizeof(int32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
-          }
-        }
-        keys_set = true;
-      }
-
-      // Create gpu_column for sorted values and upload
       size_t out_col_idx  = num_group_cols + i;
       auto sorted_val_col = allocate_column(_ctx, val_col_rdf.type(), ng);
       sorted_val_col.data.copy_from_host(

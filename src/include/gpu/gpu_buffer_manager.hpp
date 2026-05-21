@@ -115,6 +115,12 @@ public:
                      const std::vector<size_t>& dst_offsets,  // offsets in gpuCache
                      const std::vector<size_t>& sizes);
 
+  /// Batch transfer: multiple regions from cpuProcessing → gpuProcessing in ONE vkQueueSubmit.
+  void batchTransferToProcessing(gpu_context& ctx,
+                     const std::vector<size_t>& src_offsets,  // offsets in cpuProcessing
+                     const std::vector<size_t>& dst_offsets,  // offsets in gpuProcessing
+                     const std::vector<size_t>& sizes);
+
   static bool is_initialized();
 
 private:

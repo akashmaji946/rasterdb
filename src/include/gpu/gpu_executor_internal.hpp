@@ -18,6 +18,7 @@
 #include <rasterdf/stream_compaction.hpp>
 #include <rasterdf/join.hpp>
 #include <rasterdf/simple_garuda_join.hpp>
+#include <rasterdf/non_equi_join.hpp>
 #include <rasterdf/groupby.hpp>
 
 #include <duckdb/common/exception.hpp>

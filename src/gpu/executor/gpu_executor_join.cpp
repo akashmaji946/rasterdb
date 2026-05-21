@@ -21,7 +21,7 @@ static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 
 // Hash bits for Simple Garuda join: num_slots = 1 << k.
 // Higher k = more slots = less collisions but more memory.
-static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 22;
+static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
@@ -43,16 +43,18 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
                        c.left->ToString(),
                        c.right->ToString());
   }
-  for (auto& cond : op.conditions) {
-    if (cond.comparison != duckdb::ExpressionType::COMPARE_EQUAL) {
-      throw duckdb::NotImplementedException("RasterDB GPU: only equi-join supported");
-    }
+  int equi_condition_idx = -1;
+  for (size_t ci = 0; ci < op.conditions.size(); ci++) {
+    auto& cond = op.conditions[ci];
     auto& le = unwrap_cast(*cond.left);
     auto& re = unwrap_cast(*cond.right);
     if (le.type != duckdb::ExpressionType::BOUND_REF ||
         re.type != duckdb::ExpressionType::BOUND_REF) {
       throw duckdb::NotImplementedException(
         "RasterDB GPU: join conditions must be column references");
+    }
+    if (cond.comparison == duckdb::ExpressionType::COMPARE_EQUAL && equi_condition_idx < 0) {
+      equi_condition_idx = static_cast<int>(ci);
     }
   }
 
@@ -68,8 +70,13 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
                      right_table->num_rows(),
                      right_table->num_columns());
 
+  std::unique_ptr<rasterdf::column> left_indices;
+  std::unique_ptr<rasterdf::column> right_indices;
+  rasterdf::size_type match_count = 0;
+
+  if (equi_condition_idx >= 0) {
   // Join on FIRST condition
-  auto& cond0        = op.conditions[0];
+  auto& cond0        = op.conditions[static_cast<size_t>(equi_condition_idx)];
   auto left_key_idx  = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
   auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
 
@@ -115,10 +122,6 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     static_cast<size_t>(right_key_idx),
     static_cast<uint64_t>(right_key_view.data()),
     right_key_view.size());
-
-  std::unique_ptr<rasterdf::column> left_indices;
-  std::unique_ptr<rasterdf::column> right_indices;
-  rasterdf::size_type match_count = 0;
 
   if constexpr (USE_SIMPLE_GFX_JOIN) {
     // ── Simple Garuda Join (graphics-pipeline, vertex shader hash join) ──
@@ -193,6 +196,60 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     match_count   = left_indices ? left_indices->size() : 0;
   }
   RASTERDB_LOG_DEBUG("JOIN: {} matches after first condition", match_count);
+  } else {
+    if (op.conditions.size() != 1) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: non-equi join without equality supports one condition");
+    }
+    auto& cond0 = op.conditions[0];
+    auto left_key_idx = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
+    auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
+    auto& left_key_col = left_table->col(left_key_idx);
+    auto& right_key_col = right_table->col(right_key_idx);
+    if (left_key_col.is_string() || right_key_col.is_string() ||
+        left_key_col.type.id != rasterdf::type_id::INT32 ||
+        right_key_col.type.id != rasterdf::type_id::INT32) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: non-equi join currently supports INT32 fixed-width keys");
+    }
+    uint64_t product = static_cast<uint64_t>(left_table->num_rows()) *
+                       static_cast<uint64_t>(right_table->num_rows());
+    if (product > 1000000) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: non-equi join without equality condition too large");
+    }
+    int32_t cmp_op = 4;
+    switch (cond0.comparison) {
+      case duckdb::ExpressionType::COMPARE_GREATERTHAN:          cmp_op = 0; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHAN:             cmp_op = 1; break;
+      case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: cmp_op = 2; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:    cmp_op = 3; break;
+      case duckdb::ExpressionType::COMPARE_EQUAL:                cmp_op = 4; break;
+      case duckdb::ExpressionType::COMPARE_NOTEQUAL:             cmp_op = 5; break;
+      default:
+        throw duckdb::NotImplementedException("RasterDB GPU: unsupported non-equi join comparison");
+    }
+    auto join_result = rasterdf::non_equi_join_int32(left_key_col.address(),
+                                                     static_cast<uint32_t>(left_table->num_rows()),
+                                                     right_key_col.address(),
+                                                     static_cast<uint32_t>(right_table->num_rows()),
+                                                     cmp_op,
+                                                     _ctx.vk_context(),
+                                                     _ctx.dispatcher(),
+                                                     _ctx.workspace_mr());
+    match_count = static_cast<rasterdf::size_type>(join_result.num_matches);
+    if (match_count > 0) {
+      left_indices =
+        std::make_unique<rasterdf::column>(rasterdf::data_type{rasterdf::type_id::INT32},
+                                           match_count,
+                                           std::move(*join_result.left_indices));
+      right_indices =
+        std::make_unique<rasterdf::column>(rasterdf::data_type{rasterdf::type_id::INT32},
+                                           match_count,
+                                           std::move(*join_result.right_indices));
+    }
+    RASTERDB_LOG_DEBUG("JOIN: {} matches after non-equi condition", match_count);
+  }
 
   if (match_count == 0) {
     auto result          = std::make_unique<gpu_table>();
@@ -336,7 +393,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
 
   // Post-filter on remaining conditions (multi-condition join)
   size_t num_left_cols = left_table->num_columns();
-  for (size_t ci = 1; ci < op.conditions.size(); ci++) {
+  for (size_t ci = 0; ci < op.conditions.size(); ci++) {
+    if (static_cast<int>(ci) == equi_condition_idx || equi_condition_idx < 0) {
+      continue;
+    }
     auto& cond  = op.conditions[ci];
     auto lk_idx = unwrap_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;
     auto rk_idx = unwrap_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
@@ -348,12 +408,24 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     uint32_t n = static_cast<uint32_t>(result->num_rows());
     auto mask  = allocate_column(_ctx, {rasterdf::type_id::INT32}, n);
 
+    int32_t cmp_op = 4;
+    switch (cond.comparison) {
+      case duckdb::ExpressionType::COMPARE_GREATERTHAN:          cmp_op = 0; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHAN:             cmp_op = 1; break;
+      case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: cmp_op = 2; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:    cmp_op = 3; break;
+      case duckdb::ExpressionType::COMPARE_EQUAL:                cmp_op = 4; break;
+      case duckdb::ExpressionType::COMPARE_NOTEQUAL:             cmp_op = 5; break;
+      default:
+        throw duckdb::NotImplementedException("RasterDB GPU: unsupported post-join comparison");
+    }
+
     compare_columns_push_constants cpc{};
     cpc.input_a     = left_key_col.address();
     cpc.input_b     = right_key_col.address();
     cpc.output_addr = mask.address();
     cpc.size        = n;
-    cpc.op          = 4;                                                    // EQ
+    cpc.op          = cmp_op;
     cpc.type_id     = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);  // INT32
     _ctx.dispatcher().dispatch_compare_columns(cpc);
 

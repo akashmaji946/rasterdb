@@ -59,21 +59,23 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
   RASTERDB_LOG_INFO("  GPU cache: {}MB device-local buffer allocated (addr=0x{:x})",
                     cache_size / (1024 * 1024), _gpu_cache_alloc.address);
 
-  // 2. CPU Staging: host-visible, persistently mapped (equivalent of Sirius's cudaHostAlloc)
-  //    Used for CPU→GPU data transfers. Persistently mapped = no map/unmap overhead.
+  // 2. CPU Staging: reBAR path — device-local + host-visible (zero-copy).
+  //    CPU writes scan data directly to VRAM via PCIe BAR mapping.
+  //    GPU reads at full VRAM bandwidth (~1 TB/s) instead of PCIe (~12 GB/s).
+  //    Falls back to host-visible if reBAR unavailable or allocation too large.
   _cpu_staging_alloc = mr->allocate(
       cpu_size,
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT |          // also used as download destination
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-      VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+      VMA_MEMORY_USAGE_AUTO);
   if (!_cpu_staging_alloc.mapped_ptr) {
     mr->deallocate(_gpu_cache_alloc);
     throw std::runtime_error("GPUBufferManager: failed to map CPU staging buffer");
   }
   cpuProcessing = reinterpret_cast<uint8_t*>(_cpu_staging_alloc.mapped_ptr);
-  RASTERDB_LOG_INFO("  CPU staging: {}MB host-visible buffer allocated (mapped={})",
+  RASTERDB_LOG_INFO("  CPU staging: {}MB device-local+host-visible buffer allocated (mapped={})",
                     cpu_size / (1024 * 1024), (void*)cpuProcessing);
 
   // 2b. CPU Download: host-cached buffer for fast GPU→CPU readback.
@@ -221,6 +223,29 @@ void GPUBufferManager::batchTransfer(
       ctx.device(), ctx.queue(), ctx.command_pool());
 
   dummy_cache.release();
+}
+
+void GPUBufferManager::batchTransferToProcessing(
+    gpu_context& ctx,
+    const std::vector<size_t>& src_offsets,
+    const std::vector<size_t>& dst_offsets,
+    const std::vector<size_t>& sizes)
+{
+  if (src_offsets.empty()) return;
+
+  // Wrap gpuProcessing buffer into a dummy device_buffer to use batch_copy_from_host.
+  rasterdf::device_buffer dummy_proc(
+      ctx.host_resource(),
+      _gpu_processing_alloc.buffer,
+      _gpu_processing_alloc.allocation,
+      processing_size_per_gpu);
+
+  dummy_proc.batch_copy_from_host(
+      src_offsets, dst_offsets, sizes,
+      cpuStagingBuffer(),
+      ctx.device(), ctx.queue(), ctx.command_pool());
+
+  dummy_proc.release();
 }
 
 } // namespace gpu
