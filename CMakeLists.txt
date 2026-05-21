@@ -88,12 +88,19 @@ set(GPU_EXECUTOR_SOURCES
     src/gpu/executor/gpu_executor_result.cpp
     src/gpu/executor/gpu_executor_utils.cpp)
 
+set(GPU_PHYSICAL_SOURCES
+    src/gpu/physical/raster_physical_operator.cpp
+    src/gpu/physical/raster_physical_plan_generator.cpp
+    src/gpu/pipeline/raster_pipeline.cpp
+    src/gpu/pipeline/raster_pipeline_executor.cpp)
+
 # GPU_SOURCES — Vulkan/rasterdf GPU execution layer
 set(GPU_SOURCES
     src/gpu/gpu_context.cpp
     src/gpu/gpu_buffer_manager.cpp
     src/gpu/gpu_table.cpp
     src/gpu/gpu_scan_executor.cpp
+    ${GPU_PHYSICAL_SOURCES}
     ${GPU_EXECUTOR_SOURCES})
 # cmake-format: on
 

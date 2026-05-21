@@ -5,10 +5,35 @@
 
 #include "gpu/gpu_executor_internal.hpp"
 
+#include <duckdb/planner/table_filter.hpp>
 #include <duckdb/storage/table_storage_info.hpp>
 
 namespace rasterdb {
 namespace gpu {
+
+static duckdb::unique_ptr<duckdb::TableFilterSet>
+create_scan_filter_set(const duckdb::TableFilterSet& table_filters,
+                       const duckdb::vector<duckdb::ColumnIndex>& column_ids)
+{
+  if (table_filters.filters.empty()) {
+    return nullptr;
+  }
+  auto filter_set = duckdb::make_uniq<duckdb::TableFilterSet>();
+  for (auto& entry : table_filters.filters) {
+    duckdb::optional_idx column_index;
+    for (duckdb::idx_t i = 0; i < column_ids.size(); i++) {
+      if (entry.first == column_ids[i].GetPrimaryIndex()) {
+        column_index = i;
+        break;
+      }
+    }
+    if (!column_index.IsValid()) {
+      throw duckdb::InternalException("RasterDB GPU scan: could not remap table filter column index");
+    }
+    filter_set->filters[column_index.GetIndex()] = entry.second->Copy();
+  }
+  return filter_set;
+}
 
 std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 {
@@ -50,14 +75,36 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     RASTERDB_LOG_DEBUG("{}", bindings_line.str());
   }
 
-  // Get the output types from the logical operator.
-  // In unoptimized plans, op.types may be empty. Use returned_types + column_ids
-  // to determine the actual projected types.
   auto& col_ids = op.GetColumnIds();
+  duckdb::vector<duckdb::ColumnIndex> output_col_ids;
+  if (_scan_count_star_only && !col_ids.empty()) {
+    output_col_ids.push_back(col_ids[0]);
+  } else if (!op.projection_ids.empty()) {
+    for (auto proj_id : op.projection_ids) {
+      if (proj_id >= col_ids.size()) {
+        throw duckdb::InternalException(
+          "RasterDB GPU scan: projection id %llu out of range for %llu column ids",
+          static_cast<unsigned long long>(proj_id),
+          static_cast<unsigned long long>(col_ids.size()));
+      }
+      output_col_ids.push_back(col_ids[proj_id]);
+    }
+  } else {
+    output_col_ids = col_ids;
+  }
+
+  // Get the output types from the logical operator.
+  // Optimized plans may scan more columns than they project. Downstream bound
+  // references index the projected output schema, so all GPU table metadata must
+  // follow output_col_ids/op.types rather than raw col_ids.
   duckdb::vector<duckdb::LogicalType> types;
-  for (auto& cid : col_ids) {
+  if (!op.types.empty() && op.types.size() == output_col_ids.size()) {
+    types = op.types;
+  } else {
+  for (auto& cid : output_col_ids) {
     auto idx = cid.GetPrimaryIndex();
     if (idx < op.returned_types.size()) { types.push_back(op.returned_types[idx]); }
+  }
   }
   if (types.empty()) {
     types = op.returned_types;  // fallback: all columns
@@ -78,13 +125,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   if (_scan_count_star_only && !types.empty()) { types.resize(1); }
 
   // ── Direct Table Function Scan (mirrors Sirius GetDataDuckDB) ────────
-  // Build scan types from column_ids
+  // Build physical output scan types. TableFunctionInitInput still receives
+  // raw col_ids + projection_ids so DuckDB can perform pushdown internally, but
+  // chunks contain only projected output columns when projection_ids is set.
   duckdb::vector<duckdb::LogicalType> scan_types;
-  if (_scan_count_star_only && !col_ids.empty()) {
-    auto idx = col_ids[0].GetPrimaryIndex();
-    if (idx < op.returned_types.size()) { scan_types.push_back(op.returned_types[idx]); }
+  if (!op.types.empty() && op.types.size() == output_col_ids.size()) {
+    scan_types = op.types;
   } else {
-    for (auto& cid : col_ids) {
+    for (auto& cid : output_col_ids) {
       auto idx = cid.GetPrimaryIndex();
       if (idx < op.returned_types.size()) { scan_types.push_back(op.returned_types[idx]); }
     }
@@ -93,12 +141,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
   // Build column name list for cache lookup
   std::vector<std::string> col_names;
-  if (_scan_count_star_only && !col_ids.empty()) {
-    auto col_idx = col_ids[0].GetPrimaryIndex();
-    col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
-  } else {
-    for (size_t i = 0; i < col_ids.size(); i++) {
-      auto col_idx = col_ids[i].GetPrimaryIndex();
+  if (!op.names.empty()) {
+    for (size_t i = 0; i < output_col_ids.size(); i++) {
+      auto col_idx = output_col_ids[i].GetPrimaryIndex();
       col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
     }
   }
@@ -172,34 +217,32 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       };
       std::vector<col_staging_info> staging(num_cols);
 
-      // Estimate staging size: use _scan_limit, estimated_cardinality, table stats, or fallback
+      // Size staging from actual base-table cardinality when available. Optimized
+      // LogicalGet estimates can reflect filtered/joined cardinality, but this
+      // table function scan still materializes the base scan output.
       size_t STAGING_CHUNK_ROWS;
+      size_t table_rows = 0;
+      if (table_entry) {
+        try {
+          auto storage_info = table_entry->GetStorageInfo(_client_ctx);
+          if (storage_info.cardinality.IsValid()) {
+            table_rows = storage_info.cardinality.GetIndex();
+          }
+        } catch (...) {
+        }
+      }
       if (_scan_limit > 0) {
         STAGING_CHUNK_ROWS = static_cast<size_t>(_scan_limit);
+      } else if (table_rows > 0) {
+        STAGING_CHUNK_ROWS = static_cast<size_t>(table_rows * 1.05) + 4096;
+        RASTERDB_LOG_DEBUG("[RDB_DEBUG]   staging sized from table stats: {} rows",
+                           STAGING_CHUNK_ROWS);
       } else if (op.has_estimated_cardinality && op.estimated_cardinality > 0) {
-        // Use plan estimate with 20% headroom
-        STAGING_CHUNK_ROWS = static_cast<size_t>(op.estimated_cardinality * 1.2) + 1024;
+        STAGING_CHUNK_ROWS = static_cast<size_t>(op.estimated_cardinality * 2.0) + 4096;
       } else {
-        // Query actual table stats from DuckDB catalog when available
-        size_t table_rows = 0;
-        if (table_entry) {
-          try {
-            auto storage_info = table_entry->GetStorageInfo(_client_ctx);
-            if (storage_info.cardinality.IsValid()) {
-              table_rows = storage_info.cardinality.GetIndex();
-            }
-          } catch (...) {
-          }
-        }
-        if (table_rows > 0) {
-          STAGING_CHUNK_ROWS = static_cast<size_t>(table_rows * 1.05) + 4096;
-          RASTERDB_LOG_DEBUG("[RDB_DEBUG]   staging sized from table stats: {} rows",
-                             STAGING_CHUNK_ROWS);
-        } else {
-          STAGING_CHUNK_ROWS = 200000000;  // 200M rows fallback (safe up to ~SF30)
-          RASTERDB_LOG_WARN(
-            "[RDB_DEBUG]   using 200M row staging fallback — no table stats available");
-        }
+        STAGING_CHUNK_ROWS = 200000000;  // 200M rows fallback (safe up to ~SF30)
+        RASTERDB_LOG_WARN(
+          "[RDB_DEBUG]   using 200M row staging fallback — no table stats available");
       }
       for (size_t c = 0; c < num_cols; c++) {
         if (!bufMgr.checkIfColumnCached(table_name, col_names[c])) {
@@ -218,10 +261,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
         duckdb::ThreadContext thread_ctx(_client_ctx);
         duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
 
+        auto table_filters = create_scan_filter_set(op.table_filters, col_ids);
         duckdb::TableFunctionInitInput init_input(op.bind_data.get(),
                                                   col_ids,
                                                   op.projection_ids,
-                                                  nullptr /* no filters — we handle them on GPU */,
+                                                  table_filters.get(),
                                                   op.extra_info.sample_options);
 
         auto global_state = op.function.init_global(_client_ctx, init_input);
@@ -310,8 +354,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       duckdb::ThreadContext thread_ctx(_client_ctx);
       duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
 
+      auto table_filters = create_scan_filter_set(op.table_filters, col_ids);
       duckdb::TableFunctionInitInput init_input(
-        op.bind_data.get(), col_ids, op.projection_ids, nullptr, op.extra_info.sample_options);
+        op.bind_data.get(), col_ids, op.projection_ids, table_filters.get(), op.extra_info.sample_options);
 
       auto global_state = op.function.init_global(_client_ctx, init_input);
 

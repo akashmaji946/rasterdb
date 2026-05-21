@@ -287,12 +287,10 @@ void gpu_executor::execute_grouped_aggregate(
       std::vector<std::vector<int32_t>> h_group_cols(num_group_cols);
       for (size_t g = 0; g < num_group_cols; g++) {
         h_group_cols[g].resize(n_rows);
-        const_cast<rasterdf::device_buffer&>(input.col(group_col_indices[g]).data)
-          .copy_to_host(h_group_cols[g].data(),
-                        n_rows * sizeof(int32_t),
-                        _ctx.device(),
-                        _ctx.queue(),
-                        _ctx.command_pool());
+        download_column(_ctx,
+                        input.col(group_col_indices[g]),
+                        h_group_cols[g].data(),
+                        n_rows * sizeof(int32_t));
       }
 
       // Helper: convert raw int32 bits to uint64 for composite key construction.

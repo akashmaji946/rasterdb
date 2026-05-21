@@ -74,6 +74,22 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   }
   RASTERDB_LOG_DEBUG("[RDB_DEBUG] filter: {} rows => {} rows",
                      input->num_rows(), result->num_rows());
+  if (!op.projection_map.empty()) {
+    auto projected = std::make_unique<gpu_table>();
+    projected->duckdb_types = op.types;
+    projected->columns.resize(op.projection_map.size());
+    for (size_t i = 0; i < op.projection_map.size(); i++) {
+      auto src_idx = op.projection_map[i];
+      if (src_idx >= result->num_columns()) {
+        throw duckdb::InternalException("RasterDB GPU filter: projection map index out of range");
+      }
+      projected->columns[i] = std::move(result->columns[src_idx]);
+    }
+    projected->set_num_rows(result->num_rows());
+    RASTERDB_LOG_DEBUG("Filter projection_map: {} cols => {} cols",
+                       result->num_columns(), projected->num_columns());
+    return projected;
+  }
   return result;
 }
 

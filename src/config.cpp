@@ -37,6 +37,6 @@ bool Config::ENABLE_DUCKDB_FALLBACK = false;
 
 bool Config::ENABLE_REGEX_JIT_IMPL = true;
 
-bool Config::MODIFIED_PIPELINE = false;
+bool Config::MODIFIED_PIPELINE = true;
 
 }  // namespace duckdb

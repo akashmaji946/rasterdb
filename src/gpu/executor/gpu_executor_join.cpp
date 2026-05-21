@@ -21,7 +21,7 @@ static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 
 // Hash bits for Simple Garuda join: num_slots = 1 << k.
 // Higher k = more slots = less collisions but more memory.
-static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
+static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 22;
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
@@ -359,6 +359,47 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
 
     result = apply_filter_mask(*result, mask);
     RASTERDB_LOG_DEBUG("JOIN: {} rows after condition {}", result->num_rows(), ci);
+  }
+
+  // Apply join projection maps: empty map = "all columns from that side"
+  {
+    size_t num_right_cols = right_table->num_columns();
+    bool has_left_map = !op.left_projection_map.empty();
+    bool has_right_map = !op.right_projection_map.empty();
+
+    if (has_left_map || has_right_map) {
+      auto projected = std::make_unique<gpu_table>();
+      projected->duckdb_types = op.types;
+
+      size_t out_left  = has_left_map  ? op.left_projection_map.size()  : num_left_cols;
+      size_t out_right = has_right_map ? op.right_projection_map.size() : num_right_cols;
+      projected->columns.resize(out_left + out_right);
+
+      size_t out_idx = 0;
+      if (has_left_map) {
+        for (auto src_idx : op.left_projection_map) {
+          projected->columns[out_idx++] = std::move(result->columns[src_idx]);
+        }
+      } else {
+        for (size_t i = 0; i < num_left_cols; i++) {
+          projected->columns[out_idx++] = std::move(result->columns[i]);
+        }
+      }
+      if (has_right_map) {
+        for (auto src_idx : op.right_projection_map) {
+          projected->columns[out_idx++] = std::move(result->columns[num_left_cols + src_idx]);
+        }
+      } else {
+        for (size_t i = 0; i < num_right_cols; i++) {
+          projected->columns[out_idx++] = std::move(result->columns[num_left_cols + i]);
+        }
+      }
+      projected->set_num_rows(result->num_rows());
+      RASTERDB_LOG_DEBUG("JOIN projection_map: {} cols => {} cols (left_map={} right_map={})",
+                         result->num_columns(), projected->num_columns(),
+                         has_left_map, has_right_map);
+      result = std::move(projected);
+    }
   }
 
   return result;

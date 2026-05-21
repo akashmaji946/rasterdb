@@ -231,22 +231,36 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
   case duckdb::ExpressionType::BOUND_REF: {
     auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
     auto& src = input.col(ref.index);
-    // Return a lightweight alias that references the same device memory
     gpu_column col;
     col.type = src.type;
     col.num_rows = src.num_rows;
-    if (src.is_string()) {
-      // For STRING columns, alias the offsets and chars device addresses
-      col.str_total_chars = src.str_total_chars;
-      // We can't copy device_buffer, so cache the addresses for downstream use
-      col.cached_address = 0; // no fixed-width data
-    } else {
-      // Don't copy device_buffer (deleted copy). Use cached address to alias.
-      col.cached_address = src.address();
-      col.cached_buffer = src.cached_buffer;
-    }
     col.is_host_only = src.is_host_only;
     col.host_data = src.host_data;
+    if (src.is_string()) {
+      col.str_offsets = std::move(const_cast<gpu_column&>(src).str_offsets);
+      col.str_chars = std::move(const_cast<gpu_column&>(src).str_chars);
+      col.str_total_chars = src.str_total_chars;
+      col.cached_address = 0; // no fixed-width data
+    } else if (!src.is_host_only) {
+      col = allocate_column(_ctx, src.type, src.num_rows);
+      size_t bytes = src.byte_size();
+      if (bytes > 0) {
+        if (src.cached_address != 0 || src.data.buffer() == VK_NULL_HANDLE) {
+          std::vector<uint8_t> h(bytes);
+          download_column(_ctx, src, h.data(), bytes);
+          col.data.copy_from_host(h.data(), bytes, _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        } else {
+          _ctx.dispatcher().copy_buffer(src.data.buffer(),
+                                        col.data.buffer(),
+                                        bytes,
+                                        src.data.offset(),
+                                        col.data.offset());
+        }
+      }
+    } else {
+      col.cached_address = 0;
+      col.cached_buffer = VK_NULL_HANDLE;
+    }
     return col;
   }
   case duckdb::ExpressionType::VALUE_CONSTANT: {
@@ -364,6 +378,12 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   auto& func = expr.Cast<duckdb::BoundFunctionExpression>();
   auto& fname = func.function.name;
 
+  if ((fname.find("__internal_compress") != std::string::npos ||
+       fname.find("__internal_decompress") != std::string::npos) &&
+      !func.children.empty()) {
+    return evaluate_expression(input, *func.children[0]);
+  }
+
   // Map function names to binary op codes: 0=ADD, 1=SUB, 2=MUL, 3=DIV
   int32_t op_code = -1;
   if (fname == "+" || fname == "add") op_code = 0;
@@ -372,6 +392,7 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   else if (fname == "/" || fname == "divide") op_code = 3;
   else if (fname == "%" || fname == "modulo") op_code = 4;
   else {
+    RASTERDB_LOG_INFO("[RDB_EXPR] unsupported function '{}' children={}", fname, func.children.size());
     throw duckdb::NotImplementedException(
       "RasterDB GPU: unsupported function '%s'", fname.c_str());
   }

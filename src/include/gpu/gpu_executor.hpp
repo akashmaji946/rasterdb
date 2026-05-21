@@ -21,12 +21,15 @@
 #include <duckdb/planner/operator/logical_aggregate.hpp>
 #include <duckdb/planner/operator/logical_order.hpp>
 #include <duckdb/planner/operator/logical_limit.hpp>
+#include <duckdb/planner/operator/logical_top_n.hpp>
 #include <duckdb/planner/operator/logical_comparison_join.hpp>
 
 #include <memory>
 
 namespace rasterdb {
 namespace gpu {
+
+class raster_physical_operator;
 
 /// Execute a DuckDB logical plan on GPU using rasterdf Vulkan compute.
 /// Returns a gpu_table with results, or throws NotImplementedException
@@ -43,6 +46,8 @@ public:
     std::unique_ptr<gpu_table> table,
     const duckdb::vector<duckdb::string>& names,
     const duckdb::vector<duckdb::LogicalType>& types);
+
+  std::unique_ptr<gpu_table> execute_physical_operator(raster_physical_operator& op);
 
 private:
   gpu_context& _ctx;
@@ -66,6 +71,7 @@ private:
   std::unique_ptr<gpu_table> execute_aggregate(duckdb::LogicalAggregate& op);
   std::unique_ptr<gpu_table> execute_order(duckdb::LogicalOrder& op);
   std::unique_ptr<gpu_table> execute_limit(duckdb::LogicalLimit& op);
+  std::unique_ptr<gpu_table> execute_top_n(duckdb::LogicalTopN& op);
   std::unique_ptr<gpu_table> execute_join(duckdb::LogicalComparisonJoin& op);
 
   // Expression evaluation helpers

@@ -41,6 +41,7 @@
 #include "gpu/gpu_context.hpp"
 #include "gpu/gpu_buffer_manager.hpp"
 #include "gpu/gpu_executor.hpp"
+#include "gpu/gpu_executor_internal.hpp"
 #include <duckdb/common/types/vector.hpp>
 
 #include <chrono>
@@ -193,12 +194,23 @@ static void GPUExecutionFunction(ClientContext& context,
         Planner planner(context);
         planner.CreatePlan(std::move(parser.statements[0]));
 
-        // Use unoptimized plan to avoid spurious FILTER nodes from optimizer
-        auto& plan = *planner.plan;
+        auto& raw_plan = *planner.plan;
+        std::string raw_plan_text;
+        rasterdb::gpu::append_logical_plan(raw_plan, raw_plan_text);
+        RASTERDB_LOG_INFO("[RDB_PLAN] Raw logical plan:\n{}", raw_plan_text);
 
-        // Resolve column bindings to flat indices (BoundColumnRef -> BoundRef)
+        Optimizer optimizer(*planner.binder, context);
+        auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
+
         ColumnBindingResolver resolver;
-        resolver.VisitOperator(plan);
+        resolver.Verify(*optimized_plan);
+        resolver.VisitOperator(*optimized_plan);
+        optimized_plan->ResolveOperatorTypes();
+
+        auto& plan = *optimized_plan;
+        std::string resolved_plan_text;
+        rasterdb::gpu::append_logical_plan(plan, resolved_plan_text);
+        RASTERDB_LOG_INFO("[RDB_PLAN] Optimized logical plan:\n{}", resolved_plan_text);
         auto t1 = std::chrono::high_resolution_clock::now();
         RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", "  parse+plan",
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
@@ -443,11 +455,13 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
+    auto USE_SIZE_MULTIPLIER_GB = 4;
+
     // Auto-initialize BufferManager with 2GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        2048ULL * 1024 * 1024 * 2, 
-        2048ULL * 1024 * 1024 * 2, 
-        2048ULL * 1024 * 1024 * 2);
+        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB, 
+        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB, 
+        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB);
     (void)bufMgr;
 
     RasterdbExtension::buffer_is_initialized = true;

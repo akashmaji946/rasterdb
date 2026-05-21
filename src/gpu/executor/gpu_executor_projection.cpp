@@ -72,7 +72,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
                                       result->columns[i].data.offset());
       }
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {
-      result->columns[i] = evaluate_binary_op(*input, expr);
+      result->columns[i] = evaluate_expression(*input, expr);
     } else if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
       result->columns[i] = evaluate_expression(*input, expr);
     } else {

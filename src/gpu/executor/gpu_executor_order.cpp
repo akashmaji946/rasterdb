@@ -352,5 +352,63 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
   return result;
 }
 
+std::unique_ptr<gpu_table> gpu_executor::execute_top_n(duckdb::LogicalTopN& op)
+{
+  RASTERDB_LOG_DEBUG("GPU execute_top_n");
+  D_ASSERT(op.children.size() == 1);
+  auto input = execute_operator(*op.children[0]);
+
+  stage_timer t("  top_n");
+
+  const auto N = input->num_rows();
+  if (N <= 1 || op.limit == 0) {
+    return input;
+  }
+
+  bool has_string_col = false;
+  for (size_t c = 0; c < input->num_columns(); c++) {
+    if (input->col(c).is_string()) {
+      has_string_col = true;
+      break;
+    }
+  }
+  if (has_string_col) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: LOGICAL_TOP_N with string columns is not yet supported");
+  }
+
+  auto& disp = _ctx.dispatcher();
+  auto* mr = _ctx.workspace_mr();
+  std::vector<rasterdf::column_view> key_views;
+  std::vector<rasterdf::order> col_order;
+  std::vector<gpu_column> expr_temps;
+
+  for (auto& order : op.orders) {
+    auto& expr = unwrap_cast(*order.expression);
+    if (expr.type == duckdb::ExpressionType::BOUND_REF) {
+      auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
+      key_views.push_back(input->col(ref.index).view());
+    } else {
+      expr_temps.push_back(evaluate_expression(*input, expr));
+      key_views.push_back(expr_temps.back().view());
+    }
+    col_order.push_back(
+      (order.type == duckdb::OrderType::DESCENDING)
+        ? rasterdf::order::DESCENDING : rasterdf::order::ASCENDING);
+  }
+
+  rasterdf::table_view keys_tv(key_views);
+  auto top_table = rasterdf::top_n(input->view(),
+                                   keys_tv,
+                                   col_order,
+                                   static_cast<rasterdf::size_type>(op.limit),
+                                   static_cast<rasterdf::size_type>(op.offset),
+                                   _ctx.vk_context(),
+                                   disp,
+                                   mr);
+
+  return gpu_table_from_rdf(std::move(top_table), input->duckdb_types);
+}
+
 } // namespace gpu
 } // namespace rasterdb

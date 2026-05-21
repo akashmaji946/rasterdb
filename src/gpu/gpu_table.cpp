@@ -43,8 +43,61 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
   }
   if (bytes == 0) return 0;
 
+  if (col.is_host_only) {
+    if (col.host_data.size() < bytes) {
+      throw std::runtime_error("download_column: host-only column buffer too small");
+    }
+    std::memcpy(dst, col.host_data.data(), bytes);
+    return bytes;
+  }
+
   if (col.cached_address != 0) {
-    // Column is backed by GPUBufferManager cache — use staging copy
+    auto& bufMgr = GPUBufferManager::GetInstance();
+
+    if (col.cached_buffer == bufMgr.cpuStagingBuffer()) {
+      auto staging_base = bufMgr.cpuStagingAddress();
+      auto staging_end = staging_base + bufMgr.processing_size_per_cpu;
+      if (col.cached_address < staging_base || col.cached_address + bytes > staging_end) {
+        throw std::runtime_error("download_column: CPU staging alias out of range");
+      }
+      size_t staging_off = static_cast<size_t>(col.cached_address - staging_base);
+      std::memcpy(dst, bufMgr.cpuProcessing + staging_off, bytes);
+      return bytes;
+    }
+
+    VkBuffer backing_buffer = col.cached_buffer;
+    VkDeviceAddress resolved_base = 0;
+    bool use_cached_offset = false;
+    if (backing_buffer == VK_NULL_HANDLE) {
+      if (col.cached_address >= bufMgr.cpuStagingAddress() &&
+          col.cached_address + bytes <= bufMgr.cpuStagingAddress() + bufMgr.processing_size_per_cpu) {
+        size_t staging_off = static_cast<size_t>(col.cached_address - bufMgr.cpuStagingAddress());
+        std::memcpy(dst, bufMgr.cpuProcessing + staging_off, bytes);
+        return bytes;
+      }
+      if (col.cached_address >= bufMgr.gpuCacheAddress() &&
+          col.cached_address < bufMgr.gpuCacheAddress() + bufMgr.cache_size_per_gpu) {
+        backing_buffer = bufMgr.gpuCacheBuffer();
+        resolved_base = bufMgr.gpuCacheAddress();
+      } else if (col.cached_address >= bufMgr.gpuProcessingAddress() &&
+                 col.cached_address < bufMgr.gpuProcessingAddress() + bufMgr.processing_size_per_gpu) {
+        backing_buffer = bufMgr.gpuProcessingBuffer();
+        resolved_base = bufMgr.gpuProcessingAddress();
+      } else {
+        RASTERDB_LOG_INFO("download_column unresolved alias addr=0x{:x} bytes={} offset={} cpu=[0x{:x},0x{:x}) cache=[0x{:x},0x{:x}) proc=[0x{:x},0x{:x})",
+                          static_cast<uint64_t>(col.cached_address),
+                          bytes,
+                          static_cast<uint64_t>(col.cached_offset),
+                          static_cast<uint64_t>(bufMgr.cpuStagingAddress()),
+                          static_cast<uint64_t>(bufMgr.cpuStagingAddress() + bufMgr.processing_size_per_cpu),
+                          static_cast<uint64_t>(bufMgr.gpuCacheAddress()),
+                          static_cast<uint64_t>(bufMgr.gpuCacheAddress() + bufMgr.cache_size_per_gpu),
+                          static_cast<uint64_t>(bufMgr.gpuProcessingAddress()),
+                          static_cast<uint64_t>(bufMgr.gpuProcessingAddress() + bufMgr.processing_size_per_gpu));
+        throw std::runtime_error("download_column: cached column has no backing VkBuffer");
+      }
+    }
+
     // Allocate a temporary staging buffer for download
     auto* mr = ctx.host_resource();
     auto staging = mr->allocate(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -69,15 +122,26 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuf, &beginInfo);
 
-    // Compute offset within the cache buffer
-    auto& bufMgr = GPUBufferManager::GetInstance();
-    VkDeviceSize srcOffset = col.cached_address - bufMgr.gpuCacheAddress();
+    VkDeviceAddress backing_base = 0;
+    if (resolved_base != 0) {
+      backing_base = resolved_base;
+    } else if (backing_buffer == bufMgr.gpuCacheBuffer()) {
+      backing_base = bufMgr.gpuCacheAddress();
+    } else if (backing_buffer == bufMgr.gpuProcessingBuffer()) {
+      backing_base = bufMgr.gpuProcessingAddress();
+    } else {
+      use_cached_offset = true;
+    }
+    if (!use_cached_offset && col.cached_address < backing_base) {
+      throw std::runtime_error("download_column: cached column address before backing buffer");
+    }
+    VkDeviceSize srcOffset = use_cached_offset ? col.cached_offset : col.cached_address - backing_base;
 
     VkBufferCopy region{};
     region.srcOffset = srcOffset;
     region.dstOffset = 0;
     region.size = bytes;
-    vkCmdCopyBuffer(cmdBuf, col.cached_buffer, staging.buffer, 1, &region);
+    vkCmdCopyBuffer(cmdBuf, backing_buffer, staging.buffer, 1, &region);
 
     vkEndCommandBuffer(cmdBuf);
 
@@ -179,7 +243,7 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
       staging.offset     = dl_offset;
       staging.size       = bytes;
 
-      if (col.cached_buffer != VK_NULL_HANDLE) {
+      if (col.cached_address != 0 || col.cached_buffer != VK_NULL_HANDLE) {
         // Cached column: use download_column to a temp then... actually
         // we need to handle this differently. For cached cols, fall back
         // to download_column writing into the download buffer slot directly.

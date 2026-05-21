@@ -61,6 +61,7 @@ inline uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline bool debug_logging_enabled() { return duckdb::RasterDBShouldLog(spdlog::level::debug); }
 
 void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
+void append_logical_plan(duckdb::LogicalOperator& op, std::string& out, int depth = 0);
 
 // Per-stage timing helper — uses RASTERDB_LOG_INFO with [TIMER] prefix
 struct stage_timer {

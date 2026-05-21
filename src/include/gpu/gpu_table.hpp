@@ -44,6 +44,7 @@ struct gpu_column {
   /// When > 0, this column references a sub-region of the buffer manager's gpuCache.
   VkDeviceAddress cached_address{0};
   VkBuffer cached_buffer{VK_NULL_HANDLE};
+  VkDeviceSize cached_offset{0};
 
   /// Get a column_view for passing to dispatcher calls.
   rasterdf::column_view view() const {
