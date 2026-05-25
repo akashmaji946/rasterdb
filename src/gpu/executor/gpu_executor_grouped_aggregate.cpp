@@ -81,6 +81,7 @@ void gpu_executor::execute_grouped_aggregate(
 
   bool single_col_int32 =
     (num_group_cols == 1 && input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT32);
+  uint32_t compute_groupby_table_hint = 0;
 
   // STRING groupby key: hash string keys to INT32, then groupby on hashes
   bool single_col_string =
@@ -103,6 +104,26 @@ void gpu_executor::execute_grouped_aggregate(
     RASTERDB_LOG_DEBUG("[RDB_DEBUG] GROUP BY: hashed STRING key -> INT32, {} rows", n_rows);
   } else if (single_col_int32) {
     key_col_ptr = &input.col(group_col_indices[0]);
+    if (!USE_SIMPLE_GFX_AGGR) {
+      stage_timer tc("    groupby_single_key_hint");
+      auto& gcol = input.col(group_col_indices[0]);
+      auto col_view = gcol.view();
+      rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
+      auto max_s = rasterdf::reduce(col_view,
+                                    max_agg,
+                                    rasterdf::data_type{rasterdf::type_id::INT32},
+                                    _ctx.vk_context(),
+                                    _ctx.dispatcher(),
+                                    _ctx.workspace_mr());
+      int32_t max_key = max_s->as<int32_t>();
+      if (max_key >= 0 &&
+          static_cast<uint64_t>(max_key) < static_cast<uint64_t>(UINT32_MAX - 1)) {
+        compute_groupby_table_hint = static_cast<uint32_t>(max_key) + 1;
+      }
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG] GROUP BY single INT32 hint: max_key={} hint={}",
+                         max_key,
+                         compute_groupby_table_hint);
+    }
   } else if (num_group_cols == 1 && !USE_SIMPLE_GFX_AGGR &&
              input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT64) {
     // Compute path supports single INT64 column directly
@@ -156,6 +177,10 @@ void gpu_executor::execute_grouped_aggregate(
     }
     // Force INT64/surrogate path when FLOAT columns are in GROUP BY
     composite_is_int64 = has_float_group_col || (max_composite_estimate > INT32_MAX / 2);
+    if (!composite_is_int64 && max_composite_estimate >= 0 &&
+        static_cast<uint64_t>(max_composite_estimate) < static_cast<uint64_t>(UINT32_MAX - 1)) {
+      compute_groupby_table_hint = static_cast<uint32_t>(max_composite_estimate) + 1;
+    }
     {
       std::ostringstream oss;
       oss << "[RDB_DEBUG] GROUP BY max_vals:";
@@ -284,20 +309,33 @@ void gpu_executor::execute_grouped_aggregate(
       }
 
       // Download filtered group columns (post-filter, typically small ~1M rows)
-      std::vector<std::vector<int32_t>> h_group_cols(num_group_cols);
+      std::vector<std::vector<uint8_t>> h_group_cols(num_group_cols);
       for (size_t g = 0; g < num_group_cols; g++) {
-        h_group_cols[g].resize(n_rows);
+        size_t elem_size = rdf_type_size(input.col(group_col_indices[g]).type.id);
+        h_group_cols[g].resize(static_cast<size_t>(n_rows) * elem_size);
         download_column(_ctx,
                         input.col(group_col_indices[g]),
                         h_group_cols[g].data(),
-                        n_rows * sizeof(int32_t));
+                        h_group_cols[g].size());
       }
 
-      // Helper: convert raw int32 bits to uint64 for composite key construction.
+      // Helper: convert raw column bytes to uint64 for composite key construction.
       // For FLOAT32 columns, reinterpret as uint32 to get a non-negative value.
-      // For INT32 columns, use the raw value directly (must be non-negative for groupby keys).
-      auto to_unsigned = [&](size_t col_idx, int32_t raw) -> int64_t {
-        if (col_is_float[col_idx]) { return static_cast<int64_t>(static_cast<uint32_t>(raw)); }
+      auto to_unsigned = [&](size_t col_idx, rasterdf::size_type row) -> int64_t {
+        auto type_id = input.col(group_col_indices[col_idx]).type.id;
+        const uint8_t* ptr = h_group_cols[col_idx].data() + static_cast<size_t>(row) * rdf_type_size(type_id);
+        if (type_id == rasterdf::type_id::FLOAT32) {
+          uint32_t raw;
+          std::memcpy(&raw, ptr, sizeof(uint32_t));
+          return static_cast<int64_t>(raw);
+        }
+        if (type_id == rasterdf::type_id::INT64) {
+          int64_t raw;
+          std::memcpy(&raw, ptr, sizeof(int64_t));
+          return raw;
+        }
+        int32_t raw;
+        std::memcpy(&raw, ptr, sizeof(int32_t));
         return static_cast<int64_t>(raw);
       };
 
@@ -305,19 +343,19 @@ void gpu_executor::execute_grouped_aggregate(
       std::vector<int64_t> h_composite(n_rows);
       if (num_group_cols == 1) {
         for (rasterdf::size_type r = 0; r < n_rows; r++) {
-          h_composite[r] = to_unsigned(0, h_group_cols[0][r]);
+          h_composite[r] = to_unsigned(0, r);
         }
       } else if (num_group_cols == 2) {
         for (rasterdf::size_type r = 0; r < n_rows; r++) {
-          h_composite[r] = to_unsigned(0, h_group_cols[0][r]) * decompose_base1 +
-                           to_unsigned(1, h_group_cols[1][r]);
+          h_composite[r] = to_unsigned(0, r) * decompose_base1 +
+                           to_unsigned(1, r);
         }
       } else {
         for (rasterdf::size_type r = 0; r < n_rows; r++) {
-          h_composite[r] = (to_unsigned(0, h_group_cols[0][r]) * decompose_base1 +
-                            to_unsigned(1, h_group_cols[1][r])) *
+          h_composite[r] = (to_unsigned(0, r) * decompose_base1 +
+                            to_unsigned(1, r)) *
                              decompose_base2 +
-                           to_unsigned(2, h_group_cols[2][r]);
+                           to_unsigned(2, r);
         }
       }
 
@@ -921,59 +959,41 @@ void gpu_executor::execute_grouped_aggregate(
             return rasterdf::type_id::INT32;
           };
 
-          if (num_group_cols == 1) {
-            std::vector<int32_t> col0(out_num_groups);
-            for (uint32_t j = 0; j < out_num_groups; j++) {
-              col0[j] = static_cast<int32_t>(sorted_composite_i64[j]);
-            }
-            output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, out_num_groups);
-            output.columns[0].data.copy_from_host(col0.data(),
-                                                  out_num_groups * sizeof(int32_t),
-                                                  _ctx.device(),
-                                                  _ctx.queue(),
-                                                  _ctx.command_pool());
-          } else if (num_group_cols == 2) {
-            std::vector<int32_t> col0(out_num_groups), col1(out_num_groups);
-            for (uint32_t j = 0; j < out_num_groups; j++) {
-              col1[j] = static_cast<int32_t>(sorted_composite_i64[j] % decompose_base1);
-              col0[j] = static_cast<int32_t>(sorted_composite_i64[j] / decompose_base1);
-            }
-            output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, out_num_groups);
-            output.columns[0].data.copy_from_host(col0.data(),
-                                                  out_num_groups * sizeof(int32_t),
-                                                  _ctx.device(),
-                                                  _ctx.queue(),
-                                                  _ctx.command_pool());
-            output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, out_num_groups);
-            output.columns[1].data.copy_from_host(col1.data(),
-                                                  out_num_groups * sizeof(int32_t),
-                                                  _ctx.device(),
-                                                  _ctx.queue(),
-                                                  _ctx.command_pool());
-          } else {
-            std::vector<int32_t> col0(out_num_groups), col1(out_num_groups), col2(out_num_groups);
-            for (uint32_t j = 0; j < out_num_groups; j++) {
-              int64_t c = sorted_composite_i64[j];
-              col2[j]   = static_cast<int32_t>(c % decompose_base2);
+          std::vector<std::vector<uint8_t>> decomposed_cols(num_group_cols);
+          for (size_t g = 0; g < num_group_cols; g++) {
+            decomposed_cols[g].resize(static_cast<size_t>(out_num_groups) * rdf_type_size(get_col_type(g)));
+          }
+          for (uint32_t j = 0; j < out_num_groups; j++) {
+            int64_t c = sorted_composite_i64[j];
+            std::vector<int64_t> vals(num_group_cols);
+            if (num_group_cols == 1) {
+              vals[0] = c;
+            } else if (num_group_cols == 2) {
+              vals[1] = c % decompose_base1;
+              vals[0] = c / decompose_base1;
+            } else {
+              vals[2] = c % decompose_base2;
               c /= decompose_base2;
-              col1[j] = static_cast<int32_t>(c % decompose_base1);
-              col0[j] = static_cast<int32_t>(c / decompose_base1);
+              vals[1] = c % decompose_base1;
+              vals[0] = c / decompose_base1;
             }
-            output.columns[0] = allocate_column(_ctx, {get_col_type(0)}, out_num_groups);
-            output.columns[0].data.copy_from_host(col0.data(),
-                                                  out_num_groups * sizeof(int32_t),
-                                                  _ctx.device(),
-                                                  _ctx.queue(),
-                                                  _ctx.command_pool());
-            output.columns[1] = allocate_column(_ctx, {get_col_type(1)}, out_num_groups);
-            output.columns[1].data.copy_from_host(col1.data(),
-                                                  out_num_groups * sizeof(int32_t),
-                                                  _ctx.device(),
-                                                  _ctx.queue(),
-                                                  _ctx.command_pool());
-            output.columns[2] = allocate_column(_ctx, {get_col_type(2)}, out_num_groups);
-            output.columns[2].data.copy_from_host(col2.data(),
-                                                  out_num_groups * sizeof(int32_t),
+            for (size_t g = 0; g < num_group_cols; g++) {
+              auto tid = get_col_type(g);
+              uint8_t* dst = decomposed_cols[g].data() + static_cast<size_t>(j) * rdf_type_size(tid);
+              if (tid == rasterdf::type_id::INT64) {
+                int64_t v = vals[g];
+                std::memcpy(dst, &v, sizeof(int64_t));
+              } else {
+                int32_t v = static_cast<int32_t>(vals[g]);
+                std::memcpy(dst, &v, sizeof(int32_t));
+              }
+            }
+          }
+          for (size_t g = 0; g < num_group_cols; g++) {
+            auto tid = get_col_type(g);
+            output.columns[g] = allocate_column(_ctx, {tid}, out_num_groups);
+            output.columns[g].data.copy_from_host(decomposed_cols[g].data(),
+                                                  decomposed_cols[g].size(),
                                                   _ctx.device(),
                                                   _ctx.queue(),
                                                   _ctx.command_pool());
@@ -1003,10 +1023,54 @@ void gpu_executor::execute_grouped_aggregate(
     // ── Compute Shader Groupby (rasterdf::groupby) — FUSED single-pass ──
     RASTERDB_LOG_DEBUG("     [COMPUTE] Using compute shader groupby (fused)");
 
-    // 1. Parse all aggregates and evaluate value expressions up-front
-    std::vector<gpu_column> val_temps(aggregates.size());
+    struct compute_output_plan {
+      bool derived_avg = false;
+      size_t request_idx = 0;
+      size_t sum_request_idx = 0;
+      size_t count_request_idx = 0;
+      rasterdf::type_id derived_avg_type = rasterdf::type_id::FLOAT32;
+    };
+
+    std::vector<gpu_column> val_temps;
+    val_temps.reserve(aggregates.size() * 2 + 1);
     std::vector<rasterdf::aggregation_request> requests;
-    requests.reserve(aggregates.size());
+    requests.reserve(aggregates.size() * 2 + 1);
+    std::vector<compute_output_plan> output_plans;
+    output_plans.reserve(aggregates.size());
+    std::unordered_map<std::string, size_t> sum_request_by_expr;
+    std::unordered_map<std::string, rasterdf::type_id> sum_value_type_by_expr;
+    size_t count_request_idx = static_cast<size_t>(-1);
+
+    auto add_count_request = [&]() -> size_t {
+      if (count_request_idx != static_cast<size_t>(-1)) {
+        return count_request_idx;
+      }
+      rasterdf::aggregation_request req;
+      req.values = key_col_ptr->view();
+      req.aggregations.push_back(
+        std::make_unique<rasterdf::groupby_aggregation>(rasterdf::aggregation_kind::COUNT_ALL));
+      count_request_idx = requests.size();
+      requests.push_back(std::move(req));
+      return count_request_idx;
+    };
+
+    auto add_sum_request = [&](duckdb::Expression& child) -> size_t {
+      std::string expr_key = child.ToString();
+      auto it = sum_request_by_expr.find(expr_key);
+      if (it != sum_request_by_expr.end()) {
+        return it->second;
+      }
+      val_temps.push_back(evaluate_expression(input, child));
+      rasterdf::aggregation_request req;
+      req.values = val_temps.back().view();
+      req.aggregations.push_back(
+        std::make_unique<rasterdf::groupby_aggregation>(rasterdf::aggregation_kind::SUM));
+      size_t request_idx = requests.size();
+      requests.push_back(std::move(req));
+      sum_request_by_expr[expr_key] = request_idx;
+      sum_value_type_by_expr[expr_key] = val_temps.back().type.id;
+      return request_idx;
+    };
 
     for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
       auto& expr  = aggregates[i]->Cast<duckdb::BoundAggregateExpression>();
@@ -1021,17 +1085,31 @@ void gpu_executor::execute_grouped_aggregate(
         }
       }
 
-      rasterdf::aggregation_kind kind;
       if (fname == "sum" || fname == "sum_no_overflow") {
-        kind = rasterdf::aggregation_kind::SUM;
-      } else if (fname == "min") {
+        size_t request_idx = add_sum_request(*expr.children[0]);
+        output_plans.push_back({false, request_idx, 0, 0, rasterdf::type_id::FLOAT32});
+        continue;
+      } else if (fname == "avg" || fname == "mean") {
+        size_t sum_request_idx = add_sum_request(*expr.children[0]);
+        size_t avg_count_idx = add_count_request();
+        std::string expr_key = expr.children[0]->ToString();
+        auto value_type_id = sum_value_type_by_expr[expr_key];
+        auto avg_type = value_type_id == rasterdf::type_id::FLOAT32
+                          ? rasterdf::type_id::FLOAT64
+                          : rasterdf::type_id::FLOAT32;
+        output_plans.push_back({true, 0, sum_request_idx, avg_count_idx, avg_type});
+        continue;
+      }
+
+      rasterdf::aggregation_kind kind;
+      if (fname == "min") {
         kind = rasterdf::aggregation_kind::MIN;
       } else if (fname == "max") {
         kind = rasterdf::aggregation_kind::MAX;
       } else if (fname == "count" || fname == "count_star") {
-        kind = rasterdf::aggregation_kind::COUNT_ALL;
-      } else if (fname == "avg" || fname == "mean") {
-        kind = rasterdf::aggregation_kind::MEAN;
+        size_t request_idx = add_count_request();
+        output_plans.push_back({false, request_idx, 0, 0, rasterdf::type_id::FLOAT32});
+        continue;
       } else {
         throw duckdb::NotImplementedException("RasterDB GPU: unsupported grouped aggregate '%s'",
                                               fname.c_str());
@@ -1041,15 +1119,22 @@ void gpu_executor::execute_grouped_aggregate(
       if (is_count_star) {
         req.values = key_col_ptr->view();
       } else {
-        val_temps[i] = evaluate_expression(input, *expr.children[0]);
-        req.values   = val_temps[i].view();
+        val_temps.push_back(evaluate_expression(input, *expr.children[0]));
+        req.values   = val_temps.back().view();
       }
       req.aggregations.push_back(std::make_unique<rasterdf::groupby_aggregation>(kind));
+      output_plans.push_back({false, requests.size(), 0, 0, rasterdf::type_id::FLOAT32});
       requests.push_back(std::move(req));
     }
 
+    size_t request_count = requests.size();
+
     // 2. Single fused groupby call — builds hash table ONCE, scans data ONCE
-    rasterdf::groupby gb(keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    rasterdf::groupby gb(keys_tv,
+                         _ctx.vk_context(),
+                         _ctx.dispatcher(),
+                         _ctx.workspace_mr(),
+                         compute_groupby_table_hint);
     auto agg_result = gb.aggregate(std::move(requests));
 
     // 3. Extract keys (produced once) and validate
@@ -1224,31 +1309,90 @@ void gpu_executor::execute_grouped_aggregate(
     }
     keys_set = true;
 
-    // 6. Apply sort permutation to each value column and store in output
-    for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
-      if (i >= agg_result.results.size() || !agg_result.results[i]) {
+    std::vector<std::vector<uint8_t>> sorted_request_vals(request_count);
+    std::vector<rasterdf::data_type> request_types;
+    std::vector<size_t> request_elem_sizes;
+    request_types.reserve(request_count);
+    request_elem_sizes.reserve(request_count);
+
+    for (size_t request_idx = 0; request_idx < request_count; request_idx++) {
+      if (request_idx >= agg_result.results.size() || !agg_result.results[request_idx]) {
         throw duckdb::NotImplementedException(
-          "RasterDB GPU: fused grouped aggregate produced empty result for agg %zu", (size_t)i);
+          "RasterDB GPU: fused grouped aggregate produced empty result for request %zu", request_idx);
       }
-      auto& val_col_rdf   = *agg_result.results[i];
+      auto& val_col_rdf   = *agg_result.results[request_idx];
       size_t val_elem_size = rasterdf::size_of(val_col_rdf.type());
+      request_types.push_back(val_col_rdf.type());
+      request_elem_sizes.push_back(val_elem_size);
 
       std::vector<uint8_t> h_vals(ng * val_elem_size);
       val_col_rdf.device_data().copy_to_host(
         h_vals.data(), ng * val_elem_size, 0, _ctx.device(), _ctx.queue(), _ctx.command_pool());
 
-      std::vector<uint8_t> sorted_vals(ng * val_elem_size);
+      sorted_request_vals[request_idx].resize(ng * val_elem_size);
       for (size_t j = 0; j < ng; j++) {
-        std::memcpy(sorted_vals.data() + j * val_elem_size,
+        std::memcpy(sorted_request_vals[request_idx].data() + j * val_elem_size,
                     h_vals.data() + perm[j] * val_elem_size,
                     val_elem_size);
       }
+    }
 
+    auto read_sorted_numeric = [&](size_t request_idx, size_t row) -> double {
+      const uint8_t* ptr = sorted_request_vals[request_idx].data() + row * request_elem_sizes[request_idx];
+      switch (request_types[request_idx].id) {
+      case rasterdf::type_id::INT32:
+        return static_cast<double>(*reinterpret_cast<const int32_t*>(ptr));
+      case rasterdf::type_id::INT64:
+        return static_cast<double>(*reinterpret_cast<const int64_t*>(ptr));
+      case rasterdf::type_id::FLOAT32:
+        return static_cast<double>(*reinterpret_cast<const float*>(ptr));
+      case rasterdf::type_id::FLOAT64:
+        return *reinterpret_cast<const double*>(ptr);
+      default:
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: cannot derive AVG from type_id %d",
+          static_cast<int>(request_types[request_idx].id));
+      }
+    };
+
+    for (duckdb::idx_t i = 0; i < aggregates.size(); i++) {
+      auto& plan = output_plans[i];
       size_t out_col_idx  = num_group_cols + i;
-      auto sorted_val_col = allocate_column(_ctx, val_col_rdf.type(), ng);
-      sorted_val_col.data.copy_from_host(
-        sorted_vals.data(), ng * val_elem_size, _ctx.device(), _ctx.queue(), _ctx.command_pool());
-      output.columns[out_col_idx] = std::move(sorted_val_col);
+
+      if (!plan.derived_avg) {
+        auto sorted_val_col = allocate_column(_ctx, request_types[plan.request_idx], ng);
+        sorted_val_col.data.copy_from_host(sorted_request_vals[plan.request_idx].data(),
+                                           ng * request_elem_sizes[plan.request_idx],
+                                           _ctx.device(),
+                                           _ctx.queue(),
+                                           _ctx.command_pool());
+        output.columns[out_col_idx] = std::move(sorted_val_col);
+        continue;
+      }
+
+      if (plan.derived_avg_type == rasterdf::type_id::FLOAT64) {
+        std::vector<double> avg_vals(ng);
+        for (size_t j = 0; j < ng; j++) {
+          double sum = read_sorted_numeric(plan.sum_request_idx, j);
+          double cnt = read_sorted_numeric(plan.count_request_idx, j);
+          avg_vals[j] = cnt != 0.0 ? sum / cnt : 0.0;
+        }
+        auto sorted_val_col = allocate_column(_ctx, {rasterdf::type_id::FLOAT64}, ng);
+        sorted_val_col.data.copy_from_host(
+          avg_vals.data(), ng * sizeof(double), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        output.columns[out_col_idx] = std::move(sorted_val_col);
+      } else {
+        std::vector<float> avg_vals(ng);
+        for (size_t j = 0; j < ng; j++) {
+          double sum = read_sorted_numeric(plan.sum_request_idx, j);
+          double cnt = read_sorted_numeric(plan.count_request_idx, j);
+          avg_vals[j] = cnt != 0.0 ? static_cast<float>(sum / cnt) : 0.0f;
+        }
+        auto sorted_val_col = allocate_column(_ctx, {rasterdf::type_id::FLOAT32}, ng);
+        sorted_val_col.data.copy_from_host(
+          avg_vals.data(), ng * sizeof(float), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        output.columns[out_col_idx] = std::move(sorted_val_col);
+      }
     }
   }
   output.set_num_rows(num_groups_result);

@@ -229,6 +229,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
       default:
         throw duckdb::NotImplementedException("RasterDB GPU: unsupported non-equi join comparison");
     }
+    RASTERDB_LOG_DEBUG("[RDB_DEBUG] NON_EQUI_JOIN: L={} rows R={} rows product={} cmp={}",
+                       left_table->num_rows(), right_table->num_rows(), product,
+                       duckdb::ExpressionTypeToString(cond0.comparison));
     auto join_result = rasterdf::non_equi_join_int32(left_key_col.address(),
                                                      static_cast<uint32_t>(left_table->num_rows()),
                                                      right_key_col.address(),

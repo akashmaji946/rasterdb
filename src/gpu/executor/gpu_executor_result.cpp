@@ -134,8 +134,11 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
           std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
         }
         needs_cast = true;
-      } else if (rdf_tid == rasterdf::type_id::INT64 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
-        // int64 → hugeint (int128): widen each element
+      } else if (rdf_tid == rasterdf::type_id::INT64 &&
+                 (duckdb_tid == duckdb::LogicalTypeId::HUGEINT ||
+                  (duckdb_tid == duckdb::LogicalTypeId::DECIMAL &&
+                   types[c].InternalType() == duckdb::PhysicalType::INT128))) {
+        // int64 → hugeint/decimal128: widen each element
         for (rasterdf::size_type r = 0; r < count; r++) {
           int64_t val;
           std::memcpy(&val, src + r * sizeof(int64_t), sizeof(int64_t));
@@ -144,6 +147,29 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
           hval.upper = val < 0 ? -1 : 0;
           std::memcpy(dst + r * sizeof(duckdb::hugeint_t), &hval, sizeof(duckdb::hugeint_t));
         }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT32 &&
+                 duckdb_tid == duckdb::LogicalTypeId::DECIMAL &&
+                 types[c].InternalType() == duckdb::PhysicalType::INT64) {
+        // int32 → decimal64: widen each element
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          int32_t val;
+          std::memcpy(&val, src + r * sizeof(int32_t), sizeof(int32_t));
+          int64_t wide = static_cast<int64_t>(val);
+          std::memcpy(dst + r * sizeof(int64_t), &wide, sizeof(int64_t));
+        }
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT64 &&
+                 duckdb_tid == duckdb::LogicalTypeId::DECIMAL &&
+                 types[c].InternalType() == duckdb::PhysicalType::INT64) {
+        // int64 → decimal64: same physical storage
+        std::memcpy(dst, src, static_cast<size_t>(count) * sizeof(int64_t));
+        needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT32 &&
+                 duckdb_tid == duckdb::LogicalTypeId::DECIMAL &&
+                 types[c].InternalType() == duckdb::PhysicalType::INT32) {
+        // int32 → decimal32: same physical storage
+        std::memcpy(dst, src, static_cast<size_t>(count) * sizeof(int32_t));
         needs_cast = true;
       } else if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::BIGINT) {
         // int32 → bigint (int64): widen each element

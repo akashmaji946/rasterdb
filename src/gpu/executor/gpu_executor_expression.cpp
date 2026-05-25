@@ -8,6 +8,15 @@
 namespace rasterdb {
 namespace gpu {
 
+static int64_t encode_int64_scalar(const duckdb::Value& value, const duckdb::LogicalType& target_type)
+{
+  if (target_type.id() == duckdb::LogicalTypeId::DECIMAL) {
+    auto scaled = value.DefaultCastAs(target_type);
+    return scaled.GetValueUnsafe<int64_t>();
+  }
+  return value.DefaultCastAs(duckdb::LogicalType::BIGINT).GetValue<int64_t>();
+}
+
 // ============================================================================
 // Evaluate comparison expression -> int32 mask (0/1 per element)
 // ============================================================================
@@ -16,6 +25,101 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 {
   auto& disp = _ctx.dispatcher();
   uint32_t n = static_cast<uint32_t>(input.num_rows());
+
+  if (expr.expression_class == duckdb::ExpressionClass::BOUND_BETWEEN) {
+    auto& between = expr.Cast<duckdb::BoundBetweenExpression>();
+    auto make_cmp_mask = [&](duckdb::ExpressionType cmp_type,
+                             duckdb::Expression& bound_expr) -> gpu_column {
+      auto& input_expr = unwrap_cast(*between.input);
+      if (input_expr.type != duckdb::ExpressionType::BOUND_REF ||
+          unwrap_cast(bound_expr).type != duckdb::ExpressionType::VALUE_CONSTANT) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: BETWEEN currently supports column BETWEEN constants");
+      }
+      auto left = duckdb::make_uniq<duckdb::BoundReferenceExpression>(
+        input_expr.return_type, input_expr.Cast<duckdb::BoundReferenceExpression>().index);
+      auto right = duckdb::make_uniq<duckdb::BoundConstantExpression>(
+        unwrap_cast(bound_expr).Cast<duckdb::BoundConstantExpression>().value);
+      duckdb::BoundComparisonExpression cmp(cmp_type, std::move(left), std::move(right));
+      return evaluate_comparison(input, cmp);
+    };
+
+    gpu_column lower_mask = make_cmp_mask(between.LowerComparisonType(), *between.lower);
+    gpu_column upper_mask = make_cmp_mask(between.UpperComparisonType(), *between.upper);
+    auto combined = allocate_column(_ctx, {rasterdf::type_id::INT32}, lower_mask.num_rows);
+    mask_op_push_constants pc{};
+    pc.input_a = lower_mask.address();
+    pc.input_b = upper_mask.address();
+    pc.output_addr = combined.address();
+    pc.size = static_cast<uint32_t>(lower_mask.num_rows);
+    pc.op = 0;
+    disp.dispatch_mask_op(pc);
+    return combined;
+  }
+
+  if (expr.type == duckdb::ExpressionType::COMPARE_IN ||
+      expr.type == duckdb::ExpressionType::COMPARE_NOT_IN) {
+    auto& op = expr.Cast<duckdb::BoundOperatorExpression>();
+    if (op.children.size() < 2) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: IN requires one input expression and at least one value");
+    }
+
+    auto& value_expr = unwrap_cast(*op.children[0]);
+    if (value_expr.type != duckdb::ExpressionType::BOUND_REF) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: IN currently supports only column IN constant-list");
+    }
+
+    auto make_eq_mask = [&](duckdb::Expression& constant_expr) -> gpu_column {
+      auto left = duckdb::make_uniq<duckdb::BoundReferenceExpression>(
+        value_expr.return_type, value_expr.Cast<duckdb::BoundReferenceExpression>().index);
+      auto right = duckdb::make_uniq<duckdb::BoundConstantExpression>(
+        constant_expr.Cast<duckdb::BoundConstantExpression>().value);
+      duckdb::BoundComparisonExpression cmp(
+        duckdb::ExpressionType::COMPARE_EQUAL, std::move(left), std::move(right));
+      return evaluate_comparison(input, cmp);
+    };
+
+    auto& first_const = unwrap_cast(*op.children[1]);
+    if (first_const.type != duckdb::ExpressionType::VALUE_CONSTANT) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: IN currently supports only constant-list values");
+    }
+    gpu_column result = make_eq_mask(first_const);
+
+    for (size_t i = 2; i < op.children.size(); i++) {
+      auto& child = unwrap_cast(*op.children[i]);
+      if (child.type != duckdb::ExpressionType::VALUE_CONSTANT) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: IN currently supports only constant-list values");
+      }
+      gpu_column child_mask = make_eq_mask(child);
+      auto combined = allocate_column(_ctx, {rasterdf::type_id::INT32}, result.num_rows);
+      mask_op_push_constants pc{};
+      pc.input_a = result.address();
+      pc.input_b = child_mask.address();
+      pc.output_addr = combined.address();
+      pc.size = static_cast<uint32_t>(result.num_rows);
+      pc.op = 1;
+      disp.dispatch_mask_op(pc);
+      result = std::move(combined);
+    }
+
+    if (expr.type == duckdb::ExpressionType::COMPARE_NOT_IN) {
+      auto inverted = allocate_column(_ctx, {rasterdf::type_id::INT32}, result.num_rows);
+      mask_op_push_constants pc{};
+      pc.input_a = result.address();
+      pc.input_b = result.address();
+      pc.output_addr = inverted.address();
+      pc.size = static_cast<uint32_t>(result.num_rows);
+      pc.op = 2;
+      disp.dispatch_mask_op(pc);
+      return inverted;
+    }
+
+    return result;
+  }
 
   // Comparison: column <op> constant or column <op> column
   if (expr.type == duckdb::ExpressionType::COMPARE_LESSTHAN ||
@@ -182,6 +286,25 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
     return result;
   }
 
+  // Conjunction (OR)
+  if (expr.type == duckdb::ExpressionType::CONJUNCTION_OR) {
+    auto& conj = expr.Cast<duckdb::BoundConjunctionExpression>();
+    gpu_column result = evaluate_comparison(input, *conj.children[0]);
+    for (size_t i = 1; i < conj.children.size(); i++) {
+      gpu_column child_mask = evaluate_comparison(input, *conj.children[i]);
+      auto combined = allocate_column(_ctx, {rasterdf::type_id::INT32}, result.num_rows);
+      mask_op_push_constants pc{};
+      pc.input_a = result.address();
+      pc.input_b = child_mask.address();
+      pc.output_addr = combined.address();
+      pc.size = static_cast<uint32_t>(result.num_rows);
+      pc.op = 1; // OR
+      disp.dispatch_mask_op(pc);
+      result = std::move(combined);
+    }
+    return result;
+  }
+
   throw duckdb::NotImplementedException(
     "RasterDB GPU: unsupported filter expression type %s",
     duckdb::ExpressionTypeToString(expr.type).c_str());
@@ -201,8 +324,52 @@ static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src)
 
 gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Expression& raw_expr)
 {
+  // CASE WHEN <cond> THEN <const> ELSE <const> END → select_if_int32
+  if (raw_expr.expression_class == duckdb::ExpressionClass::BOUND_CASE) {
+    auto& case_expr = raw_expr.Cast<duckdb::BoundCaseExpression>();
+    if (case_expr.case_checks.size() != 1 || !case_expr.else_expr) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: CASE currently supports exactly one WHEN branch with ELSE");
+    }
+    auto& when_expr = *case_expr.case_checks[0].when_expr;
+    auto& then_expr = unwrap_cast(*case_expr.case_checks[0].then_expr);
+    auto& else_expr = unwrap_cast(*case_expr.else_expr);
+
+    if (then_expr.type != duckdb::ExpressionType::VALUE_CONSTANT ||
+        else_expr.type != duckdb::ExpressionType::VALUE_CONSTANT) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: CASE currently supports only constant THEN/ELSE values");
+    }
+    int32_t true_val = then_expr.Cast<duckdb::BoundConstantExpression>()
+                         .value.DefaultCastAs(duckdb::LogicalType::INTEGER)
+                         .GetValue<int32_t>();
+    int32_t false_val = else_expr.Cast<duckdb::BoundConstantExpression>()
+                          .value.DefaultCastAs(duckdb::LogicalType::INTEGER)
+                          .GetValue<int32_t>();
+
+    gpu_column mask = evaluate_comparison(input, when_expr);
+    auto out = allocate_column(_ctx, {rasterdf::type_id::INT32}, input.num_rows());
+    select_if_int32_push_constants pc{};
+    pc.mask_addr = mask.address();
+    pc.output_addr = out.address();
+    pc.size = static_cast<uint32_t>(input.num_rows());
+    pc.true_value = true_val;
+    pc.false_value = false_val;
+    _ctx.dispatcher().dispatch_select_if_int32(pc);
+    return out;
+  }
+
   if (raw_expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
     auto& cast = raw_expr.Cast<duckdb::BoundCastExpression>();
+
+    // Constant folding for casts
+    if (cast.child->type == duckdb::ExpressionType::VALUE_CONSTANT) {
+      auto& c = cast.child->Cast<duckdb::BoundConstantExpression>();
+      duckdb::Value cast_val = c.value.DefaultCastAs(raw_expr.return_type);
+      auto cast_const = duckdb::make_uniq<duckdb::BoundConstantExpression>(cast_val);
+      return evaluate_expression(input, *cast_const);
+    }
+
     auto child_col = evaluate_expression(input, *cast.child);
     rasterdf::data_type target_type = to_rdf_type(raw_expr.return_type);
     if (target_type.id == rasterdf::type_id::FLOAT64) {
@@ -307,7 +474,22 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       pz.scalar_val = 0;
       pz.type_id = type_id_s;
       pz.debug_mode = 0;
-      _ctx.dispatcher().dispatch_binary_op(pz);
+      if (rdf_type.id == rasterdf::type_id::INT64 ||
+          rdf_type.id == rasterdf::type_id::FLOAT64) {
+        binary_op_int64_push_constants pz64{};
+        pz64.input_a = pz.input_a;
+        pz64.input_b = pz.input_b;
+        pz64.output_addr = pz.output_addr;
+        pz64.size = pz.size;
+        pz64.op = pz.op;
+        pz64.scalar_lo = 0;
+        pz64.scalar_hi = 0;
+        pz64.mode = pz.mode;
+        pz64.type_id = type_id_s;
+        _ctx.dispatcher().dispatch_binary_op_int64(pz64);
+      } else {
+        _ctx.dispatcher().dispatch_binary_op(pz);
+      }
 
       binary_op_push_constants pa{};
       pa.input_a = col.address();
@@ -319,11 +501,32 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       pa.debug_mode = 0;
       if (type_id_s == 0) {
         pa.scalar_val = c.value.GetValue<int32_t>();
+        _ctx.dispatcher().dispatch_binary_op(pa);
+      } else if (rdf_type.id == rasterdf::type_id::INT64 ||
+                 rdf_type.id == rasterdf::type_id::FLOAT64) {
+        int64_t scalar64 = 0;
+        if (rdf_type.id == rasterdf::type_id::FLOAT64) {
+          double dval = c.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
+          std::memcpy(&scalar64, &dval, sizeof(double));
+        } else {
+          scalar64 = encode_int64_scalar(c.value, c.return_type);
+        }
+        binary_op_int64_push_constants pa64{};
+        pa64.input_a = pa.input_a;
+        pa64.input_b = pa.input_b;
+        pa64.output_addr = pa.output_addr;
+        pa64.size = pa.size;
+        pa64.op = pa.op;
+        pa64.scalar_lo = static_cast<int32_t>(scalar64 & 0xFFFFFFFFLL);
+        pa64.scalar_hi = static_cast<int32_t>((static_cast<uint64_t>(scalar64) >> 32) & 0xFFFFFFFFULL);
+        pa64.mode = pa.mode;
+        pa64.type_id = type_id_s;
+        _ctx.dispatcher().dispatch_binary_op_int64(pa64);
       } else {
         float fval = c.value.GetValue<float>();
         std::memcpy(&pa.scalar_val, &fval, sizeof(float));
+        _ctx.dispatcher().dispatch_binary_op(pa);
       }
-      _ctx.dispatcher().dispatch_binary_op(pa);
     }
     return col;
   }
@@ -406,8 +609,8 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   D_ASSERT(func.children.size() == 2);
 
   // Recursively evaluate both operands
-  auto& left_expr = unwrap_cast(*func.children[0]);
-  auto& right_expr = unwrap_cast(*func.children[1]);
+  auto& left_expr = *func.children[0];
+  auto& right_expr = *func.children[1];
 
   rasterdf::data_type out_type = to_rdf_type(func.return_type);
   // Downcast FLOAT64 to FLOAT32 for binary op shader (inputs are FLOAT32 from the integer dataset;
@@ -547,7 +750,42 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
     pc.scalar_val = 0;
   }
 
-  _ctx.dispatcher().dispatch_binary_op(pc);
+  if (out_type.id == rasterdf::type_id::INT64 ||
+      out_type.id == rasterdf::type_id::FLOAT64) {
+    binary_op_int64_push_constants pc64{};
+    pc64.input_a = pc.input_a;
+    pc64.input_b = pc.input_b;
+    pc64.output_addr = pc.output_addr;
+    pc64.size = pc.size;
+    pc64.op = pc.op;
+    int64_t scalar64 = static_cast<int64_t>(pc.scalar_val);
+    if (pc.mode == 1) {
+      if (right_is_const) {
+        auto& c = right_expr.Cast<duckdb::BoundConstantExpression>();
+        if (out_type.id == rasterdf::type_id::FLOAT64) {
+          double dval = c.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
+          std::memcpy(&scalar64, &dval, sizeof(double));
+        } else {
+          scalar64 = encode_int64_scalar(c.value, c.return_type);
+        }
+      } else if (left_is_const) {
+        auto& c = left_expr.Cast<duckdb::BoundConstantExpression>();
+        if (out_type.id == rasterdf::type_id::FLOAT64) {
+          double dval = c.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
+          std::memcpy(&scalar64, &dval, sizeof(double));
+        } else {
+          scalar64 = encode_int64_scalar(c.value, c.return_type);
+        }
+      }
+    }
+    pc64.scalar_lo = static_cast<int32_t>(scalar64 & 0xFFFFFFFFLL);
+    pc64.scalar_hi = static_cast<int32_t>((static_cast<uint64_t>(scalar64) >> 32) & 0xFFFFFFFFULL);
+    pc64.mode = pc.mode;
+    pc64.type_id = type_id;
+    _ctx.dispatcher().dispatch_binary_op_int64(pc64);
+  } else {
+    _ctx.dispatcher().dispatch_binary_op(pc);
+  }
   return result;
 }
 

@@ -28,7 +28,18 @@ inline rasterdf::data_type to_rdf_type(const duckdb::LogicalType& type) {
     case duckdb::LogicalTypeId::BOOLEAN:   return {rasterdf::type_id::BOOL8};
     case duckdb::LogicalTypeId::DATE:      return {rasterdf::type_id::TIMESTAMP_DAYS};
     case duckdb::LogicalTypeId::TIMESTAMP: return {rasterdf::type_id::TIMESTAMP_MICROSECONDS};
-    case duckdb::LogicalTypeId::DECIMAL:   return {rasterdf::type_id::FLOAT32};  // treat DECIMAL as float for GPU
+    case duckdb::LogicalTypeId::DECIMAL: {
+      auto width = duckdb::DecimalType::GetWidth(type);
+      if (width <= 9) {
+        return {rasterdf::type_id::INT32};
+      }
+      if (width <= 18) {
+        return {rasterdf::type_id::INT64};
+      }
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL width %d requires INT128 support — falling back to CPU",
+        static_cast<int>(width));
+    }
     case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT64};    // best-effort for large int intermediates
     case duckdb::LogicalTypeId::VARCHAR:   return {rasterdf::type_id::STRING};
     default:

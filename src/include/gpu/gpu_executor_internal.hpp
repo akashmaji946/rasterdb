@@ -29,10 +29,13 @@
 #include <duckdb/planner/expression/bound_comparison_expression.hpp>
 #include <duckdb/planner/expression/bound_constant_expression.hpp>
 #include <duckdb/planner/expression/bound_conjunction_expression.hpp>
+#include <duckdb/planner/expression/bound_case_expression.hpp>
 #include <duckdb/planner/expression/bound_function_expression.hpp>
 #include <duckdb/planner/expression/bound_aggregate_expression.hpp>
 #include <duckdb/planner/expression/bound_reference_expression.hpp>
 #include <duckdb/planner/expression/bound_cast_expression.hpp>
+#include <duckdb/planner/expression/bound_operator_expression.hpp>
+#include <duckdb/planner/expression/bound_between_expression.hpp>
 #include <duckdb/planner/bound_result_modifier.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/function/table_function.hpp>

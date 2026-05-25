@@ -241,7 +241,7 @@ static void GPUExecutionFunction(ClientContext& context,
                   std::chrono::duration<double, std::milli>(t_dl_end - t_dl_start).count());
         }
 
-        RASTERDB_LOG_INFO("RasterDB: query executed on GPU (Vulkan/rasterdf).");
+        RASTERDB_LOG_INFO("RasterDB: Query executed on GPU (Vulkan/RasterDF).");
       } catch (duckdb::NotImplementedException& e) {
         // Unsupported operator — fall back to CPU
         RASTERDB_LOG_INFO("RasterDB: GPU fallback to CPU — {}", e.what());
@@ -455,7 +455,7 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
-    auto USE_SIZE_MULTIPLIER_GB = 4;
+    auto USE_SIZE_MULTIPLIER_GB = 8;
 
     // Auto-initialize BufferManager with 2GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
