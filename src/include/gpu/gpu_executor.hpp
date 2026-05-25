@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * GPU Executor — walks a DuckDB logical plan and executes it on GPU via rasterdf.
  *
  * Supported operators: scan, filter, projection, aggregate, order, limit.

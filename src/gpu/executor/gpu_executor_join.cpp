@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * Split from src/gpu/gpu_executor.cpp.
  */
 
@@ -21,7 +21,7 @@ static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 
 // Hash bits for Simple Garuda join: num_slots = 1 << k.
 // Higher k = more slots = less collisions but more memory.
-static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
+static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 22;
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
@@ -214,7 +214,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     }
     uint64_t product = static_cast<uint64_t>(left_table->num_rows()) *
                        static_cast<uint64_t>(right_table->num_rows());
-    if (product > 1000000) {
+    if (product > 100'000'000) { // 100 Million
       throw duckdb::NotImplementedException(
         "RasterDB GPU: non-equi join without equality condition too large");
     }

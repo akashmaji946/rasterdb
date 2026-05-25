@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * Split from src/gpu/gpu_executor.cpp.
  */
 

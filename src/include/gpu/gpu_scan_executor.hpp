@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  *
  * Pipelined Scan Executor — multi-threaded DuckDB scan with direct GPU memory write.
  * Mirrors Sirius duckdb_scan_executor but simplified for RasterDB architecture.

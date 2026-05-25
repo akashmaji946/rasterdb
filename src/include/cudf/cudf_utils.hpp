@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  *
  * cudf_utils.hpp — Type bridge between DuckDB and cudf shim types.
  * Originally used real cudf headers; now uses RasterDB's cudf compatibility shim.

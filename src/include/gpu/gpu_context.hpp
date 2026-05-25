@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * GPU Context — wraps rasterdf Vulkan context, dispatcher, and memory manager.
  */
 

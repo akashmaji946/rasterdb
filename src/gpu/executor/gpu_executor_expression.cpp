@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * Split from src/gpu/gpu_executor.cpp.
  */
 
@@ -134,12 +134,12 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
     // Map to shader op code: 0=gt, 1=lt, 2=ge, 3=le, 4=eq, 5=ne
     int32_t cmp_op = 0;
     switch (expr.type) {
-      case duckdb::ExpressionType::COMPARE_GREATERTHAN:         cmp_op = 0; break;
-      case duckdb::ExpressionType::COMPARE_LESSTHAN:            cmp_op = 1; break;
-      case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: cmp_op = 2; break;
-      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:   cmp_op = 3; break;
-      case duckdb::ExpressionType::COMPARE_EQUAL:               cmp_op = 4; break;
-      case duckdb::ExpressionType::COMPARE_NOTEQUAL:            cmp_op = 5; break;
+      case duckdb::ExpressionType::COMPARE_GREATERTHAN:           cmp_op = 0; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHAN:              cmp_op = 1; break;
+      case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO:  cmp_op = 2; break;
+      case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:     cmp_op = 3; break;
+      case duckdb::ExpressionType::COMPARE_EQUAL:                 cmp_op = 4; break;
+      case duckdb::ExpressionType::COMPARE_NOTEQUAL:              cmp_op = 5; break;
       default: break;
     }
 

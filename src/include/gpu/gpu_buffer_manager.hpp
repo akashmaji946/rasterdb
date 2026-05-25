@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * GPUBufferManager — Pre-allocated GPU buffer management (Vulkan equivalent of Sirius's CUDA GPUBufferManager).
  *
  * Manages three pre-allocated memory regions:

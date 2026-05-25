@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * GPU Table — holds columnar data on GPU as rasterdf device_buffers.
  */
 

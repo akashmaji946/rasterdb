@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  * Internal header shared across gpu_executor_*.cpp files.
  * NOT part of the public API — only included by executor implementation files.
  */

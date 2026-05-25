@@ -1,5 +1,5 @@
 /*
- * Copyright 2025, RasterDB Contributors.
+ * Copyright 2026, RasterDB Contributors.
  *
  * host_parquet_representation — STUBBED for RasterDB.
  * The cudf hybrid_scan_reader has been removed (CUDA-only).
