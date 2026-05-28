@@ -79,6 +79,13 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   auto& cond0        = op.conditions[static_cast<size_t>(equi_condition_idx)];
   auto left_key_idx  = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
   auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
+  const auto& left_key_type = cond0.left->return_type;
+  const auto& right_key_type = cond0.right->return_type;
+  if ((is_decimal_type(left_key_type) || is_decimal_type(right_key_type)) &&
+      !(left_key_type == right_key_type)) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: decimal join keys require the same fixed-point scale and width");
+  }
 
   // If join keys are STRING, hash them to INT32 first
   gpu_column left_hash_col, right_hash_col;

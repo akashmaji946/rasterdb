@@ -83,6 +83,11 @@ struct stage_timer {
 static inline duckdb::Expression& unwrap_cast(duckdb::Expression& expr) {
   if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
     auto& cast = expr.Cast<duckdb::BoundCastExpression>();
+    if ((expr.return_type.id() == duckdb::LogicalTypeId::DECIMAL ||
+         cast.child->return_type.id() == duckdb::LogicalTypeId::DECIMAL) &&
+        !(expr.return_type == cast.child->return_type)) {
+      return expr;
+    }
     return unwrap_cast(*cast.child);
   }
   return expr;

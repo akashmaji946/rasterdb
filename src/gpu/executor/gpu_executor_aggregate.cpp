@@ -72,6 +72,12 @@ void gpu_executor::execute_ungrouped_aggregate(
       continue;
     }
 
+    if (is_decimal_type(expr.children[0]->return_type) && fname != "count") {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: decimal aggregate '%s' requires fixed-point accumulator support",
+        fname.c_str());
+    }
+
     // Evaluate the aggregate's value expression (may be a column ref or complex expr)
     gpu_column val_col = evaluate_expression(input, *expr.children[0]);
     auto col_view = val_col.view();

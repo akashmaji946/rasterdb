@@ -304,6 +304,11 @@ static void GPUExecutionFunction(ClientContext& context,
 
       auto duckdb_tid = output.data[c].GetType().id();
 
+      if (rasterdb::gpu::copy_rdf_decimal_to_duckdb(
+            src, rdf_tid, output.data[c].GetType(), chunk_size, dst)) {
+        continue;
+      }
+
       // Determine if a type cast is needed between rdf column and DuckDB output
       bool types_match = false;
       if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::INTEGER) types_match = true;

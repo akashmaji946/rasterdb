@@ -9,12 +9,68 @@
 #include <rasterdf/simple_garuda_join.hpp>
 #include <rasterdf/gfx_groupby_engine.hpp>
 #include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
 
 namespace rasterdb {
 namespace gpu {
 
 std::unique_ptr<gpu_context> gpu_context::_instance;
 std::once_flag gpu_context::_init_flag;
+
+#ifndef RASTERDB_RASTERDF_SHADER_DIR
+#define RASTERDB_RASTERDF_SHADER_DIR ""
+#endif
+
+namespace {
+
+bool shader_dir_is_usable(const std::filesystem::path& dir)
+{
+  return !dir.empty() && std::filesystem::exists(dir / "transform.spv");
+}
+
+void configure_rasterdf_shader_dir()
+{
+  const char* env = std::getenv("RASTERDF_SHADER_DIR");
+  if (env && shader_dir_is_usable(env)) {
+    RASTERDB_LOG_DEBUG("Using RASTERDF_SHADER_DIR={}", env);
+    return;
+  }
+
+  std::vector<std::filesystem::path> candidates;
+  if (std::string(RASTERDB_RASTERDF_SHADER_DIR).size() > 0) {
+    candidates.emplace_back(RASTERDB_RASTERDF_SHADER_DIR);
+  }
+  candidates.emplace_back("../rasterdf/shaders/compiled");
+  candidates.emplace_back("rasterdf/shaders/compiled");
+  candidates.emplace_back("shaders/compiled");
+
+  for (auto& candidate : candidates) {
+    if (!shader_dir_is_usable(candidate)) {
+      continue;
+    }
+    auto shader_dir = std::filesystem::absolute(candidate).lexically_normal().string();
+#if defined(_WIN32)
+    _putenv_s("RASTERDF_SHADER_DIR", shader_dir.c_str());
+#else
+    setenv("RASTERDF_SHADER_DIR", shader_dir.c_str(), 1);
+#endif
+    RASTERDB_LOG_INFO("RasterDF shader dir: {}", shader_dir);
+    return;
+  }
+
+  if (env) {
+    RASTERDB_LOG_WARN(
+      "RASTERDF_SHADER_DIR={} does not contain transform.spv; dispatcher will report the shader error",
+      env);
+  } else {
+    RASTERDB_LOG_WARN(
+      "RASTERDF_SHADER_DIR not set and no RasterDF shader directory was found; dispatcher will use fallback paths");
+  }
+}
+
+} // namespace
 
 gpu_context::gpu_context(size_t memory_limit)
 {
@@ -25,12 +81,7 @@ gpu_context::gpu_context(size_t memory_limit)
   RASTERDB_LOG_INFO("GPU device: {}", _ctx->device_name());
   RASTERDB_LOG_INFO("GPU memory: {} MB", _ctx->device_memory_bytes() / (1024 * 1024));
 
-  // Set shader directory if not already set
-  if (!std::getenv("RASTERDF_SHADER_DIR")) {
-    // Try to find shaders relative to rasterdf source
-    // The CMake will set this properly; this is a fallback
-    RASTERDB_LOG_DEBUG("RASTERDF_SHADER_DIR not set; dispatcher will use fallback paths");
-  }
+  configure_rasterdf_shader_dir();
 
   // Create dispatcher (loads all compute shader pipelines)
   _dispatcher = std::make_unique<rasterdf::execution::dispatcher>(*_ctx);

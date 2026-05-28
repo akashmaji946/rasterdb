@@ -328,6 +328,7 @@ static gpu_column upload_column(gpu_context& ctx, rasterdf::data_type type,
 /// Returns the number of valid rows extracted.
 static rasterdf::size_type flatten_vector(const duckdb::Vector& vec,
                                            rasterdf::size_type count,
+                                           const duckdb::LogicalType& source_type,
                                            rasterdf::data_type rdf_type,
                                            std::vector<uint8_t>& out_buf)
 {
@@ -335,22 +336,19 @@ static rasterdf::size_type flatten_vector(const duckdb::Vector& vec,
   size_t offset = out_buf.size();
   out_buf.resize(offset + static_cast<size_t>(count) * elem_size);
 
-  auto data_ptr = reinterpret_cast<const uint8_t*>(vec.GetData());
-  std::memcpy(out_buf.data() + offset, data_ptr, static_cast<size_t>(count) * elem_size);
+  copy_duckdb_vector_to_rdf(vec, static_cast<size_t>(count), source_type, rdf_type,
+                            out_buf.data() + offset);
   return count;
 }
 
 /// Overload: write directly to a raw destination pointer. Returns bytes written.
 static size_t flatten_vector_raw(const duckdb::Vector& vec,
                                  rasterdf::size_type count,
+                                 const duckdb::LogicalType& source_type,
                                  rasterdf::data_type rdf_type,
                                  uint8_t* dst)
 {
-  size_t elem_size = rdf_type_size(rdf_type.id);
-  size_t bytes = static_cast<size_t>(count) * elem_size;
-  auto data_ptr = reinterpret_cast<const uint8_t*>(vec.GetData());
-  std::memcpy(dst, data_ptr, bytes);
-  return bytes;
+  return copy_duckdb_vector_to_rdf(vec, static_cast<size_t>(count), source_type, rdf_type, dst);
 }
 
 std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
@@ -426,7 +424,7 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
         for (auto& chunk : chunks) {
           chunk->Flatten(); // ensure flat vectors
           flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
-                         rdf_types[c], host_buf);
+                         types[c], rdf_types[c], host_buf);
         }
         table->columns[c] = upload_column(ctx, rdf_types[c], total_rows, host_buf.data());
       }
@@ -457,7 +455,7 @@ std::unique_ptr<gpu_table> gpu_table::from_data_chunks(
           for (auto& chunk : chunks) {
             chunk->Flatten(); // ensure flat vectors
             flatten_vector(chunk->data[c], static_cast<rasterdf::size_type>(chunk->size()),
-                           rdf_types[c], host_bufs[c]);
+                           types[c], rdf_types[c], host_bufs[c]);
           }
         }
       }
@@ -587,7 +585,7 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
           chunk->Flatten();
           write_pos += flatten_vector_raw(chunk->data[info.c],
                          static_cast<rasterdf::size_type>(chunk->size()),
-                         rdf_types[info.c], info.staging_dst + write_pos);
+                         types[info.c], rdf_types[info.c], info.staging_dst + write_pos);
         }
         RASTERDB_LOG_DEBUG("  col {} ({}) ZERO-COPY STAGING: offset={} bytes={}",
                            info.c, column_names[info.c], info.staging_off, info.col_bytes);
@@ -605,7 +603,7 @@ std::unique_ptr<gpu_table> gpu_table::from_buffer_manager(
             chunk->Flatten();
             write_pos += flatten_vector_raw(chunk->data[info.c],
                            static_cast<rasterdf::size_type>(chunk->size()),
-                           rdf_types[info.c], info.staging_dst + write_pos);
+                           types[info.c], rdf_types[info.c], info.staging_dst + write_pos);
           }
         }
       };

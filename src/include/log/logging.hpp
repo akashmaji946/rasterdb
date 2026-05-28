@@ -16,6 +16,9 @@
 
 #pragma once
 
+#ifndef RASTERDB_LOG_LOGGING_HPP
+#define RASTERDB_LOG_LOGGING_HPP
+
 #ifndef SPDLOG_ACTIVE_LEVEL
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
 #else
@@ -154,3 +157,5 @@ inline void InitGPULogger()
 }
 
 }  // namespace duckdb
+
+#endif  // RASTERDB_LOG_LOGGING_HPP

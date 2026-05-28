@@ -42,6 +42,17 @@ void gpu_executor::execute_grouped_aggregate(
                                           num_group_cols);
   }
 
+  for (auto& aggregate : aggregates) {
+    auto& expr = aggregate->Cast<duckdb::BoundAggregateExpression>();
+    if (!expr.children.empty() &&
+        is_decimal_type(expr.children[0]->return_type) &&
+        expr.function.name != "count") {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: grouped decimal aggregate '%s' requires fixed-point accumulator support",
+        expr.function.name.c_str());
+    }
+  }
+
   // Extract group column indices and validate
   std::vector<duckdb::idx_t> group_col_indices;
   for (size_t g = 0; g < num_group_cols; g++) {

@@ -17,6 +17,18 @@ static int64_t encode_int64_scalar(const duckdb::Value& value, const duckdb::Log
   return value.DefaultCastAs(duckdb::LogicalType::BIGINT).GetValue<int64_t>();
 }
 
+static int32_t encode_int32_scalar(const duckdb::Value& value, const duckdb::LogicalType& target_type)
+{
+  if (target_type.id() == duckdb::LogicalTypeId::DECIMAL) {
+    auto scaled = value.DefaultCastAs(target_type);
+    if (target_type.InternalType() == duckdb::PhysicalType::INT16) {
+      return static_cast<int32_t>(scaled.GetValueUnsafe<int16_t>());
+    }
+    return scaled.GetValueUnsafe<int32_t>();
+  }
+  return value.DefaultCastAs(duckdb::LogicalType::INTEGER).GetValue<int32_t>();
+}
+
 // ============================================================================
 // Evaluate comparison expression -> int32 mask (0/1 per element)
 // ============================================================================
@@ -154,6 +166,9 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       auto& col_ref = left.Cast<duckdb::BoundReferenceExpression>();
       auto& constant = right.Cast<duckdb::BoundConstantExpression>();
       auto& col = input.col(col_ref.index);
+      const auto& col_logical_type = col_ref.index < input.duckdb_types.size()
+                                       ? input.duckdb_types[col_ref.index]
+                                       : left.return_type;
 
       // ── STRING GPU comparison ──
       if (col.is_string()) {
@@ -198,8 +213,8 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         pc.size = n;
         pc._pad = 0;
         if (col.type.id == rasterdf::type_id::INT64) {
-          pc.threshold = constant.value.DefaultCastAs(duckdb::LogicalType::BIGINT).GetValue<int64_t>();
-          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32); // int64
+          pc.threshold = encode_int64_scalar(constant.value, col_logical_type);
+          pc.type_id = static_cast<int32_t>(rasterdf::ShaderTypeId::INT64);
         } else {
           double dval = constant.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
           int64_t bits;
@@ -221,8 +236,8 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 
       // Cast the constant value to match the column's native type
       int32_t threshold = 0;
-      if (type_id == 0) { // int32
-        threshold = constant.value.DefaultCastAs(duckdb::LogicalType::INTEGER).GetValue<int32_t>();
+      if (type_id == static_cast<int32_t>(rasterdf::ShaderTypeId::INT32)) {
+        threshold = encode_int32_scalar(constant.value, col_logical_type);
       } else { // float32
         float fval = constant.value.DefaultCastAs(duckdb::LogicalType::FLOAT).GetValue<float>();
         std::memcpy(&threshold, &fval, sizeof(float));
@@ -245,6 +260,17 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
       auto& right_ref = right.Cast<duckdb::BoundReferenceExpression>();
       auto& left_col = input.col(left_ref.index);
       auto& right_col = input.col(right_ref.index);
+      const auto& left_type = left_ref.index < input.duckdb_types.size()
+                                ? input.duckdb_types[left_ref.index]
+                                : left.return_type;
+      const auto& right_type = right_ref.index < input.duckdb_types.size()
+                                 ? input.duckdb_types[right_ref.index]
+                                 : right.return_type;
+      if ((is_decimal_type(left_type) || is_decimal_type(right_type)) &&
+          !(left_type == right_type)) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: mixed-scale decimal column comparison requires rescaling support");
+      }
       int32_t type_id = rdf_shader_type_id(left_col.type.id);
 
       auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, input.num_rows());
@@ -368,6 +394,15 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       duckdb::Value cast_val = c.value.DefaultCastAs(raw_expr.return_type);
       auto cast_const = duckdb::make_uniq<duckdb::BoundConstantExpression>(cast_val);
       return evaluate_expression(input, *cast_const);
+    }
+
+    if ((raw_expr.return_type.id() == duckdb::LogicalTypeId::DECIMAL ||
+         cast.child->return_type.id() == duckdb::LogicalTypeId::DECIMAL) &&
+        !(raw_expr.return_type == cast.child->return_type)) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: decimal cast/rescale from %s to %s requires decimal rescale support",
+        cast.child->return_type.ToString().c_str(),
+        raw_expr.return_type.ToString().c_str());
     }
 
     auto child_col = evaluate_expression(input, *cast.child);
@@ -591,6 +626,15 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
        fname.find("__internal_decompress") != std::string::npos) &&
       !func.children.empty()) {
     return evaluate_expression(input, *func.children[0]);
+  }
+
+  bool uses_decimal = is_decimal_type(func.return_type);
+  for (auto& child : func.children) {
+    uses_decimal = uses_decimal || is_decimal_type(child->return_type);
+  }
+  if (uses_decimal) {
+    throw duckdb::NotImplementedException(
+      "RasterDB GPU: decimal arithmetic requires fixed-point rescale and overflow support");
   }
 
   // Map function names to binary op codes: 0=ADD, 1=SUB, 2=MUL, 3=DIV

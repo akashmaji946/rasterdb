@@ -41,26 +41,35 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
 
   // ── Identify sort key columns and directions ──────────────────────
   bool has_string_key = false;
+  bool has_decimal_key = false;
   struct sort_key_info {
     size_t col_idx;
     bool is_string;
+    bool is_decimal;
     bool descending;
   };
   std::vector<sort_key_info> sort_keys;
 
   for (auto& order : op.orders) {
     auto& expr = unwrap_cast(*order.expression);
+    if (is_decimal_type(order.expression->return_type) &&
+        expr.type != duckdb::ExpressionType::BOUND_REF) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL ORDER BY expression requires a materialized decimal column");
+    }
     if (expr.type == duckdb::ExpressionType::BOUND_REF) {
       auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
       bool is_str = input->col(ref.index).is_string();
+      bool is_decimal = is_decimal_type(order.expression->return_type);
       bool desc = (order.type == duckdb::OrderType::DESCENDING);
-      sort_keys.push_back({ref.index, is_str, desc});
+      sort_keys.push_back({ref.index, is_str, is_decimal, desc});
       if (is_str) has_string_key = true;
+      if (is_decimal) has_decimal_key = true;
     }
   }
 
   // ── Fast path: no string keys — use existing rasterdf sorted_order ──
-  if (!has_string_key) {
+  if (!has_string_key && !has_decimal_key) {
     // Also check if any non-key column is a string — gather doesn't support it
     bool has_string_col = false;
     for (size_t c = 0; c < input->num_columns(); c++) {
@@ -202,15 +211,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
         rasterdf::device_buffer bucket_totals(mr, 16 * sizeof(uint32_t), usage);
         rasterdf::device_buffer global_offsets(mr, 16 * sizeof(uint32_t), usage);
 
-        // Copy data to keys_a
-        disp.copy_buffer(data_col.buffer(), keys_a.buffer(),
-                         n * sizeof(uint64_t), 0, 0);
+        gather_indices_pc key_gather{};
+        key_gather.input_addr = data_col.address();
+        key_gather.indices_addr = row_ids_buf.data();
+        key_gather.output_addr = keys_a.data();
+        key_gather.size = n;
+        disp.dispatch_gather_indices_64(key_gather, numGroups);
 
         if (is_float) {
           radix_init_indices_pc fpc{};
           fpc.indices_ptr = keys_a.data();
           fpc.numElements = n;
           disp.dispatch_double_to_sortable(fpc, numGroups);
+        } else if (sk.is_decimal) {
+          radix_init_indices_pc dpc{};
+          dpc.indices_ptr = keys_a.data();
+          dpc.numElements = n;
+          disp.dispatch_decimal_i64_to_sortable(dpc, numGroups);
         }
         if (sk.descending) {
           radix_init_indices_pc fpc{};
@@ -234,15 +251,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
         rasterdf::device_buffer bucket_totals(mr, 16 * sizeof(uint32_t), usage);
         rasterdf::device_buffer global_offsets(mr, 16 * sizeof(uint32_t), usage);
 
-        // Copy data to keys_a
-        disp.copy_buffer(data_col.buffer(), keys_a.buffer(),
-                         n * sizeof(uint32_t), 0, 0);
+        gather_indices_pc key_gather{};
+        key_gather.input_addr = data_col.address();
+        key_gather.indices_addr = row_ids_buf.data();
+        key_gather.output_addr = keys_a.data();
+        key_gather.size = n;
+        disp.dispatch_gather_indices(key_gather, numGroups);
 
         if (is_float) {
           radix_init_indices_pc fpc{};
           fpc.indices_ptr = keys_a.data();
           fpc.numElements = n;
           disp.dispatch_float_to_sortable(fpc, numGroups);
+        } else if (sk.is_decimal) {
+          radix_init_indices_pc dpc{};
+          dpc.indices_ptr = keys_a.data();
+          dpc.numElements = n;
+          disp.dispatch_decimal_i32_to_sortable(dpc, numGroups);
         }
         if (sk.descending) {
           radix_init_indices_pc fpc{};
@@ -384,6 +409,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_top_n(duckdb::LogicalTopN& op)
   std::vector<gpu_column> expr_temps;
 
   for (auto& order : op.orders) {
+    if (is_decimal_type(order.expression->return_type)) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL TOP N requires a signed fixed-point radix transform");
+    }
     auto& expr = unwrap_cast(*order.expression);
     if (expr.type == duckdb::ExpressionType::BOUND_REF) {
       auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();

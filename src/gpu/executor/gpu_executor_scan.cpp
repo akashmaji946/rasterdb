@@ -184,7 +184,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
     // Check cache hits first
     gpu_tbl               = std::make_unique<gpu_table>();
-    gpu_tbl->duckdb_types = types;
+    gpu_tbl->duckdb_types = scan_types;
     gpu_tbl->columns.resize(num_cols);
 
     bool all_cached = true;
@@ -314,11 +314,12 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           // Flatten each column directly into staging (inline with scan)
           for (size_t c = 0; c < num_cols; c++) {
             if (staging[c].staging_dst) {
-              size_t elem_size = rdf_type_size(rdf_types[c].id);
-              size_t bytes     = static_cast<size_t>(chunk_rows) * elem_size;
-              auto data_ptr    = reinterpret_cast<const uint8_t*>(chunk->data[c].GetData());
-              std::memcpy(staging[c].staging_dst + staging[c].write_pos, data_ptr, bytes);
-              staging[c].write_pos += bytes;
+              staging[c].write_pos += copy_duckdb_vector_to_rdf(
+                chunk->data[c],
+                static_cast<size_t>(chunk_rows),
+                scan_types[c],
+                rdf_types[c],
+                staging[c].staging_dst + staging[c].write_pos);
             }
           }
         }
@@ -427,7 +428,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
 
     {
       stage_timer t_upload("  gpu_upload");
-      gpu_tbl            = gpu_table::from_data_chunks(_ctx, types, chunks);
+      gpu_tbl            = gpu_table::from_data_chunks(_ctx, scan_types, chunks);
       size_t total_bytes = 0;
       for (size_t c = 0; c < gpu_tbl->num_columns(); c++) {
         total_bytes += gpu_tbl->col(c).byte_size();

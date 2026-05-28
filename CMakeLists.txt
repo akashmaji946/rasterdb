@@ -125,7 +125,8 @@ foreach(_target rasterdb_extension rasterdb_loadable_extension)
     ${_target}
     PRIVATE
       $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">
-      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_LEVEL="${RASTERDB_LOG_LEVEL}">)
+      $<BUILD_INTERFACE:RASTERDB_DEFAULT_LOG_LEVEL="${RASTERDB_LOG_LEVEL}">
+      $<BUILD_INTERFACE:RASTERDB_RASTERDF_SHADER_DIR="${RASTERDF_ROOT}/shaders/compiled">)
 
   if(RASTERDF_LIBRARY)
     target_link_libraries(${_target} rasterdf_imported spdlog::spdlog Vulkan::Vulkan)
