@@ -460,7 +460,7 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
-    auto USE_SIZE_MULTIPLIER_GB = 2;
+    auto USE_SIZE_MULTIPLIER_GB = 6;
 
     // Auto-initialize BufferManager with 2GB defaults
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(

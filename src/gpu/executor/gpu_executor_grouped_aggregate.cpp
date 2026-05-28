@@ -26,6 +26,27 @@ static constexpr int64_t GROUPBY_COMPOSITE_M_I64 = 100000007LL;
 // Toggle between compute-shader groupby and mesh-shader gfxm groupby
 static constexpr bool USE_SIMPLE_GFX_AGGR = true;
 
+static bool grouped_decimal_aggregate_supported(const duckdb::LogicalType& type,
+                                                const std::string& function_name)
+{
+  if (!is_decimal_type(type)) {
+    return true;
+  }
+  if (function_name == "count" || function_name == "count_star") {
+    return true;
+  }
+  auto rdf_type = to_rdf_type(type).id;
+  if (rdf_type != rasterdf::type_id::INT32 && rdf_type != rasterdf::type_id::INT64) {
+    return false;
+  }
+  if (function_name == "min" || function_name == "max" ||
+      function_name == "sum" || function_name == "sum_no_overflow" ||
+      function_name == "avg" || function_name == "mean") {
+    return true;
+  }
+  return false;
+}
+
 void gpu_executor::execute_grouped_aggregate(
   const gpu_table& input,
   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& groups,
@@ -45,10 +66,10 @@ void gpu_executor::execute_grouped_aggregate(
   for (auto& aggregate : aggregates) {
     auto& expr = aggregate->Cast<duckdb::BoundAggregateExpression>();
     if (!expr.children.empty() &&
-        is_decimal_type(expr.children[0]->return_type) &&
-        expr.function.name != "count") {
+        !grouped_decimal_aggregate_supported(expr.children[0]->return_type,
+                                             expr.function.name)) {
       throw duckdb::NotImplementedException(
-        "RasterDB GPU: grouped decimal aggregate '%s' requires fixed-point accumulator support",
+        "RasterDB GPU: grouped decimal aggregate '%s' requires DECIMAL64 min/max or fixed-point accumulator support",
         expr.function.name.c_str());
     }
   }
@@ -734,7 +755,12 @@ void gpu_executor::execute_grouped_aggregate(
                                          ? rasterdf::type_id::FLOAT64
                                          : rasterdf::type_id::INT64};
       } else if (gfxm_agg_type == 4) {
-        val_type = rasterdf::data_type{rasterdf::type_id::FLOAT32};
+        val_type = rasterdf::data_type{value_type_id == rasterdf::type_id::INT64
+                                         ? rasterdf::type_id::FLOAT64
+                                         : rasterdf::type_id::FLOAT32};
+      } else if ((gfxm_agg_type == 2 || gfxm_agg_type == 3) &&
+                 value_type_id == rasterdf::type_id::INT64) {
+        val_type = rasterdf::data_type{rasterdf::type_id::INT64};
       } else {
         val_type = rasterdf::data_type{rasterdf::type_id::INT32};
       }

@@ -32,11 +32,20 @@ Implemented behavior:
   inexact result.
 - Decimal `ORDER BY` keys use a signed fixed-point radix transform for
   `DECIMAL32` and `DECIMAL64`.
-- Decimal arithmetic, decimal value aggregation, and decimal `TOP N` keys
-  currently fall back until their rescale, accumulator, and top-n key paths are
-  implemented.
-- Equality joins on decimal keys may use the GPU only when both key types have
-  identical width and scale.
+- Equality joins on decimal keys use the existing fixed-width join paths when
+  both key types have the same scale and GPU physical width. This includes
+  `DECIMAL(1..4, s)` joined with `DECIMAL(5..9, s)` because both are represented
+  as scaled `INT32` payloads on GPU.
+- Grouped `count(*)` and `count(decimal_col)` support decimal group keys backed
+  by `INT32` or `INT64` payloads.
+- Grouped `min`/`max` on `DECIMAL(1..18, s)` payloads are enabled through
+  fixed-point `INT32` and `INT64` aggregate paths and keep the input scale.
+- Grouped `sum`/`avg` on decimals backed by `INT32` or `INT64` are enabled for
+  the current fixed-width accumulator path. `SUM(DECIMAL64)` is still limited
+  to results that fit in the 64-bit unscaled accumulator; full DuckDB-compatible
+  `DECIMAL128` accumulation remains future work.
+- Decimal arithmetic and decimal `TOP N` keys currently fall back until their
+  rescale, arithmetic, and top-n key paths are implemented.
 
 Smoke coverage is in `test/test_decimal_gpu.sql`.
 
@@ -44,8 +53,8 @@ Smoke coverage is in `test/test_decimal_gpu.sql`.
 
 ### Phase 2: Same-Scale Fixed-Point Operators
 
-- Validate equi-join and group-key paths for equal decimal types, where raw
-  payload equality is already the required operation.
+- Validate equi-join and group-key paths for equal-scale decimal types, where
+  raw payload equality is already the required operation.
 - Extend the signed sortable transform route to `TOP N`.
 - Add tests with negative, zero, maximum-width, and duplicate-key values.
 
@@ -62,13 +71,12 @@ Smoke coverage is in `test/test_decimal_gpu.sql`.
 
 ### Phase 4: Aggregation
 
-- Keep `MIN` and `MAX` at the input decimal scale.
-- Widen `SUM(DECIMAL32)` to a decimal 64-bit accumulator where its result type
-  allows it.
-- Support DuckDB-compatible `SUM(DECIMAL64)` output only after `DECIMAL128`
-  storage and reduction are implemented.
-- Produce `AVG` using the bound DuckDB result type and an explicit decimal to
-  floating-point conversion, never by reducing unscaled integers as doubles.
+- Keep `MIN` and `MAX` at the input decimal scale. `DECIMAL32` and `DECIMAL64`
+  grouped `MIN`/`MAX` are implemented.
+- `SUM` and `AVG` are implemented for decimal payloads backed by `INT32` or
+  `INT64` in the current groupby path.
+- Add overflow checks and a `DECIMAL128` accumulator before advertising full
+  DuckDB-compatible `SUM(DECIMAL64)` behavior for all inputs.
 
 ### Phase 5: DECIMAL128
 

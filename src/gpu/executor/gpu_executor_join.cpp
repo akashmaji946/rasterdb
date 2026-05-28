@@ -21,7 +21,50 @@ static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 
 // Hash bits for Simple Garuda join: num_slots = 1 << k.
 // Higher k = more slots = less collisions but more memory.
-static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 22;
+static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
+
+static bool decimal_join_keys_compatible(const duckdb::LogicalType& left_type,
+                                         const duckdb::LogicalType& right_type)
+{
+  if (!is_decimal_type(left_type) && !is_decimal_type(right_type)) {
+    return true;
+  }
+  if (!is_decimal_type(left_type) || !is_decimal_type(right_type)) {
+    return false;
+  }
+  if (duckdb::DecimalType::GetScale(left_type) !=
+      duckdb::DecimalType::GetScale(right_type)) {
+    return false;
+  }
+  return to_rdf_type(left_type).id == to_rdf_type(right_type).id;
+}
+
+static duckdb::Expression& unwrap_join_key_cast(duckdb::Expression& expr)
+{
+  if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+    auto& cast = expr.Cast<duckdb::BoundCastExpression>();
+    if (is_decimal_type(expr.return_type) &&
+        is_decimal_type(cast.child->return_type) &&
+        decimal_join_keys_compatible(expr.return_type, cast.child->return_type)) {
+      return unwrap_join_key_cast(*cast.child);
+    }
+  }
+  return unwrap_cast(expr);
+}
+
+static int32_t shader_type_id_for_compare(const rasterdf::data_type& type)
+{
+  switch (type.id) {
+    case rasterdf::type_id::INT64:
+      return static_cast<int32_t>(rasterdf::ShaderTypeId::INT64);
+    case rasterdf::type_id::FLOAT64:
+      return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT64);
+    case rasterdf::type_id::FLOAT32:
+      return static_cast<int32_t>(rasterdf::ShaderTypeId::FLOAT32);
+    default:
+      return static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);
+  }
+}
 
 std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJoin& op)
 {
@@ -46,12 +89,17 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   int equi_condition_idx = -1;
   for (size_t ci = 0; ci < op.conditions.size(); ci++) {
     auto& cond = op.conditions[ci];
-    auto& le = unwrap_cast(*cond.left);
-    auto& re = unwrap_cast(*cond.right);
+    auto& le = unwrap_join_key_cast(*cond.left);
+    auto& re = unwrap_join_key_cast(*cond.right);
     if (le.type != duckdb::ExpressionType::BOUND_REF ||
         re.type != duckdb::ExpressionType::BOUND_REF) {
       throw duckdb::NotImplementedException(
         "RasterDB GPU: join conditions must be column references");
+    }
+    if (!decimal_join_keys_compatible(cond.left->return_type,
+                                      cond.right->return_type)) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: decimal join keys require the same scale and GPU physical width");
     }
     if (cond.comparison == duckdb::ExpressionType::COMPARE_EQUAL && equi_condition_idx < 0) {
       equi_condition_idx = static_cast<int>(ci);
@@ -77,15 +125,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   if (equi_condition_idx >= 0) {
   // Join on FIRST condition
   auto& cond0        = op.conditions[static_cast<size_t>(equi_condition_idx)];
-  auto left_key_idx  = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
-  auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
+  auto left_key_idx  = unwrap_join_key_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
+  auto right_key_idx = unwrap_join_key_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
   const auto& left_key_type = cond0.left->return_type;
   const auto& right_key_type = cond0.right->return_type;
-  if ((is_decimal_type(left_key_type) || is_decimal_type(right_key_type)) &&
-      !(left_key_type == right_key_type)) {
-    throw duckdb::NotImplementedException(
-      "RasterDB GPU: decimal join keys require the same fixed-point scale and width");
-  }
+  bool decimal_join = is_decimal_type(left_key_type) || is_decimal_type(right_key_type);
 
   // If join keys are STRING, hash them to INT32 first
   gpu_column left_hash_col, right_hash_col;
@@ -122,13 +166,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   auto right_key_view = string_join ? right_hash_col.view()
                                      : right_table->col(right_key_idx).view();
   RASTERDB_LOG_DEBUG(
-    "[RDB_DEBUG] JOIN keys: L col[{}] addr=0x{:x} size={}, R col[{}] addr=0x{:x} size={}",
+    "[RDB_DEBUG] JOIN keys: L col[{}] addr=0x{:x} size={}, R col[{}] addr=0x{:x} size={}, decimal={}",
     static_cast<size_t>(left_key_idx),
     static_cast<uint64_t>(left_key_view.data()),
     left_key_view.size(),
     static_cast<size_t>(right_key_idx),
     static_cast<uint64_t>(right_key_view.data()),
-    right_key_view.size());
+    right_key_view.size(),
+    decimal_join ? "true" : "false");
 
   if constexpr (USE_SIMPLE_GFX_JOIN) {
     // ── Simple Garuda Join (graphics-pipeline, vertex shader hash join) ──
@@ -209,8 +254,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
         "RasterDB GPU: non-equi join without equality supports one condition");
     }
     auto& cond0 = op.conditions[0];
-    auto left_key_idx = unwrap_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
-    auto right_key_idx = unwrap_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
+    auto left_key_idx = unwrap_join_key_cast(*cond0.left).Cast<duckdb::BoundReferenceExpression>().index;
+    auto right_key_idx = unwrap_join_key_cast(*cond0.right).Cast<duckdb::BoundReferenceExpression>().index;
     auto& left_key_col = left_table->col(left_key_idx);
     auto& right_key_col = right_table->col(right_key_idx);
     if (left_key_col.is_string() || right_key_col.is_string() ||
@@ -408,8 +453,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
       continue;
     }
     auto& cond  = op.conditions[ci];
-    auto lk_idx = unwrap_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;
-    auto rk_idx = unwrap_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
+    auto lk_idx = unwrap_join_key_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;
+    auto rk_idx = unwrap_join_key_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
 
     // In the merged table: left cols at [0..num_left-1], right cols at [num_left..]
     auto& left_key_col  = result->col(lk_idx);
@@ -436,7 +481,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     cpc.output_addr = mask.address();
     cpc.size        = n;
     cpc.op          = cmp_op;
-    cpc.type_id     = static_cast<int32_t>(rasterdf::ShaderTypeId::INT32);  // INT32
+    cpc.type_id     = shader_type_id_for_compare(left_key_col.type);
     _ctx.dispatcher().dispatch_compare_columns(cpc);
 
     result = apply_filter_mask(*result, mask);
