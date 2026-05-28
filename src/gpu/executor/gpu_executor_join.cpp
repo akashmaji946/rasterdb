@@ -13,7 +13,7 @@ namespace gpu {
 // ============================================================================
 
 // Toggle between compute-shader hash join and graphics-pipeline simple garuda join
-static constexpr bool USE_SIMPLE_GFX_JOIN = true;
+static constexpr bool USE_SIMPLE_GFX_JOIN = false;
 
 // Use the optimized instanced-probe variant (parallel inner loop).
 // When true, USE_SIMPLE_GFX_JOIN must also be true.
@@ -401,6 +401,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   size_t total_cols = left_table->num_columns() + right_table->num_columns();
   result->columns.resize(total_cols);
 
+  auto left_gather_start = std::chrono::high_resolution_clock::now();
   if (!any_left_string) {
     auto left_gathered = rasterdf::gather(
       left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
@@ -421,7 +422,13 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
       }
     }
   }
+  RASTERDB_LOG_DEBUG("[Comp Join] join: gather_left_payloads {:.3f} ms cols={} rows={}",
+                     std::chrono::duration<double, std::milli>(
+                       std::chrono::high_resolution_clock::now() - left_gather_start).count(),
+                     left_table->num_columns(),
+                     match_count);
 
+  auto right_gather_start = std::chrono::high_resolution_clock::now();
   if (!any_right_string) {
     auto right_gathered = rasterdf::gather(
       right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
@@ -443,6 +450,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
       }
     }
   }
+  RASTERDB_LOG_DEBUG("[Comp Join] join: gather_right_payloads {:.3f} ms cols={} rows={}",
+                     std::chrono::duration<double, std::milli>(
+                       std::chrono::high_resolution_clock::now() - right_gather_start).count(),
+                     right_table->num_columns(),
+                     match_count);
 
   RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} cols", match_count, total_cols);
 
