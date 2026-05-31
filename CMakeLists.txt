@@ -82,6 +82,7 @@ set(GPU_EXECUTOR_SOURCES
     src/gpu/executor/gpu_executor_expression.cpp
     src/gpu/executor/gpu_executor_aggregate.cpp
     src/gpu/executor/gpu_executor_grouped_aggregate.cpp
+    src/gpu/executor/gpu_executor_multi_key_aggregate.cpp
     src/gpu/executor/gpu_executor_order.cpp
     src/gpu/executor/gpu_executor_limit.cpp
     src/gpu/executor/gpu_executor_join.cpp

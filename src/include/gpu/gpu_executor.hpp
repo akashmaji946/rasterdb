@@ -91,6 +91,13 @@ private:
                                   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
                                   const duckdb::vector<duckdb::LogicalType>& result_types,
                                   gpu_table& output);
+  bool try_execute_multi_key_aggregate(const gpu_table& input,
+                                       const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& groups,
+                                       const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
+                                       const duckdb::vector<duckdb::LogicalType>& result_types,
+                                       const std::vector<duckdb::idx_t>& group_col_indices,
+                                       int tuple_key_policy,
+                                       gpu_table& output);
 
   // Tuple-based surrogate decomposition data (for FLOAT group columns in multi-col GROUP BY)
   // _group_raw_vals[surrogate_id] = {col0_bits, col1_bits, col2_bits}
