@@ -128,9 +128,37 @@ bool gpu_executor::try_execute_multi_key_aggregate(
       "RasterDB GPU: USE_SIMPLE_TUPLE_KEY_AGGR must be -1, 0, or 1");
   }
   const bool force_tuple_key = tuple_key_policy == 1;
+
+  bool single_float_key =
+    num_group_cols == 1 &&
+    (input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT32 ||
+     input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT64);
+  bool all_int32_keys = true;
+  bool tuple_candidate = force_tuple_key ? num_group_cols >= 1
+                                         : (num_group_cols >= 2 || single_float_key);
+  for (auto idx : group_col_indices) {
+    auto key_type = input.col(idx).type.id;
+    tuple_candidate = tuple_candidate && tuple_groupby_fixed_width_supported(key_type);
+    all_int32_keys = all_int32_keys && key_type == rasterdf::type_id::INT32;
+  }
+  if (!tuple_candidate) {
+    if (force_tuple_key) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: forced tuple-key GROUP BY only supports fixed-width numeric keys");
+    }
+    return false;
+  }
+  if (aggregates.empty()) {
+    if (force_tuple_key) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: forced tuple-key GROUP BY does not yet support distinct-only grouping");
+    }
+    return false;
+  }
+
 bool tuple_low_cardinality_contention = false;
 dense_key_range_info dense_info;
-if (num_group_cols >= 1 && input.num_rows() >= 1024) {
+if (all_int32_keys && num_group_cols >= 1 && input.num_rows() >= 1024) {
   bool can_estimate = true;
   uint64_t range_product = 1;
   dense_info.mins.reserve(num_group_cols);
@@ -141,23 +169,30 @@ if (num_group_cols >= 1 && input.num_rows() >= 1024) {
       can_estimate = false;
       break;
     }
-    auto col_view = gcol.view();
-    rasterdf::reduce_aggregation min_agg(rasterdf::aggregation_kind::MIN);
-    rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
-    auto min_s = rasterdf::reduce(col_view,
-                                  min_agg,
-                                  rasterdf::data_type{rasterdf::type_id::INT32},
-                                  _ctx.vk_context(),
-                                  _ctx.dispatcher(),
-                                  _ctx.workspace_mr());
-    auto max_s = rasterdf::reduce(col_view,
-                                  max_agg,
-                                  rasterdf::data_type{rasterdf::type_id::INT32},
-                                  _ctx.vk_context(),
-                                  _ctx.dispatcher(),
-                                  _ctx.workspace_mr());
-    int64_t min_v = static_cast<int64_t>(min_s->as<int32_t>());
-    int64_t max_v = static_cast<int64_t>(max_s->as<int32_t>());
+    int64_t min_v = 0;
+    int64_t max_v = 0;
+    if (gcol.has_i32_minmax) {
+      min_v = static_cast<int64_t>(gcol.i32_min);
+      max_v = static_cast<int64_t>(gcol.i32_max);
+    } else {
+      auto col_view = gcol.view();
+      rasterdf::reduce_aggregation min_agg(rasterdf::aggregation_kind::MIN);
+      rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
+      auto min_s = rasterdf::reduce(col_view,
+                                    min_agg,
+                                    rasterdf::data_type{rasterdf::type_id::INT32},
+                                    _ctx.vk_context(),
+                                    _ctx.dispatcher(),
+                                    _ctx.workspace_mr());
+      auto max_s = rasterdf::reduce(col_view,
+                                    max_agg,
+                                    rasterdf::data_type{rasterdf::type_id::INT32},
+                                    _ctx.vk_context(),
+                                    _ctx.dispatcher(),
+                                    _ctx.workspace_mr());
+      min_v = static_cast<int64_t>(min_s->as<int32_t>());
+      max_v = static_cast<int64_t>(max_s->as<int32_t>());
+    }
     if (max_v < min_v) {
       can_estimate = false;
       break;
@@ -188,31 +223,6 @@ if (num_group_cols >= 1 && input.num_rows() >= 1024) {
       range_product,
       input.num_rows());
   }
-}
-
-bool single_float_key =
-  num_group_cols == 1 &&
-  (input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT32 ||
-   input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT64);
-bool tuple_candidate = force_tuple_key ? num_group_cols >= 1
-                                       : (num_group_cols >= 2 || single_float_key);
-for (auto idx : group_col_indices) {
-  tuple_candidate = tuple_candidate && tuple_groupby_fixed_width_supported(input.col(idx).type.id);
-}
-
-if (!tuple_candidate) {
-  if (force_tuple_key) {
-    throw duckdb::NotImplementedException(
-      "RasterDB GPU: forced tuple-key GROUP BY only supports fixed-width numeric keys");
-  }
-  return false;
-}
-if (aggregates.empty()) {
-  if (force_tuple_key) {
-    throw duckdb::NotImplementedException(
-      "RasterDB GPU: forced tuple-key GROUP BY does not yet support distinct-only grouping");
-  }
-  return false;
 }
 
 if (tuple_candidate && !aggregates.empty()) {

@@ -6,10 +6,20 @@
 #include "gpu/gpu_executor_internal.hpp"
 
 #include <duckdb/planner/table_filter.hpp>
+#include <duckdb/storage/statistics/numeric_stats.hpp>
 #include <duckdb/storage/table_storage_info.hpp>
+
+#include <future>
+#include <mutex>
+#include <thread>
 
 namespace rasterdb {
 namespace gpu {
+
+// Fast path: use multiple DuckDB local scan states and coalesce numeric columns
+// directly into RasterDB's staging buffers. Set false to force the earlier
+// single-thread scan path for operator-only comparisons against Sirius/cuDF.
+static constexpr bool USE_RDB_PARALLEL_SCAN = false;
 
 static duckdb::unique_ptr<duckdb::TableFilterSet>
 create_scan_filter_set(const duckdb::TableFilterSet& table_filters,
@@ -33,6 +43,37 @@ create_scan_filter_set(const duckdb::TableFilterSet& table_filters,
     filter_set->filters[column_index.GetIndex()] = entry.second->Copy();
   }
   return filter_set;
+}
+
+static void attach_scan_i32_minmax(gpu_table& table,
+                                   duckdb::optional_ptr<duckdb::TableCatalogEntry> table_entry,
+                                   duckdb::ClientContext& client_ctx,
+                                   const duckdb::vector<duckdb::ColumnIndex>& output_col_ids,
+                                   const duckdb::vector<duckdb::LogicalType>& scan_types)
+{
+  if (!table_entry) {
+    return;
+  }
+  auto count = std::min(table.num_columns(), output_col_ids.size());
+  for (size_t c = 0; c < count && c < scan_types.size(); c++) {
+    auto& col = table.columns[c];
+    if (col.type.id != rasterdf::type_id::INT32) {
+      continue;
+    }
+    try {
+      auto stats = table_entry->GetStatistics(client_ctx, output_col_ids[c].GetPrimaryIndex());
+      if (!stats || !duckdb::NumericStats::HasMinMax(*stats)) {
+        continue;
+      }
+      auto min_value = duckdb::NumericStats::Min(*stats).DefaultCastAs(scan_types[c]);
+      auto max_value = duckdb::NumericStats::Max(*stats).DefaultCastAs(scan_types[c]);
+      col.i32_min = min_value.GetValueUnsafe<int32_t>();
+      col.i32_max = max_value.GetValueUnsafe<int32_t>();
+      col.has_i32_minmax = true;
+    } catch (...) {
+      col.has_i32_minmax = false;
+    }
+  }
 }
 
 std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
@@ -188,8 +229,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     gpu_tbl->columns.resize(num_cols);
 
     bool all_cached = true;
+    bool any_cached = false;
     for (size_t c = 0; c < num_cols; c++) {
       if (bufMgr.checkIfColumnCached(table_name, col_names[c])) {
+        any_cached = true;
         auto* cached                       = bufMgr.getCachedColumn(table_name, col_names[c]);
         gpu_tbl->columns[c].type           = cached->type;
         gpu_tbl->columns[c].num_rows       = static_cast<rasterdf::size_type>(cached->num_rows);
@@ -258,10 +301,6 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
       {
         stage_timer t_scan("  cpu_scan");
 
-        // Create proper ExecutionContext for init_local (like Sirius)
-        duckdb::ThreadContext thread_ctx(_client_ctx);
-        duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
-
         auto table_filters = create_scan_filter_set(op.table_filters, col_ids);
         duckdb::TableFunctionInitInput init_input(op.bind_data.get(),
                                                   col_ids,
@@ -270,59 +309,116 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
                                                   op.extra_info.sample_options);
 
         auto global_state = op.function.init_global(_client_ctx, init_input);
-
-        duckdb::unique_ptr<duckdb::LocalTableFunctionState> local_state;
-        if (op.function.init_local) {
-          local_state = op.function.init_local(exec_ctx, init_input, global_state.get());
+        duckdb::idx_t max_threads = 1;
+        if (global_state) {
+          try {
+            max_threads = std::max<duckdb::idx_t>(1, global_state->MaxThreads());
+          } catch (...) {
+            max_threads = 1;
+          }
+        }
+        auto hw_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
+        auto num_scan_threads =
+          static_cast<size_t>(std::min<duckdb::idx_t>(max_threads, hw_threads));
+        if (!USE_RDB_PARALLEL_SCAN ||
+            std::getenv("RASTERDB_DISABLE_PARALLEL_SCAN") != nullptr) {
+          num_scan_threads = 1;
+        }
+        if (any_cached) {
+          // Parallel scans append chunks in completion order. That is fine when
+          // every projected column is scanned together, but partial-cache scans
+          // would no longer align newly scanned columns with cached columns.
+          num_scan_threads = 1;
         }
 
-        duckdb::TableFunctionInput tf_input(
-          op.bind_data.get(), local_state.get(), global_state.get());
-
-        // ── Pipelined scan loop: read chunk, flatten directly into staging ──
-        // Respect _scan_limit: stop scanning once we have enough rows
         rasterdf::size_type scan_row_limit = (_scan_limit > 0)
                                                ? static_cast<rasterdf::size_type>(_scan_limit)
                                                : std::numeric_limits<rasterdf::size_type>::max();
+        std::atomic<size_t> write_rows{0};
+        std::atomic<bool> staging_overflow{false};
+        std::exception_ptr first_error;
+        std::mutex error_mutex;
 
-        while (total_scanned < scan_row_limit) {
-          auto chunk = duckdb::make_uniq<duckdb::DataChunk>();
-          chunk->Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
-          op.function.function(_client_ctx, tf_input, *chunk);
-          if (chunk->size() == 0) break;
-          chunk->Flatten();
+        auto scan_worker = [&](size_t /*worker_id*/) {
+          try {
+            duckdb::ThreadContext thread_ctx(_client_ctx);
+            duckdb::ExecutionContext exec_ctx(_client_ctx, thread_ctx, nullptr);
+            duckdb::unique_ptr<duckdb::LocalTableFunctionState> local_state;
+            if (op.function.init_local) {
+              local_state = op.function.init_local(exec_ctx, init_input, global_state.get());
+            }
 
-          auto chunk_rows = static_cast<rasterdf::size_type>(chunk->size());
-          // Clamp to limit
-          if (total_scanned + chunk_rows > scan_row_limit) {
-            chunk_rows = scan_row_limit - total_scanned;
-          }
+            duckdb::TableFunctionInput tf_input(
+              op.bind_data.get(), local_state.get(), global_state.get());
+            duckdb::DataChunk chunk;
+            chunk.Initialize(duckdb::Allocator::DefaultAllocator(), scan_types);
 
-          // Overflow guard: ensure we don't write past allocated staging buffer
-          if (static_cast<size_t>(total_scanned + chunk_rows) > STAGING_CHUNK_ROWS) {
-            RASTERDB_LOG_WARN(
-              "Staging buffer overflow! scanned={} + chunk={} > allocated={}. "
-              "Truncating scan.",
-              total_scanned,
-              chunk_rows,
-              STAGING_CHUNK_ROWS);
-            chunk_rows = static_cast<rasterdf::size_type>(STAGING_CHUNK_ROWS - total_scanned);
-            if (chunk_rows == 0) break;
-          }
-          total_scanned += chunk_rows;
+            while (true) {
+              chunk.Reset();
+              op.function.function(_client_ctx, tf_input, chunk);
+              if (chunk.size() == 0) {
+                break;
+              }
+              chunk.Flatten();
 
-          // Flatten each column directly into staging (inline with scan)
-          for (size_t c = 0; c < num_cols; c++) {
-            if (staging[c].staging_dst) {
-              staging[c].write_pos += copy_duckdb_vector_to_rdf(
-                chunk->data[c],
-                static_cast<size_t>(chunk_rows),
-                scan_types[c],
-                rdf_types[c],
-                staging[c].staging_dst + staging[c].write_pos);
+              auto chunk_rows = static_cast<size_t>(chunk.size());
+              auto base_row = write_rows.fetch_add(chunk_rows, std::memory_order_relaxed);
+              if (base_row >= static_cast<size_t>(scan_row_limit) ||
+                  base_row >= STAGING_CHUNK_ROWS) {
+                break;
+              }
+              auto writable_rows = std::min(chunk_rows,
+                                            static_cast<size_t>(scan_row_limit) - base_row);
+              if (base_row + writable_rows > STAGING_CHUNK_ROWS) {
+                writable_rows = STAGING_CHUNK_ROWS - base_row;
+                staging_overflow.store(true, std::memory_order_relaxed);
+              }
+              if (writable_rows == 0) {
+                break;
+              }
+
+              for (size_t c = 0; c < num_cols; c++) {
+                if (staging[c].staging_dst) {
+                  auto elem_size = rdf_type_size(rdf_types[c].id);
+                  copy_duckdb_vector_to_rdf(chunk.data[c],
+                                            writable_rows,
+                                            scan_types[c],
+                                            rdf_types[c],
+                                            staging[c].staging_dst + base_row * elem_size);
+                }
+              }
+            }
+          } catch (...) {
+            std::lock_guard<std::mutex> guard(error_mutex);
+            if (!first_error) {
+              first_error = std::current_exception();
             }
           }
+        };
+
+        if (num_scan_threads <= 1) {
+          scan_worker(0);
+        } else {
+          std::vector<std::future<void>> futures;
+          futures.reserve(num_scan_threads);
+          for (size_t t = 0; t < num_scan_threads; t++) {
+            futures.push_back(std::async(std::launch::async, scan_worker, t));
+          }
+          for (auto& f : futures) {
+            f.get();
+          }
         }
+        if (first_error) {
+          std::rethrow_exception(first_error);
+        }
+        total_scanned = static_cast<rasterdf::size_type>(
+          std::min(write_rows.load(std::memory_order_relaxed),
+                   std::min(static_cast<size_t>(scan_row_limit), STAGING_CHUNK_ROWS)));
+        if (staging_overflow.load(std::memory_order_relaxed)) {
+          RASTERDB_LOG_WARN("Staging buffer overflow during parallel scan; result truncated to {} rows",
+                            total_scanned);
+        }
+        RASTERDB_LOG_DEBUG("[RDB_DEBUG]   scan_threads={}", num_scan_threads);
       }
       RASTERDB_LOG_DEBUG(
         "[TIMER]   scan: {} {} rows x {} cols", table_name, total_scanned, types.size());
@@ -439,6 +535,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
     }
   }
 
+  attach_scan_i32_minmax(*gpu_tbl, table_entry, _client_ctx, output_col_ids, scan_types);
   return gpu_tbl;
 }
 

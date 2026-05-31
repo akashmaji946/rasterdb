@@ -22,9 +22,13 @@ bool GPUBufferManager::_initialized = false;
 GPUBufferManager& GPUBufferManager::GetInstance(
     size_t cache_size_per_gpu,
     size_t processing_size_per_gpu,
-    size_t processing_size_per_cpu)
+    size_t processing_size_per_cpu,
+    size_t download_size_per_cpu)
 {
-  static GPUBufferManager instance(cache_size_per_gpu, processing_size_per_gpu, processing_size_per_cpu);
+  static GPUBufferManager instance(cache_size_per_gpu,
+                                   processing_size_per_gpu,
+                                   processing_size_per_cpu,
+                                   download_size_per_cpu);
   return instance;
 }
 
@@ -32,18 +36,22 @@ bool GPUBufferManager::is_initialized() {
   return _initialized;
 }
 
-GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, size_t cpu_size)
+GPUBufferManager::GPUBufferManager(size_t cache_size,
+                                   size_t processing_size,
+                                   size_t cpu_size,
+                                   size_t download_size)
     : cache_size_per_gpu(cache_size),
       processing_size_per_gpu(processing_size),
       processing_size_per_cpu(cpu_size),
-      download_size_per_cpu(cpu_size),
+      download_size_per_cpu(download_size == 0 ? cpu_size : download_size),
       cpuProcessing(nullptr),
       cpuDownload(nullptr)
 {
-  RASTERDB_LOG_INFO("Initializing GPUBufferManager: cache={} MB, processing={} MB, staging={} MB",
+  RASTERDB_LOG_INFO("Initializing GPUBufferManager: cache={} MB, processing={} MB, staging={} MB, download={} MB",
                     cache_size / (1024 * 1024),
                     processing_size / (1024 * 1024),
-                    cpu_size / (1024 * 1024));
+                    cpu_size / (1024 * 1024),
+                    download_size_per_cpu / (1024 * 1024));
 
   auto& ctx = gpu_context::instance();
   auto* mr = ctx.host_resource();  // vulkan_memory_resource (not pool) — handles both host and device
@@ -83,7 +91,7 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
   //     so CPU reads achieve full memory bandwidth (~20 GB/s) instead of
   //     slow WC reads (~0.26 GB/s). Matches CUDA's internal cudaMemcpy D2H staging.
   _cpu_download_alloc = mr->allocate(
-      cpu_size,
+      download_size_per_cpu,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT |
       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
       VMA_MEMORY_USAGE_CPU_TO_GPU);  // Triggers HOST_CACHED path in vulkan_memory_resource
@@ -94,7 +102,7 @@ GPUBufferManager::GPUBufferManager(size_t cache_size, size_t processing_size, si
   }
   cpuDownload = reinterpret_cast<uint8_t*>(_cpu_download_alloc.mapped_ptr);
   RASTERDB_LOG_INFO("  CPU download: {}MB host-cached buffer allocated (mapped={})",
-                    cpu_size / (1024 * 1024), (void*)cpuDownload);
+                    download_size_per_cpu / (1024 * 1024), (void*)cpuDownload);
 
   // 3. GPU Processing: device-local buffer (equivalent of Sirius's RMM pool for gpuProcessing)
   //    Used for intermediate GPU computation results (reset between queries).

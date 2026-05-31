@@ -33,7 +33,8 @@ public:
   static GPUBufferManager& GetInstance(
       size_t cache_size_per_gpu      = 0,
       size_t processing_size_per_gpu = 0,
-      size_t processing_size_per_cpu = 0);
+      size_t processing_size_per_cpu = 0,
+      size_t download_size_per_cpu   = 0);
 
   // Delete copy/move
   GPUBufferManager(const GPUBufferManager&)            = delete;
@@ -124,7 +125,10 @@ public:
   static bool is_initialized();
 
 private:
-  GPUBufferManager(size_t cache_size, size_t processing_size, size_t cpu_size);
+  GPUBufferManager(size_t cache_size,
+                   size_t processing_size,
+                   size_t cpu_size,
+                   size_t download_size);
   ~GPUBufferManager();
 
   // VMA allocations (one big buffer per region)

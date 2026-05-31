@@ -107,12 +107,13 @@ static void GPUBufferInitFunction(ClientContext& context,
   if (data.finished) return;
 
   if (!rasterdb::gpu::GPUBufferManager::is_initialized()) {
-    RASTERDB_LOG_INFO("gpu_buffer_init: cache={}MB, processing={}MB, staging={}MB",
+    RASTERDB_LOG_INFO("gpu_buffer_init: cache={}MB, processing={}MB, staging={}MB, download={}MB",
                       data.cache_size / (1024*1024),
                       data.processing_size / (1024*1024),
+                      data.pinned_memory_size / (1024*1024),
                       data.pinned_memory_size / (1024*1024));
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        data.cache_size, data.processing_size, data.pinned_memory_size);
+        data.cache_size, data.processing_size, data.pinned_memory_size, data.pinned_memory_size);
     (void)bufMgr;
     RasterdbExtension::buffer_is_initialized = true;
   } else {
@@ -197,7 +198,7 @@ static void GPUExecutionFunction(ClientContext& context,
         auto& raw_plan = *planner.plan;
         std::string raw_plan_text;
         rasterdb::gpu::append_logical_plan(raw_plan, raw_plan_text);
-        RASTERDB_LOG_INFO("[RDB_PLAN] Raw logical plan:\n{}", raw_plan_text);
+        // RASTERDB_LOG_INFO("[RDB_PLAN] Raw logical plan:\n{}", raw_plan_text);
 
         Optimizer optimizer(*planner.binder, context);
         auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
@@ -210,7 +211,7 @@ static void GPUExecutionFunction(ClientContext& context,
         auto& plan = *optimized_plan;
         std::string resolved_plan_text;
         rasterdb::gpu::append_logical_plan(plan, resolved_plan_text);
-        RASTERDB_LOG_INFO("[RDB_PLAN] Optimized logical plan:\n{}", resolved_plan_text);
+        // RASTERDB_LOG_INFO("[RDB_PLAN] Optimized logical plan:\n{}", resolved_plan_text);
         auto t1 = std::chrono::high_resolution_clock::now();
         RASTERDB_LOG_DEBUG("[TIMER] {:<30s} {:8.2f} ms", "  parse+plan",
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
@@ -463,13 +464,18 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
-    auto USE_SIZE_MULTIPLIER_GB = 3;
+    constexpr auto USE_SIZE_CACHE_GB      = 3ULL;
+    constexpr auto USE_SIZE_PROCESSING_GB = 3ULL;
+    constexpr auto USE_SIZE_STAGING_GB    = 4ULL;
+    constexpr auto USE_SIZE_DOWNLOAD_GB   = 2ULL;
+    constexpr auto USE_SIZE_GB = 1024ULL * 1024ULL * 1024ULL;
 
-    // Auto-initialize BufferManager with 2GB defaults
+    // Auto-initialize BufferManager with separately tunable regions.
     auto& bufMgr = rasterdb::gpu::GPUBufferManager::GetInstance(
-        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB, 
-        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB, 
-        1024ULL * 1024 * 1024 * USE_SIZE_MULTIPLIER_GB);
+        USE_SIZE_GB * USE_SIZE_CACHE_GB,
+        USE_SIZE_GB * USE_SIZE_PROCESSING_GB,
+        USE_SIZE_GB * USE_SIZE_STAGING_GB,
+        USE_SIZE_GB * USE_SIZE_DOWNLOAD_GB);
     (void)bufMgr;
 
     RasterdbExtension::buffer_is_initialized = true;

@@ -37,7 +37,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute(duckdb::LogicalOperator& plan)
 
   std::string logical_plan_text;
   append_logical_plan(plan, logical_plan_text);
-  RASTERDB_LOG_INFO("[RDB_PLAN] Executor logical plan:\n{}", logical_plan_text);
+  // RASTERDB_LOG_INFO("[RDB_PLAN] Executor logical plan:\n{}", logical_plan_text);
   if (debug_logging_enabled()) { debug_print_plan(plan); }
   analyze_plan_hints(plan);
 

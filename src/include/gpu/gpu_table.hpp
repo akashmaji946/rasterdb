@@ -46,6 +46,13 @@ struct gpu_column {
   VkBuffer cached_buffer{VK_NULL_HANDLE};
   VkDeviceSize cached_offset{0};
 
+  /// Optional INT32 zonemap metadata propagated from DuckDB table statistics.
+  /// This lets low-cardinality dense groupby avoid extra full-column min/max
+  /// reductions when the scan already knows conservative bounds.
+  bool has_i32_minmax{false};
+  int32_t i32_min{0};
+  int32_t i32_max{0};
+
   /// Get a column_view for passing to dispatcher calls.
   rasterdf::column_view view() const {
     VkDeviceAddress addr = cached_address ? cached_address : data.data();

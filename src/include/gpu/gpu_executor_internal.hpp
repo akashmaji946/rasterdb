@@ -76,6 +76,9 @@ inline gpu_column alias_fixed_width_column(const gpu_column& src) {
   out.cached_address = src.cached_address;
   out.cached_buffer = src.cached_buffer;
   out.cached_offset = src.cached_offset;
+  out.has_i32_minmax = src.has_i32_minmax;
+  out.i32_min = src.i32_min;
+  out.i32_max = src.i32_max;
   return out;
 }
 
