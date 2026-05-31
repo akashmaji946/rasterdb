@@ -125,6 +125,9 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
       // Check for type mismatches that need widening/casting
       if (copy_rdf_decimal_to_duckdb(src, rdf_tid, types[c], count, dst)) {
         needs_cast = true;
+      } else if (rdf_tid == rasterdf::type_id::INT128 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
+        std::memcpy(dst, src, static_cast<size_t>(count) * sizeof(duckdb::hugeint_t));
+        needs_cast = true;
       } else if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
         // int32 → hugeint (int128): widen each element
         for (rasterdf::size_type r = 0; r < count; r++) {

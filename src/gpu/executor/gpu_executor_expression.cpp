@@ -29,6 +29,16 @@ static int32_t encode_int32_scalar(const duckdb::Value& value, const duckdb::Log
   return value.DefaultCastAs(duckdb::LogicalType::INTEGER).GetValue<int32_t>();
 }
 
+static duckdb::hugeint_t encode_int128_scalar(const duckdb::Value& value,
+                                              const duckdb::LogicalType& target_type)
+{
+  if (target_type.id() == duckdb::LogicalTypeId::DECIMAL) {
+    auto scaled = value.DefaultCastAs(target_type);
+    return scaled.GetValueUnsafe<duckdb::hugeint_t>();
+  }
+  return value.DefaultCastAs(duckdb::LogicalType::HUGEINT).GetValue<duckdb::hugeint_t>();
+}
+
 // ============================================================================
 // Evaluate comparison expression -> int32 mask (0/1 per element)
 // ============================================================================
@@ -198,6 +208,28 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
         disp.dispatch_string_compare(spc);
         RASTERDB_LOG_DEBUG("[RDB_DEBUG] STRING compare: {} rows, target='{}', op={}",
                            str_n, target_str, cmp_op);
+        return result;
+      }
+
+      // ── INT128 / DECIMAL128 GPU comparison ──
+      // DECIMAL(19..38) is stored as DuckDB hugeint_t and RasterDF INT128:
+      // two little-endian 64-bit limbs (lower unsigned, upper signed). The
+      // shader compares upper signed limbs first, then lower unsigned limbs.
+      if (col.type.id == rasterdf::type_id::INT128) {
+        auto result = allocate_column(_ctx, {rasterdf::type_id::INT32}, n);
+        auto wide = encode_int128_scalar(constant.value, col_logical_type);
+
+        compare_int128_push_constants pc{};
+        pc.input_addr = col.address();
+        pc.output_addr = result.address();
+        pc.size = n;
+        pc._pad = 0;
+        pc.threshold_lo = wide.lower;
+        pc.threshold_hi = wide.upper;
+        pc.op = cmp_op;
+
+        disp.dispatch_compare_int128(pc);
+        RASTERDB_LOG_DEBUG("[RDB_DEBUG] GPU INT128/DECIMAL128 compare on {} rows", n);
         return result;
       }
 

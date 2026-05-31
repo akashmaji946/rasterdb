@@ -313,6 +313,7 @@ static void GPUExecutionFunction(ClientContext& context,
       bool types_match = false;
       if (rdf_tid == rasterdf::type_id::INT32 && duckdb_tid == duckdb::LogicalTypeId::INTEGER) types_match = true;
       if (rdf_tid == rasterdf::type_id::INT64 && duckdb_tid == duckdb::LogicalTypeId::BIGINT) types_match = true;
+      if (rdf_tid == rasterdf::type_id::INT128 && duckdb_tid == duckdb::LogicalTypeId::HUGEINT) types_match = true;
       if (rdf_tid == rasterdf::type_id::FLOAT32 && duckdb_tid == duckdb::LogicalTypeId::FLOAT) types_match = true;
       if (rdf_tid == rasterdf::type_id::FLOAT64 && duckdb_tid == duckdb::LogicalTypeId::DOUBLE) types_match = true;
 
@@ -322,7 +323,9 @@ static void GPUExecutionFunction(ClientContext& context,
       } else {
         // Type conversion from host cache
         if (duckdb_tid == duckdb::LogicalTypeId::HUGEINT) {
-          if (rdf_tid == rasterdf::type_id::INT64) {
+          if (rdf_tid == rasterdf::type_id::INT128) {
+            std::memcpy(dst, src, chunk_size * sizeof(duckdb::hugeint_t));
+          } else if (rdf_tid == rasterdf::type_id::INT64) {
             for (size_t r = 0; r < chunk_size; r++) {
                 int64_t val;
                 std::memcpy(&val, src + r * sizeof(int64_t), sizeof(int64_t));

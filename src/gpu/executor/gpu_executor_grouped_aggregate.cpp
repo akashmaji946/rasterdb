@@ -7,10 +7,20 @@
 
 #include <rasterdf/gfx_groupby_engine.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace rasterdb {
 namespace gpu {
+
+
+// Toggle between compute-shader hash groupby and mesh-shader gfxm groupby.
+// Keep this false for decimal correctness/perf validation: D16/D32/D64 should
+// exercise the compute hash-aggregate path, not the GFXM shortcut path.
+static constexpr bool USE_SIMPLE_GFX_AGGR = true;
+
+static constexpr bool USE_TUPLE_GROUPBY_INT32 = false;
+
 
 // ============================================================================
 // GROUP BY aggregate — hash-based groupby via rasterdf
@@ -18,17 +28,11 @@ namespace gpu {
 // Multi-column keys use a composite INT32 key: col0*M+col1 (2-col) or
 // (col0*M+col1)*M+col2 (3-col), then decompose after groupby.
 // ============================================================================
-
 // Composite key multipliers.
 // INT32 path (GPU): fast, but limited to small-range group columns.
 static constexpr int32_t GROUPBY_COMPOSITE_M_I32 = 10007;
 // INT64 path (CPU): handles any value range, used when INT32 would overflow.
 static constexpr int64_t GROUPBY_COMPOSITE_M_I64 = 100000007LL;
-
-// Toggle between compute-shader groupby and mesh-shader gfxm groupby
-static constexpr bool USE_SIMPLE_GFX_AGGR = true;
-
-static constexpr bool USE_TUPLE_GROUPBY_INT32 = true;
 
 namespace {
 
@@ -61,6 +65,13 @@ enum tuple_groupby_agg_kind : uint32_t {
   TUPLE_GB_MIN = 2,
   TUPLE_GB_MAX = 3,
   TUPLE_GB_MEAN = 4,
+};
+
+enum int128_groupby_flags : uint32_t {
+  I128_GB_COUNT = 1u,
+  I128_GB_SUM = 2u,
+  I128_GB_MIN = 4u,
+  I128_GB_MAX = 8u,
 };
 
 }  // namespace
@@ -137,12 +148,36 @@ static bool grouped_decimal_aggregate_supported(const duckdb::LogicalType& type,
     return true;
   }
   auto rdf_type = to_rdf_type(type).id;
-  if (rdf_type != rasterdf::type_id::INT32 && rdf_type != rasterdf::type_id::INT64) {
-    return false;
-  }
   if (function_name == "min" || function_name == "max" ||
-      function_name == "sum" || function_name == "sum_no_overflow" ||
-      function_name == "avg" || function_name == "mean") {
+      function_name == "sum" || function_name == "sum_no_overflow") {
+    return rdf_type == rasterdf::type_id::INT32 ||
+           rdf_type == rasterdf::type_id::INT64 ||
+           rdf_type == rasterdf::type_id::INT128;
+  }
+  if (function_name == "avg" || function_name == "mean") {
+    return rdf_type == rasterdf::type_id::INT32 ||
+           rdf_type == rasterdf::type_id::INT64;
+  }
+  return false;
+}
+
+static bool int128_groupby_agg_kind(const std::string& function_name,
+                                    uint32_t& flag)
+{
+  if (function_name == "count" || function_name == "count_star") {
+    flag = I128_GB_COUNT;
+    return true;
+  }
+  if (function_name == "sum" || function_name == "sum_no_overflow") {
+    flag = I128_GB_SUM;
+    return true;
+  }
+  if (function_name == "min") {
+    flag = I128_GB_MIN;
+    return true;
+  }
+  if (function_name == "max") {
+    flag = I128_GB_MAX;
     return true;
   }
   return false;
@@ -199,6 +234,211 @@ void gpu_executor::execute_grouped_aggregate(
   if (input.num_rows() == 0) {
     RASTERDB_LOG_DEBUG("GROUP BY: 0 input rows, returning empty result");
     output.set_num_rows(0);
+    return;
+  }
+
+  if (num_group_cols == 1 &&
+      input.col(group_col_indices[0]).type.id == rasterdf::type_id::INT128) {
+    uint32_t flags = 0;
+    duckdb::idx_t value_col_idx = group_col_indices[0];
+    bool has_value_agg = false;
+    bool seen_count = false;
+    bool seen_sum = false;
+    bool seen_min = false;
+    bool seen_max = false;
+
+    for (auto& aggregate : aggregates) {
+      auto& expr = aggregate->Cast<duckdb::BoundAggregateExpression>();
+      uint32_t flag = 0;
+      if (!int128_groupby_agg_kind(expr.function.name, flag)) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: DECIMAL128 GROUP BY supports count, sum, min, and max");
+      }
+      if ((flag == I128_GB_COUNT && seen_count) ||
+          (flag == I128_GB_SUM && seen_sum) ||
+          (flag == I128_GB_MIN && seen_min) ||
+          (flag == I128_GB_MAX && seen_max)) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: DECIMAL128 GROUP BY currently supports one output per aggregate kind");
+      }
+      seen_count = seen_count || flag == I128_GB_COUNT;
+      seen_sum = seen_sum || flag == I128_GB_SUM;
+      seen_min = seen_min || flag == I128_GB_MIN;
+      seen_max = seen_max || flag == I128_GB_MAX;
+      flags |= flag;
+
+      if (flag != I128_GB_COUNT) {
+        if (expr.children.empty()) {
+          throw duckdb::NotImplementedException(
+            "RasterDB GPU: DECIMAL128 aggregate '%s' requires a value column",
+            expr.function.name.c_str());
+        }
+        auto& child = unwrap_cast(*expr.children[0]);
+        if (child.type != duckdb::ExpressionType::BOUND_REF) {
+          throw duckdb::NotImplementedException(
+            "RasterDB GPU: DECIMAL128 GROUP BY aggregate child must be a column reference");
+        }
+        auto child_idx = child.Cast<duckdb::BoundReferenceExpression>().index;
+        if (input.col(child_idx).type.id != rasterdf::type_id::INT128) {
+          throw duckdb::NotImplementedException(
+            "RasterDB GPU: DECIMAL128 GROUP BY aggregate child must be DECIMAL128");
+        }
+        if (has_value_agg && child_idx != value_col_idx) {
+          throw duckdb::NotImplementedException(
+            "RasterDB GPU: DECIMAL128 GROUP BY currently supports one aggregate value column");
+        }
+        value_col_idx = child_idx;
+        has_value_agg = true;
+      }
+    }
+
+    uint64_t rows = static_cast<uint64_t>(input.num_rows());
+    if (rows > std::numeric_limits<uint32_t>::max()) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL128 GROUP BY input is too large for this path");
+    }
+
+    RASTERDB_LOG_DEBUG("[RDB_OP] groupby path=int128_hash keys=1 aggs={} rows={}",
+                       aggregates.size(),
+                       input.num_rows());
+
+    auto n = static_cast<rasterdf::size_type>(input.num_rows());
+    uint64_t target_slots = std::max<uint64_t>(1024, rows * 2ull);
+    if (target_slots > (1ull << 31)) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL128 hash GROUP BY input is too large for this table path");
+    }
+    uint32_t table_size = 1024;
+    while (static_cast<uint64_t>(table_size) < target_slots) {
+      table_size <<= 1u;
+    }
+
+    auto out_keys = allocate_column(_ctx, input.col(group_col_indices[0]).type, n);
+    auto out_counts = allocate_column(_ctx, {rasterdf::type_id::INT64}, n);
+    auto out_sums = allocate_column(_ctx, input.col(value_col_idx).type, n);
+    auto out_mins = allocate_column(_ctx, input.col(value_col_idx).type, n);
+    auto out_maxs = allocate_column(_ctx, input.col(value_col_idx).type, n);
+
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                               VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    rasterdf::device_buffer slot_state(_ctx.workspace_mr(),
+                                       static_cast<size_t>(table_size) * sizeof(uint32_t),
+                                       usage);
+    rasterdf::device_buffer slot_lock(_ctx.workspace_mr(),
+                                      static_cast<size_t>(table_size) * sizeof(uint32_t),
+                                      usage);
+    rasterdf::device_buffer slot_key(_ctx.workspace_mr(),
+                                     static_cast<size_t>(table_size) * 16u,
+                                     usage);
+    rasterdf::device_buffer count_state(_ctx.workspace_mr(),
+                                        static_cast<size_t>(table_size) * sizeof(int64_t),
+                                        usage);
+    rasterdf::device_buffer sum_state(_ctx.workspace_mr(),
+                                      static_cast<size_t>(table_size) * 16u,
+                                      usage);
+    rasterdf::device_buffer min_state(_ctx.workspace_mr(),
+                                      static_cast<size_t>(table_size) * 16u,
+                                      usage);
+    rasterdf::device_buffer max_state(_ctx.workspace_mr(),
+                                      static_cast<size_t>(table_size) * 16u,
+                                      usage);
+    rasterdf::device_buffer unique_count(_ctx.workspace_mr(), sizeof(uint32_t), usage);
+    rasterdf::device_buffer overflow_count(_ctx.workspace_mr(), sizeof(uint32_t), usage);
+    rasterdf::device_buffer write_idx(_ctx.workspace_mr(), sizeof(uint32_t), usage);
+
+    auto& disp = _ctx.dispatcher();
+    disp.begin_batch();
+    disp.fill_buffer(slot_state.buffer(), 0, table_size * sizeof(uint32_t), slot_state.offset());
+    disp.fill_buffer(slot_lock.buffer(), 0, table_size * sizeof(uint32_t), slot_lock.offset());
+    disp.fill_buffer(count_state.buffer(), 0, table_size * sizeof(int64_t), count_state.offset());
+    disp.fill_buffer(sum_state.buffer(), 0, static_cast<VkDeviceSize>(table_size) * 16u, sum_state.offset());
+    disp.fill_buffer(unique_count.buffer(), 0, sizeof(uint32_t), unique_count.offset());
+    disp.fill_buffer(overflow_count.buffer(), 0, sizeof(uint32_t), overflow_count.offset());
+    disp.fill_buffer(write_idx.buffer(), 0, sizeof(uint32_t), write_idx.offset());
+    disp.batch_barrier_fill_to_compute();
+    rasterdf::execution::int128_hash_groupby_build_pc build_pc{};
+    build_pc.keys_ptr = input.col(group_col_indices[0]).address();
+    build_pc.values_ptr = input.col(value_col_idx).address();
+    build_pc.slot_state_ptr = slot_state.data();
+    build_pc.slot_lock_ptr = slot_lock.data();
+    build_pc.slot_key_ptr = slot_key.data();
+    build_pc.count_state_ptr = count_state.data();
+    build_pc.sum_state_ptr = sum_state.data();
+    build_pc.min_state_ptr = min_state.data();
+    build_pc.max_state_ptr = max_state.data();
+    build_pc.unique_count_ptr = unique_count.data();
+    build_pc.overflow_count_ptr = overflow_count.data();
+    build_pc.numRows = static_cast<uint32_t>(rows);
+    build_pc.tableSize = table_size;
+    build_pc.flags = flags;
+    disp.dispatch_int128_hash_groupby_build(build_pc, (build_pc.numRows + 255) / 256);
+    disp.end_batch();
+
+    uint32_t unique_groups = 0;
+    uint32_t overflow = 0;
+    unique_count.copy_to_host(&unique_groups,
+                              sizeof(uint32_t),
+                              _ctx.device(),
+                              _ctx.queue(),
+                              _ctx.command_pool());
+    overflow_count.copy_to_host(&overflow,
+                                sizeof(uint32_t),
+                                _ctx.device(),
+                                _ctx.queue(),
+                                _ctx.command_pool());
+    if (overflow != 0) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: DECIMAL128 hash GROUP BY table overflow (%u rows, table=%u)",
+        static_cast<uint32_t>(rows),
+        table_size);
+    }
+    disp.begin_batch();
+    disp.fill_buffer(write_idx.buffer(), 0, sizeof(uint32_t), write_idx.offset());
+    disp.batch_barrier_fill_to_compute();
+    rasterdf::execution::int128_hash_groupby_extract_pc extract_pc{};
+    extract_pc.slot_state_ptr = slot_state.data();
+    extract_pc.slot_key_ptr = slot_key.data();
+    extract_pc.count_state_ptr = count_state.data();
+    extract_pc.sum_state_ptr = sum_state.data();
+    extract_pc.min_state_ptr = min_state.data();
+    extract_pc.max_state_ptr = max_state.data();
+    extract_pc.out_keys_ptr = out_keys.address();
+    extract_pc.out_counts_ptr = out_counts.address();
+    extract_pc.out_sums_ptr = out_sums.address();
+    extract_pc.out_mins_ptr = out_mins.address();
+    extract_pc.out_maxs_ptr = out_maxs.address();
+    extract_pc.write_idx_ptr = write_idx.data();
+    extract_pc.tableSize = table_size;
+    extract_pc.flags = flags;
+    disp.dispatch_int128_hash_groupby_extract(extract_pc, (table_size + 255) / 256);
+    disp.end_batch();
+
+    auto ng = static_cast<rasterdf::size_type>(unique_groups);
+
+    output.columns[0] = std::move(out_keys);
+    output.columns[0].num_rows = ng;
+    for (size_t a = 0; a < aggregates.size(); a++) {
+      auto& expr = aggregates[a]->Cast<duckdb::BoundAggregateExpression>();
+      uint32_t flag = 0;
+      int128_groupby_agg_kind(expr.function.name, flag);
+      size_t out_idx = num_group_cols + a;
+      if (flag == I128_GB_COUNT) {
+        output.columns[out_idx] = std::move(out_counts);
+      } else if (flag == I128_GB_SUM) {
+        output.columns[out_idx] = std::move(out_sums);
+      } else if (flag == I128_GB_MIN) {
+        output.columns[out_idx] = std::move(out_mins);
+      } else {
+        output.columns[out_idx] = std::move(out_maxs);
+      }
+      output.columns[out_idx].num_rows = ng;
+      if (!result_types.empty() && out_idx < result_types.size()) {
+        output.columns[out_idx].type = to_rdf_type(result_types[out_idx]);
+      }
+    }
+    output.set_num_rows(ng);
     return;
   }
 
@@ -265,7 +505,11 @@ void gpu_executor::execute_grouped_aggregate(
       }
     }
 
-    bool tuple_candidate = num_group_cols >= 2;
+    bool single_float_key =
+      num_group_cols == 1 &&
+      (input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT32 ||
+       input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT64);
+    bool tuple_candidate = num_group_cols >= 2 || single_float_key;
     for (auto idx : group_col_indices) {
       tuple_candidate = tuple_candidate && tuple_groupby_fixed_width_supported(input.col(idx).type.id);
     }

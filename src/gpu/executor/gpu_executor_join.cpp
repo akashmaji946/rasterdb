@@ -235,13 +235,33 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     }
   } else {
     // ── Compute-shader hash join ──
-    std::vector<rasterdf::column_view> lk = {left_key_view};
-    std::vector<rasterdf::column_view> rk = {right_key_view};
-    rasterdf::table_view left_keys_tv(lk);
-    rasterdf::table_view right_keys_tv(rk);
+    const bool int128_join_keys =
+        !string_join &&
+        left_key_view.type().id == rasterdf::type_id::INT128 &&
+        right_key_view.type().id == rasterdf::type_id::INT128;
+    const bool int64_join_keys =
+        !string_join &&
+        left_key_view.type().id == rasterdf::type_id::INT64 &&
+        right_key_view.type().id == rasterdf::type_id::INT64;
 
-    auto join_result = rasterdf::inner_join(
-      left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    rasterdf::join_result join_result;
+    if (int128_join_keys) {
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int128_hash");
+      join_result = rasterdf::inner_join_int128_hash(
+        left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    } else if (int64_join_keys) {
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int64_hash");
+      join_result = rasterdf::inner_join_int64_hash(
+        left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    } else {
+      RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int32_hash");
+      std::vector<rasterdf::column_view> lk = {left_key_view};
+      std::vector<rasterdf::column_view> rk = {right_key_view};
+      rasterdf::table_view left_keys_tv(lk);
+      rasterdf::table_view right_keys_tv(rk);
+      join_result = rasterdf::inner_join(
+        left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+    }
 
     left_indices  = std::move(join_result.first);
     right_indices = std::move(join_result.second);

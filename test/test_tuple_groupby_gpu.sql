@@ -68,4 +68,119 @@ SELECT * FROM gpu_execution(
    ORDER BY k32, k64, kf32, kf64'
 );
 
+.print '=== Tuple GROUP BY 5: single FLOAT32 key, tuple path ==='
+CREATE OR REPLACE TABLE tuple_gb_float32 AS
+SELECT *
+FROM (
+  VALUES
+    (1.5::REAL, 10::INTEGER, 1.25::REAL, 10.5::DOUBLE),
+    (1.5::REAL, 20::INTEGER, 2.75::REAL, 20.5::DOUBLE),
+    (-2.0::REAL, 5::INTEGER, -5.5::REAL, -50.5::DOUBLE),
+    (-2.0::REAL, 7::INTEGER, -1.5::REAL, -10.5::DOUBLE),
+    (3.25::REAL, 1::INTEGER, 3.0::REAL, 30.25::DOUBLE),
+    (3.25::REAL, 2::INTEGER, 4.0::REAL, 40.25::DOUBLE),
+    (3.25::REAL, 3::INTEGER, 5.0::REAL, 50.25::DOUBLE)
+) AS t(kf32, v32, vf32, vf64);
+
+SELECT * FROM gpu_execution(
+  'SELECT kf32,
+          sum(v32) AS v32_sum,
+          count(*) AS n,
+          min(v32) AS v32_min,
+          max(v32) AS v32_max,
+          avg(v32) AS v32_avg,
+          sum(vf32) AS vf32_sum,
+          min(vf32) AS vf32_min,
+          max(vf32) AS vf32_max,
+          avg(vf32) AS vf32_avg,
+          sum(vf64) AS vf64_sum,
+          min(vf64) AS vf64_min,
+          max(vf64) AS vf64_max,
+          avg(vf64) AS vf64_avg
+   FROM tuple_gb_float32
+   GROUP BY kf32
+   ORDER BY kf32'
+);
+
+.print '=== Tuple GROUP BY 6: single FLOAT64 key, tuple path ==='
+CREATE OR REPLACE TABLE tuple_gb_float64 AS
+SELECT *
+FROM (
+  VALUES
+    (10.25::DOUBLE, 10::INTEGER, 1.25::REAL, 10.5::DOUBLE),
+    (10.25::DOUBLE, 20::INTEGER, 2.75::REAL, 20.5::DOUBLE),
+    (-20.5::DOUBLE, 5::INTEGER, -5.5::REAL, -50.5::DOUBLE),
+    (-20.5::DOUBLE, 7::INTEGER, -1.5::REAL, -10.5::DOUBLE),
+    (30.125::DOUBLE, 1::INTEGER, 3.0::REAL, 30.25::DOUBLE),
+    (30.125::DOUBLE, 2::INTEGER, 4.0::REAL, 40.25::DOUBLE),
+    (30.125::DOUBLE, 3::INTEGER, 5.0::REAL, 50.25::DOUBLE)
+) AS t(kf64, v32, vf32, vf64);
+
+SELECT * FROM gpu_execution(
+  'SELECT kf64,
+          sum(v32) AS v32_sum,
+          count(*) AS n,
+          min(v32) AS v32_min,
+          max(v32) AS v32_max,
+          avg(v32) AS v32_avg,
+          sum(vf32) AS vf32_sum,
+          min(vf32) AS vf32_min,
+          max(vf32) AS vf32_max,
+          avg(vf32) AS vf32_avg,
+          sum(vf64) AS vf64_sum,
+          min(vf64) AS vf64_min,
+          max(vf64) AS vf64_max,
+          avg(vf64) AS vf64_avg
+   FROM tuple_gb_float64
+   GROUP BY kf64
+   ORDER BY kf64'
+);
+
+.print '=== Tuple GROUP BY 7: FLOAT +0.0/-0.0 canonicalization ==='
+CREATE OR REPLACE TABLE tuple_gb_float_zero AS
+SELECT *
+FROM (
+  VALUES
+    (-0.0::REAL, -0.0::DOUBLE, 10::INTEGER),
+    ( 0.0::REAL,  0.0::DOUBLE, 20::INTEGER),
+    (-0.0::REAL, -0.0::DOUBLE, 30::INTEGER),
+    ( 1.0::REAL,  1.0::DOUBLE, 4::INTEGER),
+    ( 1.0::REAL,  1.0::DOUBLE, 6::INTEGER)
+) AS t(kf32, kf64, v);
+
+SELECT * FROM gpu_execution(
+  'SELECT kf32, sum(v) AS v_sum, count(*) AS n, min(v) AS v_min, max(v) AS v_max, avg(v) AS v_avg
+   FROM tuple_gb_float_zero
+   GROUP BY kf32
+   ORDER BY kf32'
+);
+
+SELECT * FROM gpu_execution(
+  'SELECT kf64, sum(v) AS v_sum, count(*) AS n, min(v) AS v_min, max(v) AS v_max, avg(v) AS v_avg
+   FROM tuple_gb_float_zero
+   GROUP BY kf64
+   ORDER BY kf64'
+);
+
+.print '=== Tuple GROUP BY 8: mixed INT + FLOAT keys with repeated values ==='
+CREATE OR REPLACE TABLE tuple_gb_int_float AS
+SELECT *
+FROM (
+  VALUES
+    (1::INTEGER, 0.5::REAL, 10.0::DOUBLE, 3::INTEGER),
+    (1::INTEGER, 0.5::REAL, 10.0::DOUBLE, 7::INTEGER),
+    (1::INTEGER, 1.5::REAL, 20.0::DOUBLE, 11::INTEGER),
+    (2::INTEGER, -0.0::REAL, -0.0::DOUBLE, 5::INTEGER),
+    (2::INTEGER, 0.0::REAL, 0.0::DOUBLE, 15::INTEGER),
+    (2::INTEGER, 2.5::REAL, -30.5::DOUBLE, 2::INTEGER),
+    (2::INTEGER, 2.5::REAL, -30.5::DOUBLE, 8::INTEGER)
+) AS t(k32, kf32, kf64, v);
+
+SELECT * FROM gpu_execution(
+  'SELECT k32, kf32, kf64, sum(v) AS v_sum, count(*) AS n, min(v) AS v_min, max(v) AS v_max, avg(v) AS v_avg
+   FROM tuple_gb_int_float
+   GROUP BY k32, kf32, kf64
+   ORDER BY k32, kf32, kf64'
+);
+
 .print '=== Tuple GROUP BY tests completed ==='

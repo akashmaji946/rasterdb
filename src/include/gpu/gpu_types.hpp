@@ -44,11 +44,9 @@ inline rasterdf::data_type to_rdf_type(const duckdb::LogicalType& type) {
       if (width <= 18) {
         return {rasterdf::type_id::INT64, scale};
       }
-      throw duckdb::NotImplementedException(
-        "RasterDB GPU: DECIMAL width %d requires INT128 support — falling back to CPU",
-        static_cast<int>(width));
+      return {rasterdf::type_id::INT128, scale};
     }
-    case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT64};    // best-effort for large int intermediates
+    case duckdb::LogicalTypeId::HUGEINT:   return {rasterdf::type_id::INT128};
     case duckdb::LogicalTypeId::VARCHAR:   return {rasterdf::type_id::STRING};
     default:
       throw duckdb::NotImplementedException(
@@ -142,6 +140,10 @@ inline bool copy_rdf_decimal_to_duckdb(const uint8_t* src,
       break;
     }
     case duckdb::PhysicalType::INT128: {
+      if (source_type == rasterdf::type_id::INT128) {
+        std::memcpy(dst, src, count * sizeof(duckdb::hugeint_t));
+        return true;
+      }
       if (source_type == rasterdf::type_id::INT32 ||
           source_type == rasterdf::type_id::INT64) {
         for (size_t row = 0; row < count; row++) {
@@ -180,6 +182,7 @@ inline size_t rdf_type_size(rasterdf::type_id tid) {
     case rasterdf::type_id::TIMESTAMP_MILLISECONDS:
     case rasterdf::type_id::TIMESTAMP_MICROSECONDS:
     case rasterdf::type_id::TIMESTAMP_NANOSECONDS: return 8;
+    case rasterdf::type_id::INT128:               return 16;
     case rasterdf::type_id::STRING:               return 0; // variable-width; use offsets+chars
     default:
       throw duckdb::NotImplementedException(

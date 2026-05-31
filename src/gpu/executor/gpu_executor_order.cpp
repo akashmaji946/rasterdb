@@ -196,12 +196,48 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
       uint32_t numGroups = div_ceil(n, WG_SIZE);
       uint32_t numBlocks = div_ceil(numGroups, WG_SIZE);
 
+      bool is_128bit = (data_col.type.id == rasterdf::type_id::INT128);
       bool is_64bit = (data_col.type.id == rasterdf::type_id::INT64 ||
                        data_col.type.id == rasterdf::type_id::FLOAT64);
       bool is_float = (data_col.type.id == rasterdf::type_id::FLOAT32 ||
                        data_col.type.id == rasterdf::type_id::FLOAT64);
 
-      if (is_64bit) {
+      if (is_128bit) {
+        // 128-bit signed fixed-point sort:
+        // stable LSD pass over low unsigned 64 bits, then high signed 64 bits
+        // transformed by sign-bit flip. This gives exact signed INT128 order.
+        rasterdf::device_buffer keys_a(mr, n * sizeof(uint64_t), usage);
+        rasterdf::device_buffer keys_b(mr, n * sizeof(uint64_t), usage);
+        rasterdf::device_buffer payload_b(mr, n * sizeof(uint32_t), usage);
+        rasterdf::device_buffer hist_buf(mr, numGroups * 16 * sizeof(uint32_t), usage);
+        rasterdf::device_buffer partial_buf(mr, numBlocks * 16 * sizeof(uint32_t), usage);
+        rasterdf::device_buffer bucket_totals(mr, 16 * sizeof(uint32_t), usage);
+        rasterdf::device_buffer global_offsets(mr, 16 * sizeof(uint32_t), usage);
+
+        for (uint32_t limb = 0; limb < 2; limb++) {
+          decimal_i128_extract_sort_key_pc epc{};
+          epc.input_addr = data_col.address();
+          epc.indices_addr = row_ids_buf.data();
+          epc.output_addr = keys_a.data();
+          epc.size = n;
+          epc.limb = limb;
+          disp.dispatch_decimal_i128_extract_sort_key(epc, numGroups);
+
+          if (sk.descending) {
+            radix_init_indices_pc fpc{};
+            fpc.indices_ptr = keys_a.data();
+            fpc.numElements = n;
+            disp.dispatch_flip_bits_64(fpc, numGroups);
+          }
+
+          disp.dispatch_radix_sort_batched_64(
+              keys_a.data(), keys_b.data(),
+              row_ids_buf.data(), payload_b.data(),
+              hist_buf.data(), partial_buf.data(),
+              bucket_totals.data(), global_offsets.data(),
+              n, numGroups, numBlocks);
+        }
+      } else if (is_64bit) {
         // 64-bit numeric sort
         rasterdf::device_buffer keys_a(mr, n * sizeof(uint64_t), usage);
         rasterdf::device_buffer keys_b(mr, n * sizeof(uint64_t), usage);
@@ -364,9 +400,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
       gpc.output_addr  = result->columns[c].address();
       gpc.size         = n;
 
-      bool is_64bit = (in_col.type.id == rasterdf::type_id::INT64 ||
-                       in_col.type.id == rasterdf::type_id::FLOAT64);
-      if (is_64bit)
+      if (in_col.type.id == rasterdf::type_id::INT128)
+        disp.dispatch_gather_indices_128(gpc, ng);
+      else if (in_col.type.id == rasterdf::type_id::INT64 ||
+               in_col.type.id == rasterdf::type_id::FLOAT64)
         disp.dispatch_gather_indices_64(gpc, ng);
       else
         disp.dispatch_gather_indices(gpc, ng);
