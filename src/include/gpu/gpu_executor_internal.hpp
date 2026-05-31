@@ -64,6 +64,21 @@ static constexpr uint32_t WG_SIZE = 256;
 inline uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline bool debug_logging_enabled() { return duckdb::RasterDBShouldLog(spdlog::level::debug); }
 
+inline bool can_alias_fixed_width_column(const gpu_column& src) {
+  return !src.is_host_only && !src.is_string() &&
+         src.cached_buffer != VK_NULL_HANDLE && src.cached_address != 0;
+}
+
+inline gpu_column alias_fixed_width_column(const gpu_column& src) {
+  gpu_column out;
+  out.type = src.type;
+  out.num_rows = src.num_rows;
+  out.cached_address = src.cached_address;
+  out.cached_buffer = src.cached_buffer;
+  out.cached_offset = src.cached_offset;
+  return out;
+}
+
 void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
 void append_logical_plan(duckdb::LogicalOperator& op, std::string& out, int depth = 0);
 

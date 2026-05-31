@@ -443,6 +443,8 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       col.str_chars = std::move(const_cast<gpu_column&>(src).str_chars);
       col.str_total_chars = src.str_total_chars;
       col.cached_address = 0; // no fixed-width data
+    } else if (can_alias_fixed_width_column(src)) {
+      col = alias_fixed_width_column(src);
     } else if (!src.is_host_only) {
       col = allocate_column(_ctx, src.type, src.num_rows);
       size_t bytes = src.byte_size();

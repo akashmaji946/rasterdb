@@ -50,6 +50,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
         continue;
       }
 
+      // Scan/cache-backed columns can be projected as metadata-only views.
+      // Temporary owned columns still take the copy path below because the
+      // input table is destroyed when this operator returns.
+      if (can_alias_fixed_width_column(src)) {
+        result->columns[i] = alias_fixed_width_column(src);
+        continue;
+      }
+
       // Copy column to output — use shader for INT32/FLOAT32, buffer copy otherwise
       result->columns[i] = allocate_column(_ctx, src.type, src.num_rows);
       bool has_shader = (src.type.id == rasterdf::type_id::INT32 ||
