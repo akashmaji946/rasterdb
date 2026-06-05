@@ -25,8 +25,6 @@ static constexpr bool USE_SIMPLE_GFX_AGGR = true;
 //  -1  = auto-select tuple path for cases the legacy path should not own
 static constexpr int USE_SIMPLE_TUPLE_KEY_AGGR = -1;
 
-
-
 // ============================================================================
 // GROUP BY aggregate — hash-based groupby via rasterdf
 // Supports 1-, 2-, and 3-column GROUP BY keys.

@@ -18,10 +18,14 @@
 #include <duckdb/common/types/vector.hpp>
 
 #include <memory>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace rasterdb {
 namespace gpu {
+
+class gpu_table;
 
 /// A single column residing on GPU memory.
 struct gpu_column {
@@ -42,6 +46,16 @@ struct gpu_column {
   int32_t str_total_chars{0};
   bool is_string() const { return type.id == rasterdf::type_id::STRING; }
 
+  /// Optional late-materialized representation. The logical column is
+  /// base_table[base_col_idx][row_indices[i]]. Only fixed-width inner-join
+  /// payloads use this path; nullable outer-join payloads stay materialized.
+  std::shared_ptr<gpu_table> lazy_base_table;
+  size_t lazy_base_col_idx{std::numeric_limits<size_t>::max()};
+  std::shared_ptr<gpu_column> lazy_row_indices;
+  bool is_lazy() const {
+    return static_cast<bool>(lazy_base_table) && lazy_row_indices != nullptr;
+  }
+
   /// For columns backed by GPUBufferManager cache (no owned device_buffer).
   /// When > 0, this column references a sub-region of the buffer manager's gpuCache.
   VkDeviceAddress cached_address{0};
@@ -57,14 +71,23 @@ struct gpu_column {
 
   /// Get a column_view for passing to dispatcher calls.
   rasterdf::column_view view() const {
+    if (is_lazy()) {
+      throw std::runtime_error("gpu_column::view: lazy column must be materialized first");
+    }
     VkDeviceAddress addr = cached_address ? cached_address : data.data();
     return rasterdf::column_view(type, num_rows, addr, 0, 0, 0);
   }
 
   VkDeviceAddress address() const {
+    if (is_lazy()) {
+      throw std::runtime_error("gpu_column::address: lazy column must be materialized first");
+    }
     return cached_address ? cached_address : data.data();
   }
   VkBuffer buffer() const {
+    if (is_lazy()) {
+      throw std::runtime_error("gpu_column::buffer: lazy column must be materialized first");
+    }
     return cached_buffer ? cached_buffer : data.buffer();
   }
   size_t byte_size() const { return static_cast<size_t>(num_rows) * rdf_type_size(type.id); }

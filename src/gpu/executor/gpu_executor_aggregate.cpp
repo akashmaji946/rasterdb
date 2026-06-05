@@ -17,6 +17,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_aggregate(duckdb::LogicalAggreg
   RASTERDB_LOG_DEBUG("GPU execute_aggregate");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  if (has_lazy_columns(*input)) {
+    input = materialize_table(*input);
+  }
 
   stage_timer t("  aggregate");  // Timer starts AFTER child execution
 

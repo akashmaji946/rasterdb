@@ -26,6 +26,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
   RASTERDB_LOG_DEBUG("GPU execute_order");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  if (has_lazy_columns(*input)) {
+    input = materialize_table(*input);
+  }
 
   stage_timer t("  order_by");
 
@@ -446,6 +449,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_top_n(duckdb::LogicalTopN& op)
   RASTERDB_LOG_DEBUG("GPU execute_top_n");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  if (has_lazy_columns(*input)) {
+    input = materialize_table(*input);
+  }
 
   stage_timer t("  top_n");
 

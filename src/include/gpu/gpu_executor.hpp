@@ -41,6 +41,9 @@ public:
   /// Execute the full logical plan tree, returning results as a gpu_table.
   std::unique_ptr<gpu_table> execute(duckdb::LogicalOperator& plan);
 
+  /// Ensure a result table has no lazy row-id-backed columns before download.
+  std::unique_ptr<gpu_table> materialize_output_table(std::unique_ptr<gpu_table> table);
+
   /// Convert a gpu_table to a DuckDB MaterializedQueryResult.
   duckdb::unique_ptr<duckdb::QueryResult> to_query_result(
     std::unique_ptr<gpu_table> table,
@@ -81,6 +84,12 @@ private:
 
   // Filter: apply a boolean mask to compact a table
   std::unique_ptr<gpu_table> apply_filter_mask(const gpu_table& input, gpu_column& mask);
+
+  // Late materialization helpers for row-id-backed join columns.
+  bool has_lazy_columns(const gpu_table& input) const;
+  gpu_column materialize_column(const gpu_column& input);
+  std::unique_ptr<gpu_table> materialize_table(const gpu_table& input);
+  gpu_column alias_lazy_column(const gpu_column& input);
 
   // Aggregate helpers
   void execute_ungrouped_aggregate(const gpu_table& input,

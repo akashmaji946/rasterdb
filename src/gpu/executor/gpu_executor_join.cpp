@@ -23,6 +23,11 @@ static constexpr bool USE_SIMPLE_GFX_JOIN_OPT = true;
 // Higher k = more slots = less collisions but more memory.
 static constexpr uint32_t USE_SIMPLE_GFX_JOIN_K = 28;
 
+// Delay join payload materialization until after DuckDB projection maps and
+// residual join predicates are known. The output remains a normal physical
+// gpu_table; this only avoids gathering columns that will be discarded.
+static constexpr bool USE_RDB_LATE_JOIN_MATERIALIZATION = true;
+
 static bool decimal_join_keys_compatible(const duckdb::LogicalType& left_type,
                                          const duckdb::LogicalType& right_type)
 {
@@ -124,8 +129,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   }
 
   // Execute both children
-  auto left_table  = execute_operator(*op.children[0]);
-  auto right_table = execute_operator(*op.children[1]);
+  auto left_table_unique  = execute_operator(*op.children[0]);
+  auto right_table_unique = execute_operator(*op.children[1]);
+  std::shared_ptr<gpu_table> left_table(std::move(left_table_unique));
+  std::shared_ptr<gpu_table> right_table(std::move(right_table_unique));
 
   stage_timer t("  join");  // Timer starts AFTER child execution
 
@@ -138,6 +145,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   std::unique_ptr<rasterdf::column> left_indices;
   std::unique_ptr<rasterdf::column> right_indices;
   rasterdf::size_type match_count = 0;
+  auto join_index_start = std::chrono::high_resolution_clock::now();
 
   if (equi_condition_idx >= 0) {
   // Join on FIRST condition
@@ -182,10 +190,23 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     RASTERDB_LOG_DEBUG("[RDB_DEBUG] STRING JOIN: hashed L={} R={} rows", ln, rn);
   }
 
+  gpu_column left_key_materialized;
+  gpu_column right_key_materialized;
+  if (!string_join && left_table->col(left_key_idx).is_lazy()) {
+    left_key_materialized = materialize_column(left_table->col(left_key_idx));
+  }
+  if (!string_join && right_table->col(right_key_idx).is_lazy()) {
+    right_key_materialized = materialize_column(right_table->col(right_key_idx));
+  }
+
   auto left_key_view  = string_join ? left_hash_col.view()
-                                     : left_table->col(left_key_idx).view();
+                                     : (left_table->col(left_key_idx).is_lazy()
+                                            ? left_key_materialized.view()
+                                            : left_table->col(left_key_idx).view());
   auto right_key_view = string_join ? right_hash_col.view()
-                                     : right_table->col(right_key_idx).view();
+                                     : (right_table->col(right_key_idx).is_lazy()
+                                            ? right_key_materialized.view()
+                                            : right_table->col(right_key_idx).view());
   RASTERDB_LOG_DEBUG(
     "[RDB_DEBUG] JOIN keys: L col[{}] addr=0x{:x} size={}, R col[{}] addr=0x{:x} size={}, decimal={}",
     static_cast<size_t>(left_key_idx),
@@ -391,18 +412,146 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     return result;
   }
 
+  {
+    auto join_index_end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(join_index_end - join_index_start).count();
+    RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] index_probe_ms={:.2f} rows_left={} rows_right={} rows_out={}",
+                      ms, left_table->num_rows(), right_table->num_rows(), match_count);
+  }
+
   if (_join_limit >= 0 && match_count > static_cast<rasterdf::size_type>(_join_limit)) {
     RASTERDB_LOG_DEBUG("JOIN: limiting materialized output from {} to {} rows",
                        match_count, _join_limit);
     match_count = static_cast<rasterdf::size_type>(_join_limit);
   }
 
-  rasterdf::column_view left_idx_view(
-      rasterdf::data_type{rasterdf::type_id::INT32}, match_count,
-      left_indices->view().data(), 0, 0, 0);
-  rasterdf::column_view right_idx_view(
-      rasterdf::data_type{rasterdf::type_id::INT32}, match_count,
-      right_indices->view().data(), 0, 0, 0);
+  gpu_column left_idx_col = gpu_column_from_rdf(std::move(*left_indices));
+  gpu_column right_idx_col = gpu_column_from_rdf(std::move(*right_indices));
+  left_indices.reset();
+  right_indices.reset();
+
+  auto make_index_view = [](const gpu_column& idx_col, rasterdf::size_type count) {
+    return rasterdf::column_view(
+        rasterdf::data_type{rasterdf::type_id::INT32}, count,
+        idx_col.view().data(), 0, 0, 0);
+  };
+
+  rasterdf::column_view left_idx_view = make_index_view(left_idx_col, match_count);
+  rasterdf::column_view right_idx_view = make_index_view(right_idx_col, match_count);
+
+  bool residual_prefilter_applied = false;
+  if constexpr (USE_RDB_LATE_JOIN_MATERIALIZATION) {
+    if (equi_condition_idx >= 0 && op.conditions.size() > 1 && match_count > 0) {
+      auto residual_start = std::chrono::high_resolution_clock::now();
+      gpu_column combined_mask;
+      bool has_mask = false;
+      bool can_prefilter_all = true;
+
+      for (size_t ci = 0; ci < op.conditions.size(); ci++) {
+        if (static_cast<int>(ci) == equi_condition_idx) {
+          continue;
+        }
+        auto& cond = op.conditions[ci];
+        auto lk_idx = unwrap_join_key_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;
+        auto rk_idx = unwrap_join_key_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
+        const auto& left_src_orig = left_table->col(lk_idx);
+        const auto& right_src_orig = right_table->col(rk_idx);
+        auto left_src_mat = left_src_orig.is_lazy() ? materialize_column(left_src_orig) : gpu_column{};
+        auto right_src_mat = right_src_orig.is_lazy() ? materialize_column(right_src_orig) : gpu_column{};
+        const auto& left_src = left_src_orig.is_lazy() ? left_src_mat : left_src_orig;
+        const auto& right_src = right_src_orig.is_lazy() ? right_src_mat : right_src_orig;
+        if (left_src.is_string() || right_src.is_string()) {
+          can_prefilter_all = false;
+          break;
+        }
+
+        int32_t cmp_op = 4;
+        switch (cond.comparison) {
+          case duckdb::ExpressionType::COMPARE_GREATERTHAN:          cmp_op = 0; break;
+          case duckdb::ExpressionType::COMPARE_LESSTHAN:             cmp_op = 1; break;
+          case duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO: cmp_op = 2; break;
+          case duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:    cmp_op = 3; break;
+          case duckdb::ExpressionType::COMPARE_EQUAL:                cmp_op = 4; break;
+          case duckdb::ExpressionType::COMPARE_NOTEQUAL:             cmp_op = 5; break;
+          default:
+            can_prefilter_all = false;
+            break;
+        }
+        if (!can_prefilter_all) {
+          break;
+        }
+
+        auto gathered_left = rasterdf::gather(left_src.view(), left_idx_view,
+                                              _ctx.vk_context(), _ctx.dispatcher(),
+                                              _ctx.workspace_mr());
+        auto gathered_right = rasterdf::gather(right_src.view(), right_idx_view,
+                                               _ctx.vk_context(), _ctx.dispatcher(),
+                                               _ctx.workspace_mr());
+        auto mask = allocate_column(_ctx, {rasterdf::type_id::INT32}, match_count);
+
+        compare_columns_push_constants cpc{};
+        cpc.input_a     = gathered_left->view().data();
+        cpc.input_b     = gathered_right->view().data();
+        cpc.output_addr = mask.address();
+        cpc.size        = static_cast<uint32_t>(match_count);
+        cpc.op          = cmp_op;
+        cpc.type_id     = shader_type_id_for_compare(left_src.type);
+        _ctx.dispatcher().dispatch_compare_columns(cpc);
+
+        if (!has_mask) {
+          combined_mask = std::move(mask);
+          has_mask = true;
+        } else {
+          auto next_mask = allocate_column(_ctx, {rasterdf::type_id::INT32}, match_count);
+          mask_op_push_constants mpc{};
+          mpc.input_a = combined_mask.address();
+          mpc.input_b = mask.address();
+          mpc.output_addr = next_mask.address();
+          mpc.size = static_cast<uint32_t>(match_count);
+          mpc.op = 0;
+          _ctx.dispatcher().dispatch_mask_op(mpc);
+          combined_mask = std::move(next_mask);
+        }
+      }
+
+      if (can_prefilter_all && has_mask) {
+        gpu_table idx_table;
+        idx_table.duckdb_types = {duckdb::LogicalType::INTEGER, duckdb::LogicalType::INTEGER};
+        idx_table.columns.resize(2);
+        idx_table.columns[0] = std::move(left_idx_col);
+        idx_table.columns[1] = std::move(right_idx_col);
+        idx_table.set_num_rows(match_count);
+
+        auto filtered_indices = apply_filter_mask(idx_table, combined_mask);
+        match_count = filtered_indices->num_rows();
+        if (match_count == 0) {
+          auto empty = std::make_unique<gpu_table>();
+          empty->duckdb_types = op.types;
+          empty->columns.resize(op.types.size());
+          for (size_t i = 0; i < op.types.size(); i++) {
+            empty->columns[i].type = to_rdf_type(op.types[i]);
+            empty->columns[i].num_rows = 0;
+          }
+          return empty;
+        }
+        left_idx_col = std::move(filtered_indices->columns[0]);
+        right_idx_col = std::move(filtered_indices->columns[1]);
+        left_idx_view = make_index_view(left_idx_col, match_count);
+        right_idx_view = make_index_view(right_idx_col, match_count);
+        residual_prefilter_applied = true;
+
+        auto residual_end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(residual_end - residual_start).count();
+        RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] residual_prefilter_ms={:.2f} rows_after={}",
+                          ms, match_count);
+      }
+    }
+  }
+
+  auto left_idx_shared = std::make_shared<gpu_column>(std::move(left_idx_col));
+  auto right_idx_shared = std::make_shared<gpu_column>(std::move(right_idx_col));
+  left_idx_view = make_index_view(*left_idx_shared, match_count);
+  right_idx_view = make_index_view(*right_idx_shared, match_count);
 
   // Helper: gather a single string column using index array
   auto gather_string_col = [&](const gpu_column& in_col, const rasterdf::column_view& idx_view,
@@ -509,82 +658,264 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
         "RasterDB GPU: outer joins with nullable STRING payload columns are not yet supported");
   }
 
-  // Build result table
+  auto add_unique_col = [](std::vector<size_t>& cols, size_t col_idx) {
+    if (std::find(cols.begin(), cols.end(), col_idx) == cols.end()) {
+      cols.push_back(col_idx);
+    }
+  };
+
+  auto estimate_fixed_width_bytes = [&](const gpu_table& tbl,
+                                        const std::vector<size_t>& cols,
+                                        rasterdf::size_type rows) -> size_t {
+    size_t bytes = 0;
+    for (auto c : cols) {
+      const auto& col = tbl.col(c);
+      if (col.is_string()) {
+        bytes += static_cast<size_t>(rows + 1) * sizeof(int32_t);
+        bytes += static_cast<size_t>(col.str_total_chars);
+      } else {
+        bytes += static_cast<size_t>(rows) * rdf_type_size(col.type.id);
+      }
+      if (col.has_validity) {
+        bytes += ((static_cast<size_t>(rows) + 31u) / 32u) * sizeof(uint32_t);
+      }
+    }
+    return bytes;
+  };
+
   auto result = std::make_unique<gpu_table>();
   result->duckdb_types = op.types;
-  size_t total_cols = left_table->num_columns() + right_table->num_columns();
-  result->columns.resize(total_cols);
+  size_t num_left_cols = left_table->num_columns();
+  size_t num_right_cols = right_table->num_columns();
+  size_t total_cols = num_left_cols + num_right_cols;
 
-  auto left_gather_start = std::chrono::high_resolution_clock::now();
-  if (left_side_nullable) {
-    for (size_t i = 0; i < left_table->num_columns(); i++) {
-      result->columns[i] = gather_numeric_outer_col(left_table->col(i), left_idx_view, match_count);
+  std::vector<size_t> left_result_index(num_left_cols, std::numeric_limits<size_t>::max());
+  std::vector<size_t> right_result_index(num_right_cols, std::numeric_limits<size_t>::max());
+
+  if constexpr (USE_RDB_LATE_JOIN_MATERIALIZATION) {
+    bool has_left_map = !op.left_projection_map.empty();
+    bool has_right_map = !op.right_projection_map.empty();
+
+    std::vector<size_t> left_cols_to_gather;
+    std::vector<size_t> right_cols_to_gather;
+    if (has_left_map) {
+      for (auto src_idx : op.left_projection_map) add_unique_col(left_cols_to_gather, src_idx);
+    } else {
+      for (size_t i = 0; i < num_left_cols; i++) add_unique_col(left_cols_to_gather, i);
     }
-  } else if (!any_left_string) {
-    auto left_gathered = rasterdf::gather(
-      left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-    auto left_cols = left_gathered->extract();
-    for (size_t i = 0; i < left_cols.size(); i++)
-      result->columns[i] = gpu_column_from_rdf(std::move(*left_cols[i]));
-  } else {
-    for (size_t i = 0; i < left_table->num_columns(); i++) {
-      if (left_table->col(i).is_string()) {
-        result->columns[i] = gather_string_col(left_table->col(i), left_idx_view, match_count);
+    if (has_right_map) {
+      for (auto src_idx : op.right_projection_map) add_unique_col(right_cols_to_gather, src_idx);
+    } else {
+      for (size_t i = 0; i < num_right_cols; i++) add_unique_col(right_cols_to_gather, i);
+    }
+
+    for (size_t ci = 0; ci < op.conditions.size(); ci++) {
+      if (static_cast<int>(ci) == equi_condition_idx || equi_condition_idx < 0) {
+        continue;
+      }
+      auto& cond = op.conditions[ci];
+      auto lk_idx = unwrap_join_key_cast(*cond.left).Cast<duckdb::BoundReferenceExpression>().index;
+      auto rk_idx = unwrap_join_key_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
+      add_unique_col(left_cols_to_gather, lk_idx);
+      add_unique_col(right_cols_to_gather, rk_idx);
+    }
+
+    auto make_lazy_output_col = [&](std::shared_ptr<gpu_table> owner,
+                                    size_t src_idx,
+                                    const std::shared_ptr<gpu_column>& idx_shared,
+                                    const rasterdf::column_view& idx_view) -> gpu_column {
+      const auto& src = owner->col(src_idx);
+      if (src.is_host_only || src.is_string()) {
+        throw duckdb::InternalException("RasterDB GPU: unsupported lazy join payload column");
+      }
+
+      gpu_column out;
+      out.type = src.type;
+      out.num_rows = match_count;
+      out.has_i32_minmax = src.has_i32_minmax;
+      out.i32_min = src.i32_min;
+      out.i32_max = src.i32_max;
+
+      if (src.is_lazy()) {
+        auto composed = rasterdf::gather(src.lazy_row_indices->view(), idx_view,
+                                         _ctx.vk_context(), _ctx.dispatcher(),
+                                         _ctx.workspace_mr());
+        auto composed_idx = gpu_column_from_rdf(std::move(*composed));
+        out.lazy_base_table = src.lazy_base_table;
+        out.lazy_base_col_idx = src.lazy_base_col_idx;
+        out.lazy_row_indices = std::make_shared<gpu_column>(std::move(composed_idx));
       } else {
-        auto col_view = left_table->col(i).view();
-        std::vector<rasterdf::column_view> cv = {col_view};
-        rasterdf::table_view tv(cv);
-        auto gathered = rasterdf::gather(tv, left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+        out.lazy_base_table = owner;
+        out.lazy_base_col_idx = src_idx;
+        out.lazy_row_indices = idx_shared;
+      }
+      return out;
+    };
+
+    auto gather_selected_side = [&](std::shared_ptr<gpu_table> owner,
+                                    const rasterdf::column_view& idx_view,
+                                    const std::shared_ptr<gpu_column>& idx_shared,
+                                    const std::vector<size_t>& selected_cols,
+                                    bool nullable_side,
+                                    std::vector<size_t>& result_index,
+                                    const char* side_name) {
+      const gpu_table& input = *owner;
+      auto side_start = std::chrono::high_resolution_clock::now();
+      size_t start_out = result->columns.size();
+      bool selected_has_string = false;
+      for (auto c : selected_cols) {
+        if (input.col(c).is_string()) {
+          selected_has_string = true;
+          break;
+        }
+      }
+
+      const bool can_return_lazy_side = is_inner_join && !nullable_side && !selected_has_string;
+      if (can_return_lazy_side) {
+        for (auto src_idx : selected_cols) {
+          result_index[src_idx] = result->columns.size();
+          result->columns.push_back(make_lazy_output_col(owner, src_idx, idx_shared, idx_view));
+        }
+      } else if (nullable_side || selected_has_string) {
+        for (auto src_idx : selected_cols) {
+          result_index[src_idx] = result->columns.size();
+          if (nullable_side) {
+            result->columns.push_back(gather_numeric_outer_col(input.col(src_idx), idx_view, match_count));
+          } else if (input.col(src_idx).is_string()) {
+            result->columns.push_back(gather_string_col(input.col(src_idx), idx_view, match_count));
+          } else {
+            auto col_view = input.col(src_idx).view();
+            std::vector<rasterdf::column_view> cv = {col_view};
+            rasterdf::table_view tv(cv);
+            auto gathered = rasterdf::gather(tv, idx_view, _ctx.vk_context(),
+                                             _ctx.dispatcher(), _ctx.workspace_mr());
+            auto cols = gathered->extract();
+            result->columns.push_back(gpu_column_from_rdf(std::move(*cols[0])));
+          }
+        }
+      } else if (!selected_cols.empty()) {
+        std::vector<rasterdf::size_type> projected_cols;
+        projected_cols.reserve(selected_cols.size());
+        for (auto src_idx : selected_cols) {
+          projected_cols.push_back(static_cast<rasterdf::size_type>(src_idx));
+        }
+        auto gathered = rasterdf::gather(input.view(), idx_view, projected_cols,
+                                         _ctx.vk_context(), _ctx.dispatcher(),
+                                         _ctx.workspace_mr());
         auto cols = gathered->extract();
-        result->columns[i] = gpu_column_from_rdf(std::move(*cols[0]));
+        for (size_t i = 0; i < selected_cols.size(); i++) {
+          result_index[selected_cols[i]] = result->columns.size();
+          result->columns.push_back(gpu_column_from_rdf(std::move(*cols[i])));
+        }
+      }
+
+      auto side_end = std::chrono::high_resolution_clock::now();
+      double ms = std::chrono::duration<double, std::milli>(side_end - side_start).count();
+      size_t logical_bytes = estimate_fixed_width_bytes(input, selected_cols, match_count);
+      RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] materialize_{}_ms={:.2f} cols={} of {} rows={} logical_mb={:.2f}",
+                        side_name, ms, result->columns.size() - start_out,
+                        input.num_columns(), match_count,
+                        static_cast<double>(logical_bytes) / (1024.0 * 1024.0));
+    };
+
+    result->columns.reserve(left_cols_to_gather.size() + right_cols_to_gather.size());
+    gather_selected_side(left_table, left_idx_view, left_idx_shared, left_cols_to_gather,
+                         left_side_nullable, left_result_index, "left");
+    gather_selected_side(right_table, right_idx_view, right_idx_shared, right_cols_to_gather,
+                         right_side_nullable, right_result_index, "right");
+    result->set_num_rows(match_count);
+    RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] late_materialization=1 gathered_cols={} of {} rows={}",
+                      result->num_columns(), total_cols, result->num_rows());
+  } else {
+    result->columns.resize(total_cols);
+
+    auto left_gather_start = std::chrono::high_resolution_clock::now();
+    if (left_side_nullable) {
+      for (size_t i = 0; i < num_left_cols; i++) {
+        result->columns[i] = gather_numeric_outer_col(left_table->col(i), left_idx_view, match_count);
+        left_result_index[i] = i;
+      }
+    } else if (!any_left_string) {
+      auto left_gathered = rasterdf::gather(
+        left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      auto left_cols = left_gathered->extract();
+      for (size_t i = 0; i < left_cols.size(); i++) {
+        result->columns[i] = gpu_column_from_rdf(std::move(*left_cols[i]));
+        left_result_index[i] = i;
+      }
+    } else {
+      for (size_t i = 0; i < num_left_cols; i++) {
+        left_result_index[i] = i;
+        if (left_table->col(i).is_string()) {
+          result->columns[i] = gather_string_col(left_table->col(i), left_idx_view, match_count);
+        } else {
+          auto col_view = left_table->col(i).view();
+          std::vector<rasterdf::column_view> cv = {col_view};
+          rasterdf::table_view tv(cv);
+          auto gathered = rasterdf::gather(tv, left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+          auto cols = gathered->extract();
+          result->columns[i] = gpu_column_from_rdf(std::move(*cols[0]));
+        }
       }
     }
-  }
-  RASTERDB_LOG_DEBUG("[Comp Join] join: gather_left_payloads {:.3f} ms cols={} rows={}",
-                     std::chrono::duration<double, std::milli>(
-                       std::chrono::high_resolution_clock::now() - left_gather_start).count(),
-                     left_table->num_columns(),
-                     match_count);
+    RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] materialize_left_ms={:.2f} cols={} of {} rows={} logical_mb={:.2f}",
+                      std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - left_gather_start).count(),
+                      num_left_cols, num_left_cols, match_count,
+                      static_cast<double>(estimate_fixed_width_bytes(*left_table,
+                        [&](){ std::vector<size_t> v; for (size_t i = 0; i < num_left_cols; i++) v.push_back(i); return v; }(),
+                        match_count)) / (1024.0 * 1024.0));
 
-  auto right_gather_start = std::chrono::high_resolution_clock::now();
-  if (right_side_nullable) {
-    for (size_t i = 0; i < right_table->num_columns(); i++) {
-      result->columns[left_table->num_columns() + i] =
-          gather_numeric_outer_col(right_table->col(i), right_idx_view, match_count);
-    }
-  } else if (!any_right_string) {
-    auto right_gathered = rasterdf::gather(
-      right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-    auto right_cols = right_gathered->extract();
-    for (size_t i = 0; i < right_cols.size(); i++)
-      result->columns[left_table->num_columns() + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
-  } else {
-    for (size_t i = 0; i < right_table->num_columns(); i++) {
-      if (right_table->col(i).is_string()) {
-        result->columns[left_table->num_columns() + i] =
-            gather_string_col(right_table->col(i), right_idx_view, match_count);
-      } else {
-        auto col_view = right_table->col(i).view();
-        std::vector<rasterdf::column_view> cv = {col_view};
-        rasterdf::table_view tv(cv);
-        auto gathered = rasterdf::gather(tv, right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
-        auto cols = gathered->extract();
-        result->columns[left_table->num_columns() + i] = gpu_column_from_rdf(std::move(*cols[0]));
+    auto right_gather_start = std::chrono::high_resolution_clock::now();
+    if (right_side_nullable) {
+      for (size_t i = 0; i < num_right_cols; i++) {
+        result->columns[num_left_cols + i] =
+            gather_numeric_outer_col(right_table->col(i), right_idx_view, match_count);
+        right_result_index[i] = num_left_cols + i;
+      }
+    } else if (!any_right_string) {
+      auto right_gathered = rasterdf::gather(
+        right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      auto right_cols = right_gathered->extract();
+      for (size_t i = 0; i < right_cols.size(); i++) {
+        result->columns[num_left_cols + i] = gpu_column_from_rdf(std::move(*right_cols[i]));
+        right_result_index[i] = num_left_cols + i;
+      }
+    } else {
+      for (size_t i = 0; i < num_right_cols; i++) {
+        right_result_index[i] = num_left_cols + i;
+        if (right_table->col(i).is_string()) {
+          result->columns[num_left_cols + i] =
+              gather_string_col(right_table->col(i), right_idx_view, match_count);
+        } else {
+          auto col_view = right_table->col(i).view();
+          std::vector<rasterdf::column_view> cv = {col_view};
+          rasterdf::table_view tv(cv);
+          auto gathered = rasterdf::gather(tv, right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+          auto cols = gathered->extract();
+          result->columns[num_left_cols + i] = gpu_column_from_rdf(std::move(*cols[0]));
+        }
       }
     }
+    RASTERDB_LOG_INFO("[RDB_JOIN_PROFILE] materialize_right_ms={:.2f} cols={} of {} rows={} logical_mb={:.2f}",
+                      std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - right_gather_start).count(),
+                      num_right_cols, num_right_cols, match_count,
+                      static_cast<double>(estimate_fixed_width_bytes(*right_table,
+                        [&](){ std::vector<size_t> v; for (size_t i = 0; i < num_right_cols; i++) v.push_back(i); return v; }(),
+                        match_count)) / (1024.0 * 1024.0));
+    result->set_num_rows(match_count);
   }
-  RASTERDB_LOG_DEBUG("[Comp Join] join: gather_right_payloads {:.3f} ms cols={} rows={}",
-                     std::chrono::duration<double, std::milli>(
-                       std::chrono::high_resolution_clock::now() - right_gather_start).count(),
-                     right_table->num_columns(),
-                     match_count);
 
-  RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} cols", match_count, total_cols);
+  RASTERDB_LOG_DEBUG("JOIN result: {} rows x {} materialized cols (logical join cols={})",
+                     match_count, result->num_columns(), total_cols);
 
   // Post-filter on remaining conditions (multi-condition join)
-  size_t num_left_cols = left_table->num_columns();
   for (size_t ci = 0; ci < op.conditions.size(); ci++) {
     if (static_cast<int>(ci) == equi_condition_idx || equi_condition_idx < 0) {
+      continue;
+    }
+    if (residual_prefilter_applied) {
       continue;
     }
     auto& cond  = op.conditions[ci];
@@ -592,8 +923,17 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     auto rk_idx = unwrap_join_key_cast(*cond.right).Cast<duckdb::BoundReferenceExpression>().index;
 
     // In the merged table: left cols at [0..num_left-1], right cols at [num_left..]
-    auto& left_key_col  = result->col(lk_idx);
-    auto& right_key_col = result->col(num_left_cols + rk_idx);
+    size_t left_mat_idx = left_result_index[lk_idx];
+    size_t right_mat_idx = right_result_index[rk_idx];
+    if (left_mat_idx == std::numeric_limits<size_t>::max() ||
+        right_mat_idx == std::numeric_limits<size_t>::max()) {
+      throw duckdb::InternalException("RasterDB GPU join: residual predicate column was not materialized");
+    }
+    if (result->col(left_mat_idx).is_lazy() || result->col(right_mat_idx).is_lazy()) {
+      result = materialize_table(*result);
+    }
+    auto& left_key_col  = result->col(left_mat_idx);
+    auto& right_key_col = result->col(right_mat_idx);
 
     uint32_t n = static_cast<uint32_t>(result->num_rows());
     auto mask  = allocate_column(_ctx, {rasterdf::type_id::INT32}, n);
@@ -625,7 +965,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
 
   // Apply join projection maps: empty map = "all columns from that side"
   {
-    size_t num_right_cols = right_table->num_columns();
+      size_t num_right_cols = right_table->num_columns();
     bool has_left_map = !op.left_projection_map.empty();
     bool has_right_map = !op.right_projection_map.empty();
 
@@ -640,20 +980,36 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
       size_t out_idx = 0;
       if (has_left_map) {
         for (auto src_idx : op.left_projection_map) {
-          projected->columns[out_idx++] = std::move(result->columns[src_idx]);
+          size_t mat_idx = left_result_index[src_idx];
+          if (mat_idx == std::numeric_limits<size_t>::max()) {
+            throw duckdb::InternalException("RasterDB GPU join: left projection column was not materialized");
+          }
+          projected->columns[out_idx++] = std::move(result->columns[mat_idx]);
         }
       } else {
         for (size_t i = 0; i < num_left_cols; i++) {
-          projected->columns[out_idx++] = std::move(result->columns[i]);
+          size_t mat_idx = left_result_index[i];
+          if (mat_idx == std::numeric_limits<size_t>::max()) {
+            throw duckdb::InternalException("RasterDB GPU join: left output column was not materialized");
+          }
+          projected->columns[out_idx++] = std::move(result->columns[mat_idx]);
         }
       }
       if (has_right_map) {
         for (auto src_idx : op.right_projection_map) {
-          projected->columns[out_idx++] = std::move(result->columns[num_left_cols + src_idx]);
+          size_t mat_idx = right_result_index[src_idx];
+          if (mat_idx == std::numeric_limits<size_t>::max()) {
+            throw duckdb::InternalException("RasterDB GPU join: right projection column was not materialized");
+          }
+          projected->columns[out_idx++] = std::move(result->columns[mat_idx]);
         }
       } else {
         for (size_t i = 0; i < num_right_cols; i++) {
-          projected->columns[out_idx++] = std::move(result->columns[num_left_cols + i]);
+          size_t mat_idx = right_result_index[i];
+          if (mat_idx == std::numeric_limits<size_t>::max()) {
+            throw duckdb::InternalException("RasterDB GPU join: right output column was not materialized");
+          }
+          projected->columns[out_idx++] = std::move(result->columns[mat_idx]);
         }
       }
       projected->set_num_rows(result->num_rows());

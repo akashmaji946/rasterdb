@@ -221,6 +221,7 @@ static void GPUExecutionFunction(ClientContext& context,
         auto& gpu_ctx = rasterdb::gpu::gpu_context::instance();
         rasterdb::gpu::gpu_executor executor(gpu_ctx, context);
         data.result_table = executor.execute(plan);
+        data.result_table = executor.materialize_output_table(std::move(data.result_table));
         data.chunk_offset = 0;
 
         auto t_total_end = std::chrono::high_resolution_clock::now();

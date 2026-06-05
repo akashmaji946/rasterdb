@@ -44,12 +44,91 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
                                   dst.validity.offset());
   };
 
+  auto collect_refs = [&](auto& self, duckdb::Expression& e,
+                          std::vector<size_t>& refs) -> void {
+    if (e.type == duckdb::ExpressionType::BOUND_REF) {
+      refs.push_back(e.Cast<duckdb::BoundReferenceExpression>().index);
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+      auto& cast = e.Cast<duckdb::BoundCastExpression>();
+      self(self, *cast.child, refs);
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_FUNCTION) {
+      auto& func = e.Cast<duckdb::BoundFunctionExpression>();
+      for (auto& child : func.children) {
+        self(self, *child, refs);
+      }
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_OPERATOR) {
+      auto& op = e.Cast<duckdb::BoundOperatorExpression>();
+      for (auto& child : op.children) {
+        self(self, *child, refs);
+      }
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_COMPARISON) {
+      auto& cmp = e.Cast<duckdb::BoundComparisonExpression>();
+      self(self, *cmp.left, refs);
+      self(self, *cmp.right, refs);
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_CONJUNCTION) {
+      auto& conj = e.Cast<duckdb::BoundConjunctionExpression>();
+      for (auto& child : conj.children) {
+        self(self, *child, refs);
+      }
+      return;
+    }
+    if (e.expression_class == duckdb::ExpressionClass::BOUND_BETWEEN) {
+      auto& between = e.Cast<duckdb::BoundBetweenExpression>();
+      self(self, *between.input, refs);
+      self(self, *between.lower, refs);
+      self(self, *between.upper, refs);
+    }
+  };
+
+  auto materialize_referenced_lazy_columns = [&](duckdb::Expression& e) {
+    std::vector<size_t> refs;
+    collect_refs(collect_refs, e, refs);
+    std::sort(refs.begin(), refs.end());
+    refs.erase(std::unique(refs.begin(), refs.end()), refs.end());
+    size_t lazy_cols = 0;
+    size_t logical_bytes = 0;
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (auto idx : refs) {
+      if (idx >= input->num_columns()) {
+        throw duckdb::InternalException("RasterDB GPU projection: reference index out of range");
+      }
+      if (input->col(idx).is_lazy()) {
+        logical_bytes += static_cast<size_t>(input->col(idx).num_rows) *
+                         rdf_type_size(input->col(idx).type.id);
+        input->columns[idx] = materialize_column(input->col(idx));
+        lazy_cols++;
+      }
+    }
+    if (lazy_cols > 0) {
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+      RASTERDB_LOG_INFO("[RDB_LAZY_PROFILE] projection_materialize_refs_ms={:.2f} lazy_cols={} rows={} logical_mb={:.2f}",
+                        ms, lazy_cols, input->num_rows(),
+                        static_cast<double>(logical_bytes) / (1024.0 * 1024.0));
+    }
+  };
+
   for (size_t i = 0; i < op.expressions.size(); i++) {
     auto& expr = *op.expressions[i];
 
     if (expr.type == duckdb::ExpressionType::BOUND_REF) {
       auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
       auto& src = input->col(ref.index);
+
+      if (src.is_lazy()) {
+        result->columns[i] = alias_lazy_column(src);
+        continue;
+      }
 
       // If source is a host-only column (e.g. scalar aggregate), pass through directly
       if (src.is_host_only) {
@@ -106,8 +185,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
       }
       copy_validity(src, result->columns[i]);
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {
+      materialize_referenced_lazy_columns(expr);
       result->columns[i] = evaluate_expression(*input, expr);
     } else if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
+      materialize_referenced_lazy_columns(expr);
       result->columns[i] = evaluate_expression(*input, expr);
     } else {
       throw duckdb::NotImplementedException(

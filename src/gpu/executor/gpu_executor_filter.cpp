@@ -16,6 +16,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   RASTERDB_LOG_DEBUG("GPU execute_filter");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  if (has_lazy_columns(*input)) {
+    input = materialize_table(*input);
+  }
 
   RASTERDB_LOG_DEBUG("Filter input: {} rows x {} cols", input->num_rows(), input->num_columns());
   for (size_t c = 0; c < input->num_columns(); c++) {

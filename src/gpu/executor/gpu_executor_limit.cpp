@@ -17,6 +17,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_limit(duckdb::LogicalLimit& op)
   RASTERDB_LOG_DEBUG("GPU execute_limit");
   D_ASSERT(op.children.size() == 1);
   auto input = execute_operator(*op.children[0]);
+  if (has_lazy_columns(*input)) {
+    input = materialize_table(*input);
+  }
 
   stage_timer t("  limit");  // Timer starts AFTER child execution
 
