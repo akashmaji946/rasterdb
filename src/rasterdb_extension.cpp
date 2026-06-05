@@ -141,6 +141,7 @@ struct RasterDBQueryData : public TableFunctionData {
   // Zero-copy host pointers: point directly into GPUBufferManager's HOST_CACHED
   // download buffer after DMA. No heap allocation, no memcpy, no page faults.
   std::vector<const uint8_t*> host_column_ptrs;
+  std::vector<const uint32_t*> host_validity_ptrs;
   bool host_cache_ready = false;
 };
 
@@ -234,7 +235,9 @@ static void GPUExecutionFunction(ClientContext& context,
           auto t_dl_start = std::chrono::high_resolution_clock::now();
           // Zero-copy DMA: batch all columns into download buffer in ONE submit,
           // return pointers directly into HOST_CACHED memory. No heap alloc, no memcpy.
-          data.host_column_ptrs = rasterdb::gpu::batch_download_columns(gpu_ctx, *data.result_table);
+          data.host_column_ptrs =
+              rasterdb::gpu::batch_download_columns(gpu_ctx, *data.result_table,
+                                                    &data.host_validity_ptrs);
 
           data.host_cache_ready = true;
           auto t_dl_end = std::chrono::high_resolution_clock::now();
@@ -269,6 +272,7 @@ static void GPUExecutionFunction(ClientContext& context,
       data.finished = true;
       // Pointers into download buffer — no heap memory to release
       data.host_column_ptrs.clear();
+      data.host_validity_ptrs.clear();
       return;
     }
     
@@ -278,6 +282,20 @@ static void GPUExecutionFunction(ClientContext& context,
     for (size_t c = 0; c < data.result_table->num_columns(); c++) {
       auto& col = data.result_table->col(c);
       auto rdf_tid = col.type.id;
+      auto apply_validity = [&]() {
+        if (c >= data.host_validity_ptrs.size() || !data.host_validity_ptrs[c]) {
+          return;
+        }
+        auto& validity = duckdb::FlatVector::Validity(output.data[c]);
+        const uint32_t* mask = data.host_validity_ptrs[c];
+        for (size_t r = 0; r < chunk_size; r++) {
+          idx_t row = data.chunk_offset + r;
+          bool valid = ((mask[row >> 5u] >> (row & 31u)) & 1u) != 0u;
+          if (!valid) {
+            validity.SetInvalid(r);
+          }
+        }
+      };
 
       // STRING column: reconstruct DuckDB strings from downloaded offsets+chars
       if (rdf_tid == rasterdf::type_id::STRING) {
@@ -294,6 +312,7 @@ static void GPUExecutionFunction(ClientContext& context,
           str_dst[r] = duckdb::StringVector::AddString(
               output.data[c], chars + str_start, static_cast<uint32_t>(str_len));
         }
+        apply_validity();
         continue;
       }
 
@@ -307,6 +326,7 @@ static void GPUExecutionFunction(ClientContext& context,
 
       if (rasterdb::gpu::copy_rdf_decimal_to_duckdb(
             src, rdf_tid, output.data[c].GetType(), chunk_size, dst)) {
+        apply_validity();
         continue;
       }
 
@@ -385,6 +405,7 @@ static void GPUExecutionFunction(ClientContext& context,
           std::memcpy(dst, src, chunk_size * elem_size);
         }
       }
+      apply_validity();
     }
     data.chunk_offset += chunk_size;
     return;
@@ -468,6 +489,7 @@ static void LoadInternal(ExtensionLoader& loader)
     constexpr auto USE_SIZE_PROCESSING_GB = 3ULL;
     constexpr auto USE_SIZE_STAGING_GB    = 4ULL;
     constexpr auto USE_SIZE_DOWNLOAD_GB   = 2ULL;
+
     constexpr auto USE_SIZE_GB = 1024ULL * 1024ULL * 1024ULL;
 
     // Auto-initialize BufferManager with separately tunable regions.

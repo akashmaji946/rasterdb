@@ -183,8 +183,8 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
   // Build column name list for cache lookup
   std::vector<std::string> col_names;
   if (!op.names.empty()) {
-    for (size_t i = 0; i < output_col_ids.size(); i++) {
-      auto col_idx = output_col_ids[i].GetPrimaryIndex();
+    for (auto& cid : output_col_ids) {
+      auto col_idx = cid.GetPrimaryIndex();
       col_names.push_back(col_idx < op.names.size() ? op.names[col_idx] : op.names[0]);
     }
   }
@@ -411,9 +411,9 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
         if (first_error) {
           std::rethrow_exception(first_error);
         }
-        total_scanned = static_cast<rasterdf::size_type>(
-          std::min(write_rows.load(std::memory_order_relaxed),
-                   std::min(static_cast<size_t>(scan_row_limit), STAGING_CHUNK_ROWS)));
+        total_scanned = static_cast<rasterdf::size_type>(std::min(
+            {write_rows.load(std::memory_order_relaxed), static_cast<size_t>(scan_row_limit), STAGING_CHUNK_ROWS}));
+            
         if (staging_overflow.load(std::memory_order_relaxed)) {
           RASTERDB_LOG_WARN("Staging buffer overflow during parallel scan; result truncated to {} rows",
                             total_scanned);

@@ -34,6 +34,7 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
   // Download all column data to host buffers
   auto t_dl = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<uint8_t>> host_data(num_cols);
+  std::vector<std::vector<uint32_t>> host_validity(num_cols);
   // String column host data: offsets + chars
   std::vector<std::vector<int32_t>> host_str_offsets(num_cols);
   std::vector<std::vector<uint8_t>> host_str_chars(num_cols);
@@ -73,6 +74,15 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
       if (bytes > 0) {
         download_column(_ctx, col, host_data[c].data(), bytes);
         total_dl_bytes += bytes;
+      }
+    }
+    if (col.has_validity) {
+      size_t validity_bytes = col.validity_byte_size();
+      host_validity[c].resize((validity_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t));
+      if (validity_bytes > 0) {
+        col.validity.copy_to_host(host_validity[c].data(), validity_bytes,
+                                  _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        total_dl_bytes += validity_bytes;
       }
     }
   }
@@ -182,6 +192,17 @@ duckdb::unique_ptr<duckdb::QueryResult> gpu_executor::to_query_result(
       if (!needs_cast) {
         // Default: types match in size, direct copy
         std::memcpy(dst, src, static_cast<size_t>(count) * rdf_elem_size);
+      }
+
+      if (!host_validity[c].empty()) {
+        auto& validity = duckdb::FlatVector::Validity(chunk.data[c]);
+        for (rasterdf::size_type r = 0; r < count; r++) {
+          auto row = static_cast<size_t>(offset + r);
+          bool valid = ((host_validity[c][row >> 5u] >> (row & 31u)) & 1u) != 0u;
+          if (!valid) {
+            validity.SetInvalid(r);
+          }
+        }
       }
     }
 

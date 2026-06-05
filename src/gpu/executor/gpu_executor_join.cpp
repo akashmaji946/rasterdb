@@ -71,9 +71,15 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   RASTERDB_LOG_DEBUG("GPU execute_join (simple_garuda={})", USE_SIMPLE_GFX_JOIN ? "true" : "false");
   D_ASSERT(op.children.size() == 2);
 
-  if (op.join_type != duckdb::JoinType::INNER) {
-    throw duckdb::NotImplementedException("RasterDB GPU: only INNER JOIN supported, got %s",
-                                          duckdb::JoinTypeToString(op.join_type).c_str());
+  const bool is_left_join = op.join_type == duckdb::JoinType::LEFT;
+  const bool is_right_join = op.join_type == duckdb::JoinType::RIGHT;
+  const bool is_full_join = op.join_type == duckdb::JoinType::OUTER;
+  const bool is_outer_join = is_left_join || is_right_join || is_full_join;
+  const bool is_inner_join = op.join_type == duckdb::JoinType::INNER;
+  if (!is_inner_join && !is_outer_join) {
+    throw duckdb::NotImplementedException(
+        "RasterDB GPU: supported comparison joins are INNER, LEFT, RIGHT and FULL OUTER, got %s",
+        duckdb::JoinTypeToString(op.join_type).c_str());
   }
 
   // Validate all conditions are equi-joins on column references
@@ -106,6 +112,17 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     }
   }
 
+  if (is_outer_join) {
+    if (equi_condition_idx < 0 || op.conditions.size() != 1) {
+      throw duckdb::NotImplementedException(
+          "RasterDB GPU: outer joins currently require exactly one equality condition");
+    }
+    if constexpr (USE_SIMPLE_GFX_JOIN) {
+      throw duckdb::NotImplementedException(
+          "RasterDB GPU: outer joins require the compute hash join path");
+    }
+  }
+
   // Execute both children
   auto left_table  = execute_operator(*op.children[0]);
   auto right_table = execute_operator(*op.children[1]);
@@ -134,6 +151,10 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   // If join keys are STRING, hash them to INT32 first
   gpu_column left_hash_col, right_hash_col;
   bool string_join = left_table->col(left_key_idx).is_string();
+  if (is_outer_join && string_join) {
+    throw duckdb::NotImplementedException(
+        "RasterDB GPU: outer join on STRING keys is not yet supported");
+  }
 
   if (string_join) {
     auto& lk = left_table->col(left_key_idx);
@@ -247,20 +268,53 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     rasterdf::join_result join_result;
     if (int128_join_keys) {
       RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int128_hash");
-      join_result = rasterdf::inner_join_int128_hash(
-        left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      if (is_left_join) {
+        join_result = rasterdf::left_join_int128_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_right_join) {
+        join_result = rasterdf::right_join_int128_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_full_join) {
+        join_result = rasterdf::full_join_int128_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else {
+        join_result = rasterdf::inner_join_int128_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      }
     } else if (int64_join_keys) {
       RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int64_hash");
-      join_result = rasterdf::inner_join_int64_hash(
-        left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      if (is_left_join) {
+        join_result = rasterdf::left_join_int64_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_right_join) {
+        join_result = rasterdf::right_join_int64_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_full_join) {
+        join_result = rasterdf::full_join_int64_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else {
+        join_result = rasterdf::inner_join_int64_hash(
+          left_key_view, right_key_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      }
     } else {
       RASTERDB_LOG_DEBUG("[RDB_DEBUG] JOIN path=int32_hash");
       std::vector<rasterdf::column_view> lk = {left_key_view};
       std::vector<rasterdf::column_view> rk = {right_key_view};
       rasterdf::table_view left_keys_tv(lk);
       rasterdf::table_view right_keys_tv(rk);
-      join_result = rasterdf::inner_join(
-        left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      if (is_left_join) {
+        join_result = rasterdf::left_join_hash(
+          left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_right_join) {
+        join_result = rasterdf::right_join_hash(
+          left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else if (is_full_join) {
+        join_result = rasterdf::full_join_hash(
+          left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      } else {
+        join_result = rasterdf::inner_join(
+          left_keys_tv, right_keys_tv, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
+      }
     }
 
     left_indices  = std::move(join_result.first);
@@ -408,12 +462,52 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
     return out;
   };
 
+  auto gather_numeric_outer_col = [&](const gpu_column& in_col,
+                                      const rasterdf::column_view& idx_view,
+                                      rasterdf::size_type count) -> gpu_column {
+    if (in_col.is_string()) {
+      throw duckdb::NotImplementedException(
+          "RasterDB GPU: nullable STRING payloads from outer joins are not yet supported");
+    }
+    auto out = allocate_column(_ctx, in_col.type, count);
+    size_t validity_bytes = ((static_cast<size_t>(count) + 31u) / 32u) * sizeof(uint32_t);
+    out.validity = rasterdf::device_buffer(_ctx.workspace_mr(), std::max<size_t>(validity_bytes, sizeof(uint32_t)));
+    out.has_validity = true;
+    _ctx.dispatcher().fill_buffer(out.validity.buffer(), 0u, validity_bytes, out.validity.offset());
+
+    rasterdf::execution::outer_gather_indices_pc pc{};
+    pc.input_addr = in_col.address();
+    pc.indices_addr = idx_view.data();
+    pc.output_addr = out.address();
+    pc.validity_addr = out.validity.data();
+    pc.size = static_cast<uint32_t>(count);
+    uint32_t groups = (static_cast<uint32_t>(count) + 255u) / 256u;
+    size_t elem_size = rdf_type_size(in_col.type.id);
+    if (elem_size == 16) {
+      _ctx.dispatcher().dispatch_outer_gather_indices_128(pc, groups);
+    } else if (elem_size == 8) {
+      _ctx.dispatcher().dispatch_outer_gather_indices_64(pc, groups);
+    } else {
+      _ctx.dispatcher().dispatch_outer_gather_indices(pc, groups);
+    }
+    return out;
+  };
+
   // Check if any columns are STRING — if so, we can't use rasterdf::gather for them
   bool any_left_string = false, any_right_string = false;
   for (size_t i = 0; i < left_table->num_columns(); i++)
     if (left_table->col(i).is_string()) { any_left_string = true; break; }
   for (size_t i = 0; i < right_table->num_columns(); i++)
     if (right_table->col(i).is_string()) { any_right_string = true; break; }
+
+  const bool left_side_nullable = is_right_join || is_full_join;
+  const bool right_side_nullable = is_left_join || is_full_join;
+  if (is_outer_join &&
+      ((left_side_nullable && any_left_string) ||
+       (right_side_nullable && any_right_string))) {
+    throw duckdb::NotImplementedException(
+        "RasterDB GPU: outer joins with nullable STRING payload columns are not yet supported");
+  }
 
   // Build result table
   auto result = std::make_unique<gpu_table>();
@@ -422,7 +516,11 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
   result->columns.resize(total_cols);
 
   auto left_gather_start = std::chrono::high_resolution_clock::now();
-  if (!any_left_string) {
+  if (left_side_nullable) {
+    for (size_t i = 0; i < left_table->num_columns(); i++) {
+      result->columns[i] = gather_numeric_outer_col(left_table->col(i), left_idx_view, match_count);
+    }
+  } else if (!any_left_string) {
     auto left_gathered = rasterdf::gather(
       left_table->view(), left_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
     auto left_cols = left_gathered->extract();
@@ -449,7 +547,12 @@ std::unique_ptr<gpu_table> gpu_executor::execute_join(duckdb::LogicalComparisonJ
                      match_count);
 
   auto right_gather_start = std::chrono::high_resolution_clock::now();
-  if (!any_right_string) {
+  if (right_side_nullable) {
+    for (size_t i = 0; i < right_table->num_columns(); i++) {
+      result->columns[left_table->num_columns() + i] =
+          gather_numeric_outer_col(right_table->col(i), right_idx_view, match_count);
+    }
+  } else if (!any_right_string) {
     auto right_gathered = rasterdf::gather(
       right_table->view(), right_idx_view, _ctx.vk_context(), _ctx.dispatcher(), _ctx.workspace_mr());
     auto right_cols = right_gathered->extract();

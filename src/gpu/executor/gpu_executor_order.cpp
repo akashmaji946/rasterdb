@@ -39,6 +39,29 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
   uint32_t n = static_cast<uint32_t>(N);
 
+  auto gather_validity = [&](const gpu_column& in_col, gpu_column& out_col,
+                             VkDeviceAddress indices_addr) {
+    if (!in_col.has_validity) return;
+    if (in_col.is_string()) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: nullable STRING ORDER BY is not yet supported");
+    }
+    const size_t byte_count = in_col.validity_byte_size();
+    if (byte_count == 0) return;
+    out_col.validity = rasterdf::device_buffer(
+        mr, std::max<size_t>(byte_count, sizeof(uint32_t)), usage);
+    out_col.has_validity = true;
+    disp.fill_buffer(out_col.validity.buffer(), 0u, byte_count,
+                     out_col.validity.offset());
+
+    gather_validity_pc vpc{};
+    vpc.input_validity_addr = in_col.validity.data();
+    vpc.indices_addr = indices_addr;
+    vpc.output_validity_addr = out_col.validity.data();
+    vpc.size = n;
+    disp.dispatch_gather_validity(vpc, div_ceil(n, WG_SIZE));
+  };
+
   // ── Identify sort key columns and directions ──────────────────────
   bool has_string_key = false;
   bool has_decimal_key = false;
@@ -72,10 +95,12 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
   if (!has_string_key && !has_decimal_key) {
     // Also check if any non-key column is a string — gather doesn't support it
     bool has_string_col = false;
+    bool has_nullable_col = false;
     for (size_t c = 0; c < input->num_columns(); c++) {
       if (input->col(c).is_string()) { has_string_col = true; break; }
+      if (input->col(c).has_validity) has_nullable_col = true;
     }
-    if (!has_string_col) {
+    if (!has_string_col && !has_nullable_col) {
       std::vector<rasterdf::column_view> key_views;
       std::vector<rasterdf::order> col_order;
       std::vector<gpu_column> expr_temps;
@@ -388,6 +413,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
       out.str_offsets = std::move(out_offsets);
       out.str_chars = std::move(out_chars);
       out.str_total_chars = total_chars;
+      gather_validity(in_col, out, row_ids_buf.data());
       result->columns[c] = std::move(out);
 
     } else {
@@ -407,6 +433,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_order(duckdb::LogicalOrder& op)
         disp.dispatch_gather_indices_64(gpc, ng);
       else
         disp.dispatch_gather_indices(gpc, ng);
+      gather_validity(in_col, result->columns[c], row_ids_buf.data());
     }
   }
 

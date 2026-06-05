@@ -28,6 +28,8 @@ struct gpu_column {
   rasterdf::device_buffer data;
   rasterdf::data_type type;
   rasterdf::size_type num_rows{0};
+  rasterdf::device_buffer validity;
+  bool has_validity{false};
 
   /// Host-side data for scalar results that skip GPU allocation.
   /// When non-empty, this column's data lives on CPU (data buffer may be empty).
@@ -66,6 +68,9 @@ struct gpu_column {
     return cached_buffer ? cached_buffer : data.buffer();
   }
   size_t byte_size() const { return static_cast<size_t>(num_rows) * rdf_type_size(type.id); }
+  size_t validity_byte_size() const {
+    return has_validity ? ((static_cast<size_t>(num_rows) + 31u) / 32u) * sizeof(uint32_t) : 0;
+  }
 };
 
 /// A table (collection of columns) residing on GPU memory.
@@ -137,7 +142,9 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
 /// Zero-copy batch download: DMA all columns into the pre-allocated HOST_CACHED download
 /// buffer in ONE Vulkan submit. Returns pointers directly into the download buffer.
 /// No heap allocation, no staging→host memcpy, no page faults. Pure PCIe speed.
-std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_table& table);
+std::vector<const uint8_t*> batch_download_columns(
+    gpu_context& ctx, const gpu_table& table,
+    std::vector<const uint32_t*>* validity_ptrs = nullptr);
 
 /// Allocate a gpu_column of given type and size, uninitialized.
 gpu_column allocate_column(gpu_context& ctx, rasterdf::data_type type, rasterdf::size_type num_rows);

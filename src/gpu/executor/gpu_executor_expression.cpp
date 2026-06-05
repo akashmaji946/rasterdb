@@ -465,6 +465,24 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
   case duckdb::ExpressionType::BOUND_REF: {
     auto& ref = expr.Cast<duckdb::BoundReferenceExpression>();
     auto& src = input.col(ref.index);
+    auto copy_validity = [&](gpu_column& dst) {
+      if (!src.has_validity) return;
+      if (src.is_string()) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: nullable STRING expression reference is not yet supported");
+      }
+      const size_t byte_count = src.validity_byte_size();
+      if (byte_count == 0) return;
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      dst.validity = rasterdf::device_buffer(
+          _ctx.workspace_mr(), std::max<size_t>(byte_count, sizeof(uint32_t)), usage);
+      dst.has_validity = true;
+      _ctx.dispatcher().copy_buffer(src.validity.buffer(), dst.validity.buffer(),
+                                    byte_count, src.validity.offset(),
+                                    dst.validity.offset());
+    };
     gpu_column col;
     col.type = src.type;
     col.num_rows = src.num_rows;
@@ -503,6 +521,7 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
       col.cached_address = 0;
       col.cached_buffer = VK_NULL_HANDLE;
     }
+    copy_validity(col);
     return col;
   }
   case duckdb::ExpressionType::VALUE_CONSTANT: {

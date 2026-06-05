@@ -164,10 +164,13 @@ size_t download_column(gpu_context& ctx, const gpu_column& col, void* dst, size_
   return bytes;
 }
 
-std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_table& table)
+std::vector<const uint8_t*> batch_download_columns(
+    gpu_context& ctx, const gpu_table& table,
+    std::vector<const uint32_t*>* validity_ptrs)
 {
   size_t ncols = table.num_columns();
   std::vector<const uint8_t*> ptrs(ncols, nullptr);
+  if (validity_ptrs) validity_ptrs->assign(ncols, nullptr);
 
   if (table.num_rows() == 0) return ptrs;
 
@@ -180,10 +183,31 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
 
   for (size_t c = 0; c < ncols; c++) {
     auto& col = table.col(c);
+    auto download_validity = [&]() {
+      if (!validity_ptrs || !col.has_validity) return;
+      size_t validity_bytes = col.validity_byte_size();
+      if (validity_bytes == 0) return;
+      dl_offset = (dl_offset + 63) & ~size_t(63);
+      if (dl_offset + validity_bytes > dl_capacity) {
+        throw std::runtime_error("batch_download_columns: validity result exceeds download buffer capacity");
+      }
+
+      rasterdf::allocation_info staging{};
+      staging.buffer     = bufmgr.cpuDownloadBuffer();
+      staging.mapped_ptr = dl_base + dl_offset;
+      staging.offset     = dl_offset;
+      staging.size       = validity_bytes;
+      const_cast<rasterdf::device_buffer&>(col.validity).copy_to_host_with_staging(
+        dl_base + dl_offset, validity_bytes, staging,
+        ctx.device(), ctx.queue(), ctx.command_pool());
+      (*validity_ptrs)[c] = reinterpret_cast<const uint32_t*>(dl_base + dl_offset);
+      dl_offset += validity_bytes;
+    };
 
     if (col.is_host_only) {
       // Host-only: data already in host memory, just point at it
       ptrs[c] = col.host_data.data();
+      download_validity();
       continue;
     }
 
@@ -219,6 +243,7 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
 
       ptrs[c] = dst;
       dl_offset += total_bytes;
+      download_validity();
       continue;
     }
 
@@ -260,6 +285,7 @@ std::vector<const uint8_t*> batch_download_columns(gpu_context& ctx, const gpu_t
       ptrs[c] = dl_base + dl_offset;
       dl_offset += bytes;
     }
+    download_validity();
   }
 
   return ptrs;

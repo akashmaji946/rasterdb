@@ -24,6 +24,26 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
   result->duckdb_types = op.types;
   result->columns.resize(op.expressions.size());
 
+  auto copy_validity = [&](const gpu_column& src, gpu_column& dst) {
+    if (!src.has_validity) return;
+    if (src.is_string()) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: nullable STRING projection is not yet supported");
+    }
+
+    const size_t byte_count = src.validity_byte_size();
+    if (byte_count == 0) return;
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    dst.validity = rasterdf::device_buffer(
+        _ctx.workspace_mr(), std::max<size_t>(byte_count, sizeof(uint32_t)), usage);
+    dst.has_validity = true;
+    _ctx.dispatcher().copy_buffer(src.validity.buffer(), dst.validity.buffer(),
+                                  byte_count, src.validity.offset(),
+                                  dst.validity.offset());
+  };
+
   for (size_t i = 0; i < op.expressions.size(); i++) {
     auto& expr = *op.expressions[i];
 
@@ -37,6 +57,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
         result->columns[i].num_rows = src.num_rows;
         result->columns[i].is_host_only = true;
         result->columns[i].host_data = src.host_data;
+        copy_validity(src, result->columns[i]);
         continue;
       }
 
@@ -47,6 +68,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
         result->columns[i].str_offsets = std::move(const_cast<gpu_column&>(src).str_offsets);
         result->columns[i].str_chars = std::move(const_cast<gpu_column&>(src).str_chars);
         result->columns[i].str_total_chars = src.str_total_chars;
+        copy_validity(src, result->columns[i]);
         continue;
       }
 
@@ -55,6 +77,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
       // input table is destroyed when this operator returns.
       if (can_alias_fixed_width_column(src)) {
         result->columns[i] = alias_fixed_width_column(src);
+        copy_validity(src, result->columns[i]);
         continue;
       }
 
@@ -81,6 +104,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_projection(duckdb::LogicalProje
                                       byte_count, src_off,
                                       result->columns[i].data.offset());
       }
+      copy_validity(src, result->columns[i]);
     } else if (expr.type == duckdb::ExpressionType::BOUND_FUNCTION) {
       result->columns[i] = evaluate_expression(*input, expr);
     } else if (expr.expression_class == duckdb::ExpressionClass::BOUND_CAST) {
