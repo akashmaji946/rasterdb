@@ -1,126 +1,191 @@
 #!/bin/bash
-# install.sh — Install RasterDB DuckDB extension and its dependencies
+# install.sh - Build and install RasterDB.
 #
-# This script:
-#   1. Checks and installs system dependencies (Vulkan, spdlog, etc.)
-#   2. Verifies rasterdf is built
-#   3. Initializes DuckDB submodule
-#   4. Builds DuckDB
-#   5. Builds the RasterDB extension
-#   6. Installs the extension to a standard location
+# This installer is intentionally narrow in scope:
+#   1. Verifies RasterDF is already installed and available.
+#   2. Builds DuckDB plus the RasterDB extension.
+#   3. Installs the DuckDB shell as `rduckdb`.
+#   4. Installs the RasterDB extension so `rduckdb` auto-loads it.
 #
-# Usage: ./install.sh [--release|--debug] [--log-level=LEVEL]
+# RasterDF installation is handled separately by ../rasterdf/install.sh.
+#
+# Typical usage:
+#   ./install.sh
+#   sudo ./install.sh
+#   sudo ./install.sh --skip-build
+#   sudo ./install.sh --debug
+#
+# After install:
+#   which rduckdb
+#   rduckdb --version
+#   rduckdb my.db
 
-set -e
+set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$PROJECT_DIR"
+cd "${PROJECT_DIR}"
 
 BUILD_PRESET="release"
-LOG_LEVEL="${RASTERDB_LOG_LEVEL:-info}"
+SKIP_BUILD=0
 SKIP_DEPS=0
+PREFIX="/usr/local"
 
-for arg in "$@"; do
-    case "$arg" in
-        --release) BUILD_PRESET="release" ;;
-        --debug)   BUILD_PRESET="debug" ;;
-        --log-level=*) LOG_LEVEL="${arg#*=}" ;;
-        --skip-deps) SKIP_DEPS=1 ;;
+RDUCKDB_VERSION="1.0.0"
+RDUCKDB_AUTHOR="Akash Maji"
+RDUCKDB_CONTACT="akashmaji@iisc.ac.in"
+RDUCKDB_LICENSE="MIT"
+
+INSTALL_BIN_DIR="${PREFIX}/bin"
+INSTALL_LIB_DIR="${PREFIX}/lib/rasterdb"
+PROFILE_SCRIPT="/etc/profile.d/rasterdb.sh"
+
+usage() {
+    cat <<EOF
+Usage:
+  ./install.sh [--debug] [--skip-build] [--skip-deps] [--prefix PATH]
+
+Common workflows:
+  ./install.sh
+      Build RasterDB in release mode and install it under ${PREFIX}.
+
+  sudo ./install.sh
+      Same as above, with permission to write system files.
+
+  sudo ./install.sh --skip-build
+      Reuse the existing build outputs and reinstall the system command.
+
+Options:
+  --debug         Build/install from the debug preset instead of release.
+  --skip-build    Reuse existing build outputs.
+  --skip-deps     Skip system dependency checks.
+  --prefix PATH   Install under a different prefix. Default: ${PREFIX}
+  --help, -h      Show this help message.
+
+Notes:
+  - RasterDF must already be installed separately.
+  - This script installs the command as 'rduckdb'.
+  - 'rduckdb' auto-loads the RasterDB extension on startup.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --debug)
+            BUILD_PRESET="debug"
+            shift
+            ;;
+        --release)
+            BUILD_PRESET="release"
+            shift
+            ;;
+        --skip-build)
+            SKIP_BUILD=1
+            shift
+            ;;
+        --skip-deps)
+            SKIP_DEPS=1
+            shift
+            ;;
+        --prefix)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --prefix requires a value"
+                exit 1
+            fi
+            PREFIX="$2"
+            INSTALL_BIN_DIR="${PREFIX}/bin"
+            INSTALL_LIB_DIR="${PREFIX}/lib/rasterdb"
+            shift 2
+            ;;
+        --prefix=*)
+            PREFIX="${1#*=}"
+            INSTALL_BIN_DIR="${PREFIX}/bin"
+            INSTALL_LIB_DIR="${PREFIX}/lib/rasterdb"
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --release          Build in release mode (optimized) [default]"
-            echo "  --debug            Build in debug mode (with symbols)"
-            echo "  --log-level=LEVEL  Set default log level (debug|info|warn|error|none)"
-            echo "  --skip-deps        Skip system dependency installation"
-            echo "  --help, -h         Show this help message"
+            usage
             exit 0
+            ;;
+        *)
+            echo "ERROR: unknown argument: $1"
+            usage
+            exit 1
             ;;
     esac
 done
 
-LOG_LEVEL="${LOG_LEVEL,,}"
-case "$LOG_LEVEL" in
-    trace|debug|info|warn|warning|error|err|critical|fatal|none|off) ;;
-    *)
-        echo "ERROR: invalid log level '${LOG_LEVEL}'"
-        echo "       expected trace, debug, info, warn, error, critical, or none"
-        exit 1
-        ;;
-esac
-
 echo "============================================"
-echo "  RasterDB Installation Script"
-echo "  Preset: ${BUILD_PRESET}"
-echo "  Log level: ${LOG_LEVEL}"
+echo "  RasterDB Installer"
 echo "============================================"
+echo ""
+echo "Project root : ${PROJECT_DIR}"
+echo "Build preset : ${BUILD_PRESET}"
+echo "Install root : ${PREFIX}"
 
-# --- 1. Check for sudo access ---
-if [ "$SKIP_DEPS" -eq 0 ]; then
-    if ! sudo -n true 2>/dev/null; then
-        echo ""
-        echo "This script requires sudo access to install system dependencies."
-        echo "Please enter your password when prompted."
+check_command() {
+    if command -v "$1" >/dev/null 2>&1; then
+        echo "  OK: $1 ($(command -v "$1"))"
+        return 0
     fi
-fi
+    echo "  MISSING: $1"
+    return 1
+}
 
-# --- 2. Install system dependencies ---
+check_apt_package() {
+    local package="$1"
+    if command -v dpkg >/dev/null 2>&1 && dpkg -s "$package" >/dev/null 2>&1; then
+        echo "  OK: ${package} already installed"
+        return 0
+    fi
+    echo "  MISSING: ${package}"
+    return 1
+}
+
 if [ "$SKIP_DEPS" -eq 0 ]; then
     echo ""
-    echo "[1/6] Installing system dependencies..."
-    
-    # Update package list
-    sudo apt update
-    
-    # Install Vulkan SDK
-    echo "  Installing Vulkan SDK..."
-    sudo apt install -y vulkan-sdk libvulkan-dev || {
-        echo "  WARNING: Failed to install Vulkan SDK via apt."
-        echo "  Please install manually from https://vulkan.lunarg.com/sdk/home"
-    }
-    
-    # Install spdlog
-    echo "  Installing spdlog..."
-    sudo apt install -y libspdlog-dev || {
-        echo "  WARNING: Failed to install spdlog via apt."
-        echo "  You can install via pixi: pixi install spdlog"
-    }
-    
-    # Install build tools
-    echo "  Installing build tools..."
-    sudo apt install -y cmake build-essential git
-    
-    echo "  System dependencies installed."
+    echo "[1/6] Checking system dependencies..."
+    DEPS_OK=1
+    check_apt_package "build-essential" || DEPS_OK=0
+    check_command "cmake" || DEPS_OK=0
+    check_command "git" || DEPS_OK=0
+    check_apt_package "libspdlog-dev" || DEPS_OK=0
+    check_apt_package "libvulkan-dev" || DEPS_OK=0
+    check_command "glslc" || DEPS_OK=0
+    if [ "$DEPS_OK" -eq 1 ]; then
+        echo "  All required dependencies are available."
+    else
+        echo ""
+        echo "  Some build dependencies are missing."
+        echo "  Install them manually, for example on Ubuntu/Debian:"
+        echo "    sudo apt install build-essential cmake git libspdlog-dev libvulkan-dev glslang-tools"
+        exit 1
+    fi
 else
     echo ""
-    echo "[1/6] Skipping system dependency installation (--skip-deps)."
+    echo "[1/6] Skipping dependency checks (--skip-deps)."
 fi
 
-# --- 3. Check rasterdf is built ---
 echo ""
-echo "[2/6] Checking rasterdf library..."
-RASTERDF_ROOT="${PROJECT_DIR}/../rasterdf"
-SO_FILE=""
-for candidate in "${RASTERDF_ROOT}/build/librasterdf.so" \
-                 "${RASTERDF_ROOT}/build/librasterdf.so" \
-                 "/usr/local/lib/librasterdf.so"; do
-    if [ -f "$candidate" ]; then
-        SO_FILE="$candidate"
-        break
-    fi
-done
-
-if [ -z "$SO_FILE" ]; then
-    echo "  ERROR: librasterdf.so not found!"
-    echo "  Please build rasterdf first:"
-    echo "    cd ${RASTERDF_ROOT}"
-    echo "    ./build.sh --release"
+echo "[2/6] Checking RasterDF prerequisite..."
+RASTERDF_LIB="/usr/local/lib/librasterdf.so"
+RASTERDF_SHADERS="/usr/local/share/rasterdf/shaders"
+if [ ! -f "${RASTERDF_LIB}" ]; then
+    echo "ERROR: ${RASTERDF_LIB} not found."
+    echo "Please install RasterDF first:"
+    echo "  cd ../rasterdf"
+    echo "  sudo ./install.sh --system"
     exit 1
 fi
-echo "  Found: ${SO_FILE}"
+if [ ! -d "${RASTERDF_SHADERS}" ]; then
+    echo "ERROR: ${RASTERDF_SHADERS} not found."
+    echo "Please install RasterDF shaders first:"
+    echo "  cd ../rasterdf"
+    echo "  sudo ./install.sh --system"
+    exit 1
+fi
+echo "  Found RasterDF library : ${RASTERDF_LIB}"
+echo "  Found RasterDF shaders : ${RASTERDF_SHADERS}"
 
-# --- 4. Initialize DuckDB submodule ---
 echo ""
 echo "[3/6] Initializing DuckDB submodule..."
 if [ ! -d "${PROJECT_DIR}/duckdb/.git" ]; then
@@ -130,77 +195,106 @@ else
     echo "  DuckDB submodule already initialized."
 fi
 
-# --- 5. Build RasterDB extension ---
-echo ""
-echo "[4/6] Building RasterDB extension..."
-./build.sh --${BUILD_PRESET} --log-level="${LOG_LEVEL}"
+if [ "$SKIP_BUILD" -eq 0 ]; then
+    echo ""
+    echo "[4/6] Building RasterDB..."
+    ./build.sh "--${BUILD_PRESET}"
+else
+    echo ""
+    echo "[4/6] Skipping build (--skip-build)."
+fi
 
-# --- 6. Install extension ---
-echo ""
-echo "[5/6] Installing RasterDB extension..."
+DUCKDB_BIN="${PROJECT_DIR}/build/${BUILD_PRESET}/duckdb"
+EXT_FILE="${PROJECT_DIR}/build/${BUILD_PRESET}/extension/rasterdb/rasterdb.duckdb_extension"
 
-# Find the extension file
-EXT_FILE=""
-for candidate in \
-    "${PROJECT_DIR}/build/${BUILD_PRESET}/extension/rasterdb/rasterdb.duckdb_extension" \
-    "${PROJECT_DIR}/build/${BUILD_PRESET}/rasterdb.duckdb_extension"; do
-    if [ -f "$candidate" ]; then
-        EXT_FILE="$candidate"
-        break
-    fi
-done
-
-if [ -z "$EXT_FILE" ]; then
-    echo "  ERROR: Extension file not found after build."
-    echo "  Check build/${BUILD_PRESET}/ for output."
+if [ ! -x "${DUCKDB_BIN}" ]; then
+    echo "ERROR: built DuckDB binary not found at ${DUCKDB_BIN}"
+    exit 1
+fi
+if [ ! -f "${EXT_FILE}" ]; then
+    echo "ERROR: built RasterDB extension not found at ${EXT_FILE}"
     exit 1
 fi
 
-# Install to standard location
-INSTALL_DIR="${HOME}/.duckdb/extensions"
-mkdir -p "${INSTALL_DIR}"
-cp "${EXT_FILE}" "${INSTALL_DIR}/"
-echo "  Extension installed to: ${INSTALL_DIR}/$(basename ${EXT_FILE})"
-
-# --- 7. Set up environment ---
 echo ""
-echo "[6/6] Setting up environment..."
+echo "[5/6] Installing system files..."
+sudo mkdir -p "${INSTALL_BIN_DIR}" "${INSTALL_LIB_DIR}"
+sudo cp -f "${DUCKDB_BIN}" "${INSTALL_LIB_DIR}/duckdb"
+sudo cp -f "${EXT_FILE}" "${INSTALL_LIB_DIR}/rasterdb.duckdb_extension"
 
-# Create a helper script for setting up the environment
-ENV_SCRIPT="${PROJECT_DIR}/setup_env.sh"
-cat > "${ENV_SCRIPT}" << 'EOF'
+TMP_WRAPPER="$(mktemp)"
+cat > "${TMP_WRAPPER}" <<EOF
 #!/bin/bash
-# Source this file to set up the RasterDB environment
-export RASTERDF_SHADER_DIR=/usr/local/share/rasterdf/shaders
-export RASTERDB_LOG_LEVEL=info
-export SIRIUS_LOG_LEVEL=info
-echo "RasterDB environment variables set:"
-echo "  RASTERDF_SHADER_DIR=${RASTERDF_SHADER_DIR}"
-echo "  RASTERDB_LOG_LEVEL=${RASTERDB_LOG_LEVEL}"
-echo "  SIRIUS_LOG_LEVEL=${SIRIUS_LOG_LEVEL}"
-EOF
-chmod +x "${ENV_SCRIPT}"
-echo "  Environment setup script created: ${ENV_SCRIPT}"
+set -euo pipefail
 
-# --- Summary ---
+RDUCKDB_VERSION="${RDUCKDB_VERSION}"
+RDUCKDB_AUTHOR="${RDUCKDB_AUTHOR}"
+RDUCKDB_CONTACT="${RDUCKDB_CONTACT}"
+RDUCKDB_LICENSE="${RDUCKDB_LICENSE}"
+RDUCKDB_BIN="${INSTALL_LIB_DIR}/duckdb"
+RDUCKDB_EXT="${INSTALL_LIB_DIR}/rasterdb.duckdb_extension"
+
+case "\${1:-}" in
+    --version)
+        printf '%s\n' "\${RDUCKDB_VERSION}"
+        exit 0
+        ;;
+    --author)
+        printf '%s\n' "\${RDUCKDB_AUTHOR}"
+        exit 0
+        ;;
+    --contact)
+        printf '%s\n' "\${RDUCKDB_CONTACT}"
+        exit 0
+        ;;
+    --license)
+        printf '%s\n' "\${RDUCKDB_LICENSE}"
+        exit 0
+        ;;
+esac
+
+export RASTERDF_SHADER_DIR="\${RASTERDF_SHADER_DIR:-${RASTERDF_SHADERS}}"
+export RASTERDB_LOG_LEVEL="\${RASTERDB_LOG_LEVEL:-info}"
+
+exec "\${RDUCKDB_BIN}" -unsigned -cmd "LOAD '\${RDUCKDB_EXT}';" "\$@"
+EOF
+sudo install -m 0755 "${TMP_WRAPPER}" "${INSTALL_BIN_DIR}/rduckdb"
+rm -f "${TMP_WRAPPER}"
+
+TMP_PROFILE="$(mktemp)"
+cat > "${TMP_PROFILE}" <<EOF
+# RasterDB runtime defaults
+export RASTERDF_SHADER_DIR="${RASTERDF_SHADERS}"
+export RASTERDB_LOG_LEVEL="\${RASTERDB_LOG_LEVEL:-info}"
+EOF
+sudo install -m 0644 "${TMP_PROFILE}" "${PROFILE_SCRIPT}"
+rm -f "${TMP_PROFILE}"
+
+echo "  Installed shell    : ${INSTALL_BIN_DIR}/rduckdb"
+echo "  Installed DuckDB   : ${INSTALL_LIB_DIR}/duckdb"
+echo "  Installed extension: ${INSTALL_LIB_DIR}/rasterdb.duckdb_extension"
+echo "  Runtime profile    : ${PROFILE_SCRIPT}"
+
+echo ""
+echo "[6/6] Verifying installation..."
+if command -v "${INSTALL_BIN_DIR}/rduckdb" >/dev/null 2>&1; then
+    echo "  which rduckdb      : ${INSTALL_BIN_DIR}/rduckdb"
+fi
+echo "  rduckdb --version  : $("${INSTALL_BIN_DIR}/rduckdb" --version)"
+echo "  rduckdb --author   : $("${INSTALL_BIN_DIR}/rduckdb" --author)"
+echo "  rduckdb --contact  : $("${INSTALL_BIN_DIR}/rduckdb" --contact)"
+echo "  rduckdb --license  : $("${INSTALL_BIN_DIR}/rduckdb" --license)"
+
 echo ""
 echo "============================================"
-echo "  Installation Complete!"
+echo "  Install complete"
 echo "============================================"
 echo ""
-echo "Extension installed: ${INSTALL_DIR}/$(basename ${EXT_FILE})"
+echo "Try:"
+echo "  which rduckdb"
+echo "  rduckdb --version"
+echo "  rduckdb"
+echo "  rduckdb my.db"
 echo ""
-echo "To use RasterDB:"
-echo "  1. Source the environment script:"
-echo "     source ${ENV_SCRIPT}"
-echo ""
-echo "  2. Start DuckDB:"
-echo "     duckdb -unsigned"
-echo ""
-echo "  3. Load the extension:"
-echo "     LOAD '${INSTALL_DIR}/$(basename ${EXT_FILE)}';"
-echo ""
-echo "  4. Run GPU queries:"
-echo "     SELECT * FROM gpu_execution('SELECT sum(a) FROM t');"
-echo ""
-echo "============================================"
+echo "Note:"
+echo "  RasterDF remains a separate install managed by ../rasterdf/install.sh"

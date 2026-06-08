@@ -19,7 +19,7 @@ namespace gpu {
 // Fast path: use multiple DuckDB local scan states and coalesce numeric columns
 // directly into RasterDB's staging buffers. Set false to force the earlier
 // single-thread scan path for operator-only comparisons against Sirius/cuDF.
-static constexpr bool USE_RDB_PARALLEL_SCAN = false;
+static constexpr bool USE_RDB_PARALLEL_SCAN = true;
 
 static duckdb::unique_ptr<duckdb::TableFilterSet>
 create_scan_filter_set(const duckdb::TableFilterSet& table_filters,
