@@ -31,3 +31,6 @@ SELECT dept, SUM(score) FROM users GROUP BY dept;
 
 -- Q10: Filter + GroupBy with COUNT aggregation
 SELECT dept, COUNT(score) FROM users WHERE age > 30 GROUP BY dept;
+
+
+-- SELECT * FROM gpu_execution('SELECT * FROM users;');

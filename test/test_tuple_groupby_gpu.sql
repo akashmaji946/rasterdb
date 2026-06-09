@@ -19,7 +19,7 @@ FROM (
     (3, 9, 1, 9, 300, 1002)
 ) AS t(k0, k1, v, w, k2, k3);
 
-.print '=== Tuple GROUP BY 1: two INT keys, sum/count/min/max/avg ==='
+.print '=== GroupBy 1: on two INT keys, sum/count/min/max/avg ==='
 SELECT * FROM gpu_execution(
   'SELECT k0, k1, sum(v) AS v_sum, count(*) AS n, min(v) AS v_min, max(v) AS v_max, avg(v) AS v_avg
    FROM tuple_gb_input
@@ -27,7 +27,7 @@ SELECT * FROM gpu_execution(
    ORDER BY k0, k1'
 );
 
-.print '=== Tuple GROUP BY 2: three INT keys ==='
+.print '=== GroupBy 2: on three INT keys ==='
 SELECT * FROM gpu_execution(
   'SELECT k0, k1, w, sum(v) AS v_sum
    FROM tuple_gb_input
@@ -35,7 +35,7 @@ SELECT * FROM gpu_execution(
    ORDER BY k0, k1, w'
 );
 
-.print '=== Tuple GROUP BY 3: four INT keys, tuple path beyond old 3-key fallback ==='
+.print '=== GroupBy 3: on four INT keys, tuple path beyond old 3-key fallback ==='
 SELECT * FROM gpu_execution(
   'SELECT k0, k1, k2, k3, sum(v) AS v_sum, count(*) AS n
    FROM tuple_gb_input
@@ -43,7 +43,7 @@ SELECT * FROM gpu_execution(
    ORDER BY k0, k1, k2, k3'
 );
 
-.print '=== Tuple GROUP BY 4: mixed fixed-width keys and values ==='
+.print '=== GroupBy 4: on mixed fixed-width keys and values ==='
 CREATE OR REPLACE TABLE tuple_gb_mixed AS
 SELECT *
 FROM (
@@ -68,7 +68,7 @@ SELECT * FROM gpu_execution(
    ORDER BY k32, k64, kf32, kf64'
 );
 
-.print '=== Tuple GROUP BY 5: single FLOAT32 key, tuple path ==='
+.print '=== GroupBy 5: on single FLOAT32 key, tuple path ==='
 CREATE OR REPLACE TABLE tuple_gb_float32 AS
 SELECT *
 FROM (
@@ -102,7 +102,7 @@ SELECT * FROM gpu_execution(
    ORDER BY kf32'
 );
 
-.print '=== Tuple GROUP BY 6: single FLOAT64 key, tuple path ==='
+.print '=== GroupBy 6: on single FLOAT64 key, tuple path ==='
 CREATE OR REPLACE TABLE tuple_gb_float64 AS
 SELECT *
 FROM (
@@ -136,7 +136,7 @@ SELECT * FROM gpu_execution(
    ORDER BY kf64'
 );
 
-.print '=== Tuple GROUP BY 7: FLOAT +0.0/-0.0 canonicalization ==='
+.print '=== GroupBy 7: FLOAT +0.0/-0.0 canonicalization ==='
 CREATE OR REPLACE TABLE tuple_gb_float_zero AS
 SELECT *
 FROM (
@@ -162,7 +162,7 @@ SELECT * FROM gpu_execution(
    ORDER BY kf64'
 );
 
-.print '=== Tuple GROUP BY 8: mixed INT + FLOAT keys with repeated values ==='
+.print '=== GroupBy 8: on mixed INT + FLOAT keys with repeated values ==='
 CREATE OR REPLACE TABLE tuple_gb_int_float AS
 SELECT *
 FROM (
@@ -183,4 +183,4 @@ SELECT * FROM gpu_execution(
    ORDER BY k32, kf32, kf64'
 );
 
-.print '=== Tuple GROUP BY tests completed ==='
+.print '=== GroupBy tests completed ==='

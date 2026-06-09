@@ -60,7 +60,7 @@ class RasterDBEngine:
         self._cache = {}
 
         # Init rasterdf GPU context
-        rdf.init_device("default")
+        rdf.init_device("nvidia")
         rdf.init_context_memory(limit_mb=gpu_mem_mb, heap_ratio=0.9)
         rdf.set_debug_mode(debug)
 

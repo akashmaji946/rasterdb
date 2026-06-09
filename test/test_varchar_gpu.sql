@@ -8,13 +8,20 @@
 -- Load extension
 LOAD '/home/akashmaji/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
 
--- Generate TPC-H SF0.01 data using built-in tpch extension
+-- Generate TPC-H SF-10 data using built-in tpch extension
 INSTALL tpch;
 LOAD tpch;
 CALL dbgen(sf=10);
 
 -- Init GPU buffers (skip if no discrete GPU available)
 -- CALL gpu_buffer_init('1 GB', '1 GB');
+
+-- ============================================================================
+-- Test 0: Simple VARCHAR projection (nation table — 25 rows, all VARCHAR)
+-- ============================================================================
+
+.print '=== Test 1: VARCHAR projection ==='
+SELECT * FROM gpu_execution('SELECT n_nationkey, n_name FROM nation');
 
 -- ============================================================================
 -- Test 1: Simple VARCHAR filter (nation table — 25 rows, all VARCHAR)
@@ -52,5 +59,6 @@ SELECT * FROM gpu_execution('SELECT c_mktsegment, count(*) as cnt FROM customer 
 -- ============================================================================
 .print '=== Test 6: Simplified Q5 - join nation+region with VARCHAR filter ==='
 SELECT * FROM gpu_execution('SELECT n.n_name, n.n_nationkey FROM nation n INNER JOIN region r ON n.n_regionkey = r.r_regionkey WHERE r.r_name = ''EUROPE''');
+
 
 .print '=== All VARCHAR GPU tests completed ==='

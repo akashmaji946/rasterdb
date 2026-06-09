@@ -71,6 +71,20 @@ INSERT INTO oj_right_i64 VALUES
     (11, 20000000000, 200),
     (12, 40000000000, 400);
 
+.print '=== OUTER JOIN I64: LEFT preserves unmatched left rows ==='
+SELECT * FROM gpu_execution(
+    'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
+       FROM oj_left_i64 l LEFT JOIN oj_right_i64 r ON l.k = r.k
+      ORDER BY l.lid, r.rid'
+);
+
+.print '=== OUTER JOIN I64: RIGHT preserves unmatched right rows ==='
+SELECT * FROM gpu_execution(
+    'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
+       FROM oj_left_i64 l RIGHT JOIN oj_right_i64 r ON l.k = r.k
+      ORDER BY r.rid, l.lid'
+);
+
 .print '=== OUTER JOIN I64: FULL preserves INT64 key rows ==='
 SELECT * FROM gpu_execution(
     'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
@@ -103,5 +117,19 @@ INSERT INTO oj_right_d64 VALUES
 SELECT * FROM gpu_execution(
     'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
        FROM oj_left_d64 l LEFT JOIN oj_right_d64 r ON l.k = r.k
+      ORDER BY l.lid, r.rid'
+);
+
+.print '=== OUTER JOIN D64: RIGHT preserves DECIMAL64 unmatched rows ==='
+SELECT * FROM gpu_execution(
+    'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
+       FROM oj_left_d64 l RIGHT JOIN oj_right_d64 r ON l.k = r.k
+      ORDER BY r.rid, l.lid'
+);
+
+.print '=== OUTER JOIN D64: FULL preserves DECIMAL64 key rows ==='
+SELECT * FROM gpu_execution(
+    'SELECT l.lid, l.k AS lk, r.rid, r.k AS rk
+       FROM oj_left_d64 l FULL OUTER JOIN oj_right_d64 r ON l.k = r.k
       ORDER BY l.lid, r.rid'
 );
