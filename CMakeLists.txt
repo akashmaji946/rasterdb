@@ -18,6 +18,15 @@ cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 
 project(sirius LANGUAGES CXX CUDA)
 
+# Keep host and device code aligned on C++20. cuDF headers use concepts and
+# require the CUDA frontend to see a C++20 dialect as well.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
+
 # Set CUDA architecture
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES native)
@@ -30,7 +39,6 @@ option(ENABLE_STREAM_CHECK
 
 # Dependencies
 find_package(cudf REQUIRED CONFIG)
-find_package(spdlog REQUIRED CONFIG)
 find_package(libconfig++ REQUIRED CONFIG)
 find_package(absl REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
@@ -245,8 +253,10 @@ foreach(_target sirius_extension sirius_loadable_extension)
     ${_target}
     PRIVATE $<BUILD_INTERFACE:SIRIUS_DEFAULT_LOG_DIR="${CMAKE_BINARY_DIR}/log">)
 
-  target_link_libraries(${_target} cudf::cudf rmm::rmm spdlog::spdlog
-                        cuCascade::cucascade)
+  target_compile_options(${_target}
+                         PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--std=c++20>)
+
+  target_link_libraries(${_target} cudf::cudf rmm::rmm cuCascade::cucascade)
 
   add_dependencies(${_target} duckdb_static)
 endforeach()

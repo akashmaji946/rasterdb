@@ -7,10 +7,18 @@
 #   ./build.sh configure    # reconfigure CMake (release preset)
 #   ./build.sh clean        # remove build directory and rebuild
 #   ./build.sh debug        # incremental debug build
+#   ./build.sh --use-compiler-launcher release
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIXI="${HOME}/.pixi/bin/pixi"
+USE_COMPILER_LAUNCHER=0
+
+if [[ "${1:-}" == "--use-compiler-launcher" ]]; then
+    USE_COMPILER_LAUNCHER=1
+    shift
+fi
+
 BUILD_TYPE="${1:-release}"
 
 if [[ ! -x "$PIXI" ]]; then
@@ -21,19 +29,35 @@ fi
 
 # Number of parallel jobs
 JOBS="$(nproc)"
+TMP_ROOT="$SCRIPT_DIR/build/tmp"
+
+mkdir -p "$TMP_ROOT"
+export TMPDIR="$TMP_ROOT"
+export TMP="$TMP_ROOT"
+export TEMP="$TMP_ROOT"
+
+CONFIGURE_ARGS=()
+if [[ "$USE_COMPILER_LAUNCHER" -eq 0 ]]; then
+    CONFIGURE_ARGS+=(
+        -DCMAKE_C_COMPILER_LAUNCHER=
+        -DCMAKE_CXX_COMPILER_LAUNCHER=
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=
+    )
+fi
 
 case "$BUILD_TYPE" in
     configure)
         echo "=== Configuring CMake (release preset) ==="
-        cd "$SCRIPT_DIR"
-        $PIXI run -e default cmake --preset release
+        cd "$SCRIPT_DIR/duckdb"
+        $PIXI run -e default cmake --preset release "${CONFIGURE_ARGS[@]}"
         ;;
     clean)
         echo "=== Cleaning build directory ==="
         rm -rf "$SCRIPT_DIR/build"
+        mkdir -p "$TMP_ROOT"
         echo "=== Configuring CMake (release preset) ==="
         cd "$SCRIPT_DIR/duckdb"
-        $PIXI run -e default cmake --preset release
+        $PIXI run -e default cmake --preset release "${CONFIGURE_ARGS[@]}"
         echo "=== Building sirius extension ==="
         cd "$SCRIPT_DIR/duckdb"
         $PIXI run -e default cmake --build --preset release --target sirius_loadable_extension -j"$JOBS"
@@ -44,7 +68,7 @@ case "$BUILD_TYPE" in
         if [[ ! -f "$SCRIPT_DIR/build/release/build.ninja" ]]; then
             echo "--- Configuring CMake (release preset) ---"
             cd "$SCRIPT_DIR/duckdb"
-            $PIXI run -e default cmake --preset release
+            $PIXI run -e default cmake --preset release "${CONFIGURE_ARGS[@]}"
         fi
         cd "$SCRIPT_DIR/duckdb"
         $PIXI run -e default cmake --build --preset release -j"$JOBS"
@@ -54,7 +78,7 @@ case "$BUILD_TYPE" in
         if [[ ! -f "$SCRIPT_DIR/build/debug/build.ninja" ]]; then
             echo "--- Configuring CMake (debug preset) ---"
             cd "$SCRIPT_DIR/duckdb"
-            $PIXI run -e default cmake --preset debug
+            $PIXI run -e default cmake --preset debug "${CONFIGURE_ARGS[@]}"
         fi
         cd "$SCRIPT_DIR/duckdb"
         $PIXI run -e default cmake --build --preset debug --target sirius_loadable_extension -j"$JOBS"
@@ -68,7 +92,7 @@ case "$BUILD_TYPE" in
         if [[ ! -f "$SCRIPT_DIR/build/release/build.ninja" ]]; then
             echo "--- Configuring CMake (release preset) ---"
             cd "$SCRIPT_DIR/duckdb"
-            $PIXI run -e default cmake --preset release
+            $PIXI run -e default cmake --preset release "${CONFIGURE_ARGS[@]}"
         fi
         cd "$SCRIPT_DIR/duckdb"
         $PIXI run -e default cmake --build --preset release --target sirius_loadable_extension -j"$JOBS"
@@ -78,7 +102,7 @@ case "$BUILD_TYPE" in
         ;;
     *)
         echo "Unknown build type: $BUILD_TYPE"
-        echo "Usage: $0 [release|full|debug|configure|clean]"
+        echo "Usage: $0 [--use-compiler-launcher] [release|full|debug|configure|clean]"
         exit 1
         ;;
 esac

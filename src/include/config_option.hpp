@@ -93,7 +93,7 @@ struct config_to_type_traits<T> {
     T enum_value;
     if (!string_to_enum(str_value, enum_value)) {
       throw std::invalid_argument(
-        fmt::format("Invalid configuration string for enum {}", str_value));
+        duckdb_fmt::format("Invalid configuration string for enum {}", str_value));
     }
     return enum_value;
   }
@@ -226,7 +226,8 @@ struct config_value_applicator<ValueType> {
     std::string_view str_value = value.c_str();
     // Use the string converter found via ADL
     if (!string_to_enum(str_value, opt)) {
-      throw std::invalid_argument(fmt::format("Invalid configuration string for enum {}", value));
+      throw std::invalid_argument(
+        duckdb_fmt::format("Invalid configuration string for enum {}", value));
     }
   }
 };
@@ -455,7 +456,7 @@ struct registered_config : config_base {
       config_value_applicator<T>::assign(temp_value, cfg);
       if (!predicate_(temp_value)) {
         throw std::invalid_argument(
-          fmt::format("Invalid configuration value for option {}", path_.data()));
+          duckdb_fmt::format("Invalid configuration value for option {}", path_.data()));
       }
       var_.get_or_create() = std::move(temp_value);
     } else {
@@ -506,8 +507,8 @@ struct registered_config_variant : config_base {
       T temp_value{};
       config_value_applicator<T>::assign(temp_value, cfg);
       if (!predicate_(temp_value)) {
-        throw std::invalid_argument(
-          fmt::format("Invalid configuration value for variant option {}", path_.data()));
+        throw std::invalid_argument(duckdb_fmt::format(
+          "Invalid configuration value for variant option {}", path_.data()));
       }
       var_.get_or_create() = std::move(temp_value);
     } else {
@@ -569,8 +570,8 @@ struct registered_config_iterable : config_base {
 
       // Validate each element if predicate is provided
       if (element_predicate_ && !element_predicate_(v)) {
-        throw std::invalid_argument(
-          fmt::format("Invalid element value in configuration array for option {}", path_.data()));
+        throw std::invalid_argument(duckdb_fmt::format(
+          "Invalid element value in configuration array for option {}", path_.data()));
       }
 
       container.push_back(std::move(v));
@@ -758,7 +759,7 @@ struct configuration_setter {
         setter->apply(*cfg);
       } else if (setter->is_required()) {
         throw std::invalid_argument(
-          fmt::format("Missing required configuration option: {}", path.data()));
+          duckdb_fmt::format("Missing required configuration option: {}", path.data()));
       }
     });
   }
