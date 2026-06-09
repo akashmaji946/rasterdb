@@ -25,7 +25,23 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
 
+#include <cstdio>
+
 namespace duckdb {
+
+static void debug_print_sirius_logical_plan(LogicalOperator& op, int depth = 0)
+{
+  std::string indent(static_cast<size_t>(depth) * 2, ' ');
+  fprintf(stderr,
+          "[SIR_PLAN] %s%s (types=%zu, children=%zu)\n",
+          indent.c_str(),
+          LogicalOperatorToString(op.type).c_str(),
+          op.types.size(),
+          op.children.size());
+  for (auto& child : op.children) {
+    debug_print_sirius_logical_plan(*child, depth + 1);
+  }
+}
 
 // class DependencyExtractor : public LogicalOperatorVisitor {
 // public:
@@ -99,6 +115,9 @@ bool GPUPhysicalPlanGenerator::PreserveInsertionOrder(GPUPhysicalOperator& plan)
 unique_ptr<GPUPhysicalOperator> GPUPhysicalPlanGenerator::CreatePlan(unique_ptr<LogicalOperator> op)
 {
   auto& profiler = QueryProfiler::Get(context);
+
+  fprintf(stderr, "[SIR_PLAN] Logical plan received by Sirius GPU planner:\n");
+  debug_print_sirius_logical_plan(*op);
 
   // Resolve the types of each operator.
   profiler.StartPhase(MetricsType::PHYSICAL_PLANNER_RESOLVE_TYPES);
