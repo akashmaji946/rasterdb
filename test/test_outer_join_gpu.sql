@@ -2,7 +2,7 @@
 -- Run with:
 --   conda run -n rasterdf ./build/release/duckdb -unsigned < test/test_outer_join_gpu.sql
 
-LOAD '/home/akashmaji/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
+LOAD '~/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
 
 CREATE TABLE oj_left_i32 (
     lid INTEGER,

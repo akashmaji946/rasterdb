@@ -3,10 +3,10 @@
 
 
 
--- /home/akashmaji/Device/IMPORTANT/rasterdb/build/release/duckdb -unsigned < /home/akashmaji/Device/IMPORTANT/rasterdb/test/test_varchar_gpu.sql
+-- ~/Device/IMPORTANT/rasterdb/build/release/duckdb -unsigned < ~/Device/IMPORTANT/rasterdb/test/test_varchar_gpu.sql
 
 -- Load extension
-LOAD '/home/akashmaji/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
+LOAD '~/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
 
 -- Generate TPC-H SF-10 data using built-in tpch extension
 INSTALL tpch;

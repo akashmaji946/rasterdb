@@ -8,7 +8,7 @@
 --   D64  = DECIMAL(18,2), RasterDF INT64 fixed-point storage.
 --   D128 = DECIMAL(38,4), RasterDF INT128 fixed-point storage.
 
-LOAD '/home/akashmaji/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
+LOAD '~/Device/IMPORTANT/rasterdb/build/release/extension/rasterdb/rasterdb.duckdb_extension';
 
 -- ============================================================================
 -- D16: DECIMAL(4,2)
