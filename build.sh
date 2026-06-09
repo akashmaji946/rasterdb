@@ -3,7 +3,6 @@
 #
 # Prerequisites:
 #   - rasterdf must be built first (../rasterdf/build.sh --release)
-#   - spdlog must be installed (apt install libspdlog-dev or via conda)
 #   - Vulkan SDK / headers must be available
 #
 # Usage: ./build.sh [--release|--debug|--clean] [--log-level=debug|info|warn|error|none]
@@ -15,11 +14,13 @@ cd "$PROJECT_DIR"
 BUILD_PRESET="release"
 CLEAN=0
 LOG_LEVEL="${RASTERDB_LOG_LEVEL:-info}"
+USE_COMPILER_LAUNCHER="${RASTERDB_USE_COMPILER_LAUNCHER:-0}"
 for arg in "$@"; do
     case "$arg" in
         --release) BUILD_PRESET="release" ;;
         --debug)   BUILD_PRESET="debug" ;;
         --clean)   CLEAN=1 ;;
+        --use-compiler-launcher) USE_COMPILER_LAUNCHER=1 ;;
         --log-level=*) LOG_LEVEL="${arg#*=}" ;;
         --log-level)
             echo "ERROR: --log-level requires a value, e.g. --log-level=debug"
@@ -57,7 +58,7 @@ fi
 
 # --- 1. Check rasterdf is built ---
 echo ""
-echo "[1/4] Checking rasterdf library..."
+echo "[1/3] Checking rasterdf library..."
 RASTERDF_ROOT="${PROJECT_DIR}/../rasterdf"
 SO_FILE=""
 for candidate in "${RASTERDF_ROOT}/build/librasterdf.so" \
@@ -76,30 +77,9 @@ if [ -z "$SO_FILE" ]; then
 fi
 echo "  Found: ${SO_FILE}"
 
-# --- 2. Check spdlog ---
+# --- 2. Symlink CMakePresets.json ---
 echo ""
-echo "[2/4] Checking spdlog..."
-# Try conda env first
-SPDLOG_PREFIX=""
-if [ -d "${PROJECT_DIR}/../.pixi/envs/default" ]; then
-    SPDLOG_PREFIX="${PROJECT_DIR}/../.pixi/envs/default"
-elif [ -n "$CONDA_PREFIX" ]; then
-    SPDLOG_PREFIX="$CONDA_PREFIX"
-fi
-
-if [ -n "$SPDLOG_PREFIX" ] && [ -f "${SPDLOG_PREFIX}/lib/cmake/spdlog/spdlogConfig.cmake" ]; then
-    echo "  Found spdlog in: ${SPDLOG_PREFIX}"
-elif pkg-config --exists spdlog 2>/dev/null; then
-    echo "  Found spdlog via pkg-config"
-    SPDLOG_PREFIX=""
-else
-    echo "  WARNING: spdlog not found. Trying to build anyway..."
-    SPDLOG_PREFIX=""
-fi
-
-# --- 3. Symlink CMakePresets.json ---
-echo ""
-echo "[3/4] Setting up CMake presets..."
+echo "[2/3] Setting up CMake presets..."
 PRESETS_LINK="${PROJECT_DIR}/duckdb/CMakePresets.json"
 if [ ! -L "$PRESETS_LINK" ] || [ "$(readlink -f "$PRESETS_LINK")" != "$(readlink -f "${PROJECT_DIR}/cmake/CMakePresets.json")" ]; then
     rm -f "$PRESETS_LINK"
@@ -109,23 +89,26 @@ else
     echo "  CMakePresets.json already linked"
 fi
 
-# --- 4. Build ---
+# --- 3. Build ---
 echo ""
-echo "[4/4] Building rasterdb extension (${BUILD_PRESET})..."
+echo "[3/3] Building rasterdb extension (${BUILD_PRESET})..."
 
-# Add spdlog prefix to CMAKE_PREFIX_PATH if found.
 # Keep -D arguments before --preset; this CMake version otherwise lets the
 # preset/default cache value win during DuckDB's configure step.
 CMAKE_ARGS=("-DRASTERDB_LOG_LEVEL=${LOG_LEVEL}")
-if [ -n "$SPDLOG_PREFIX" ]; then
-    CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${SPDLOG_PREFIX}")
+if [ "${USE_COMPILER_LAUNCHER}" != "1" ]; then
+    CMAKE_ARGS+=(
+        "-DCMAKE_C_COMPILER_LAUNCHER="
+        "-DCMAKE_CXX_COMPILER_LAUNCHER="
+        "-DCMAKE_CUDA_COMPILER_LAUNCHER="
+    )
 fi
 
 cd "${PROJECT_DIR}/duckdb"
 cmake "${CMAKE_ARGS[@]}" --preset "${BUILD_PRESET}"
 cmake --build --preset "${BUILD_PRESET}" -j$(nproc)
 
-# --- 5. Verify ---
+# --- 4. Verify ---
 echo ""
 echo "============================================"
 echo "  Build complete!"

@@ -18,6 +18,8 @@ cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 
 project(rasterdb LANGUAGES CXX C)
 
+set(RASTERDB_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 # Dependencies
 # Hint Vulkan location for older CMake versions
 if(NOT DEFINED ENV{VULKAN_SDK})
@@ -27,7 +29,6 @@ if(NOT DEFINED ENV{VULKAN_SDK})
   endif()
 endif()
 find_package(Vulkan REQUIRED)
-find_package(spdlog REQUIRED CONFIG)
 
 set(RASTERDB_LOG_LEVEL
     "info"
@@ -66,41 +67,41 @@ endif()
 # cmake-format: off
 set(EXTENSION_SOURCES
     # Core extension entry point
-    src/rasterdb_extension.cpp
+    ${RASTERDB_SRC_DIR}/rasterdb_extension.cpp
     # Config (no external deps)
-    src/config.cpp
+    ${RASTERDB_SRC_DIR}/config.cpp
     # Utilities
-    src/util/segfault_backtrace_handler.cpp)
+    ${RASTERDB_SRC_DIR}/util/segfault_backtrace_handler.cpp)
 
 # GPU executor — split by logical operator/responsibility.
 set(GPU_EXECUTOR_SOURCES
-    src/gpu/executor/gpu_executor_core.cpp
-    src/gpu/executor/gpu_executor_plan_hints.cpp
-    src/gpu/executor/gpu_executor_scan.cpp
-    src/gpu/executor/gpu_executor_filter.cpp
-    src/gpu/executor/gpu_executor_projection.cpp
-    src/gpu/executor/gpu_executor_expression.cpp
-    src/gpu/executor/gpu_executor_aggregate.cpp
-    src/gpu/executor/gpu_executor_grouped_aggregate.cpp
-    src/gpu/executor/gpu_executor_multi_key_aggregate.cpp
-    src/gpu/executor/gpu_executor_order.cpp
-    src/gpu/executor/gpu_executor_limit.cpp
-    src/gpu/executor/gpu_executor_join.cpp
-    src/gpu/executor/gpu_executor_result.cpp
-    src/gpu/executor/gpu_executor_utils.cpp)
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_core.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_plan_hints.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_scan.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_filter.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_projection.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_expression.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_aggregate.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_grouped_aggregate.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_multi_key_aggregate.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_order.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_limit.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_join.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_result.cpp
+    ${RASTERDB_SRC_DIR}/gpu/executor/gpu_executor_utils.cpp)
 
 set(GPU_PHYSICAL_SOURCES
-    src/gpu/physical/raster_physical_operator.cpp
-    src/gpu/physical/raster_physical_plan_generator.cpp
-    src/gpu/pipeline/raster_pipeline.cpp
-    src/gpu/pipeline/raster_pipeline_executor.cpp)
+    ${RASTERDB_SRC_DIR}/gpu/physical/raster_physical_operator.cpp
+    ${RASTERDB_SRC_DIR}/gpu/physical/raster_physical_plan_generator.cpp
+    ${RASTERDB_SRC_DIR}/gpu/pipeline/raster_pipeline.cpp
+    ${RASTERDB_SRC_DIR}/gpu/pipeline/raster_pipeline_executor.cpp)
 
 # GPU_SOURCES — Vulkan/rasterdf GPU execution layer
 set(GPU_SOURCES
-    src/gpu/gpu_context.cpp
-    src/gpu/gpu_buffer_manager.cpp
-    src/gpu/gpu_table.cpp
-    src/gpu/gpu_scan_executor.cpp
+    ${RASTERDB_SRC_DIR}/gpu/gpu_context.cpp
+    ${RASTERDB_SRC_DIR}/gpu/gpu_buffer_manager.cpp
+    ${RASTERDB_SRC_DIR}/gpu/gpu_table.cpp
+    ${RASTERDB_SRC_DIR}/gpu/gpu_scan_executor.cpp
     ${GPU_PHYSICAL_SOURCES}
     ${GPU_EXECUTOR_SOURCES})
 # cmake-format: on
@@ -130,9 +131,9 @@ foreach(_target rasterdb_extension rasterdb_loadable_extension)
       $<BUILD_INTERFACE:RASTERDB_RASTERDF_SHADER_DIR="${RASTERDF_ROOT}/shaders/compiled">)
 
   if(RASTERDF_LIBRARY)
-    target_link_libraries(${_target} rasterdf_imported spdlog::spdlog Vulkan::Vulkan)
+    target_link_libraries(${_target} rasterdf_imported Vulkan::Vulkan)
   else()
-    target_link_libraries(${_target} spdlog::spdlog Vulkan::Vulkan)
+    target_link_libraries(${_target} Vulkan::Vulkan)
   endif()
 
   add_dependencies(${_target} duckdb_static)

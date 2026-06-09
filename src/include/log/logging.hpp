@@ -19,22 +19,20 @@
 #ifndef RASTERDB_LOG_LOGGING_HPP
 #define RASTERDB_LOG_LOGGING_HPP
 
-#ifndef SPDLOG_ACTIVE_LEVEL
-#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
-#else
-#warning "SPDLOG_ACTIVE_LEVEL is overridden, output may be lost"
-#endif
-
-#include <spdlog/sinks/daily_file_sink.h>
-#include <spdlog/sinks/ansicolor_sink.h>
-#include <spdlog/spdlog.h>
+#include "fmt/format.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
-#include <cstdlib>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #ifndef RASTERDB_DEFAULT_LOG_LEVEL
 #define RASTERDB_DEFAULT_LOG_LEVEL "info"
@@ -44,118 +42,334 @@
 #define RASTERDB_DEFAULT_LOG_DIR "."
 #endif
 
-#define RASTERDB_LOG_TRACE(...) SPDLOG_LOGGER_TRACE(spdlog::default_logger_raw(), __VA_ARGS__)
-#define RASTERDB_LOG_DEBUG(...) SPDLOG_LOGGER_DEBUG(spdlog::default_logger_raw(), __VA_ARGS__)
-#define RASTERDB_LOG_INFO(...)  SPDLOG_LOGGER_INFO(spdlog::default_logger_raw(), __VA_ARGS__)
-#define RASTERDB_LOG_WARN(...)  SPDLOG_LOGGER_WARN(spdlog::default_logger_raw(), __VA_ARGS__)
-#define RASTERDB_LOG_ERROR(...) SPDLOG_LOGGER_ERROR(spdlog::default_logger_raw(), __VA_ARGS__)
-#define RASTERDB_LOG_FATAL(...) SPDLOG_LOGGER_CRITICAL(spdlog::default_logger_raw(), __VA_ARGS__)
-#define SIRIUS_LOG_FATAL(...) SPDLOG_LOGGER_CRITICAL(spdlog::default_logger_raw(), __VA_ARGS__)
-
 namespace duckdb {
+namespace logging {
 
-inline constexpr int SIRIUS_LOG_FLUSH_SEC         = 3;
-inline constexpr const char* SIRIUS_LOG_LEVEL_ENV  = "SIRIUS_LOG_LEVEL";
-inline constexpr const char* RASTERDB_LOG_LEVEL_ENV = "RASTERDB_LOG_LEVEL";
-inline constexpr const char* SIRIUS_LOG_DIR_ENV     = "SIRIUS_LOG_DIR";
-inline constexpr const char* RASTERDB_LOG_DIR_ENV   = "RASTERDB_LOG_DIR";
+enum class level_enum : int {
+  trace = 0,
+  debug = 1,
+  info = 2,
+  warn = 3,
+  err = 4,
+  critical = 5,
+  off = 6
+};
 
-inline std::optional<std::string> GetEnvVar(const std::string& name)
-{
-  const char* val = std::getenv(name.c_str());
-  if (val) {
-    return std::string(val);
-  } else {
-    return std::nullopt;
+inline constexpr int SIRIUS_LOG_FLUSH_SEC            = 3;
+inline constexpr const char *SIRIUS_LOG_LEVEL_ENV    = "SIRIUS_LOG_LEVEL";
+inline constexpr const char *RASTERDB_LOG_LEVEL_ENV  = "RASTERDB_LOG_LEVEL";
+inline constexpr const char *SIRIUS_LOG_DIR_ENV      = "SIRIUS_LOG_DIR";
+inline constexpr const char *RASTERDB_LOG_DIR_ENV    = "RASTERDB_LOG_DIR";
+inline constexpr const char *ANSI_RESET              = "\033[0m";
+inline constexpr const char *ANSI_TRACE              = "\033[36m";
+inline constexpr const char *ANSI_DEBUG              = "\033[34m";
+inline constexpr const char *ANSI_INFO               = "\033[33m";
+inline constexpr const char *ANSI_WARN               = "\033[38;5;208m";
+inline constexpr const char *ANSI_ERROR              = "\033[31m";
+inline constexpr const char *ANSI_CRITICAL           = "\033[1;31m";
+
+struct logger_state {
+  level_enum level = level_enum::info;
+  bool use_stderr = true;
+  bool use_color = false;
+  std::string log_file_path;
+  std::FILE *file = nullptr;
+  std::mutex mutex;
+
+  ~logger_state() {
+    if (file && file != stderr) {
+      std::fclose(file);
+    }
   }
+};
+
+inline logger_state &global_logger() {
+  static logger_state state;
+  return state;
 }
 
-inline spdlog::level::level_enum ParseLogLevel(const std::string& s)
-{
+inline std::optional<std::string> GetEnvVar(const std::string &name) {
+  const char *val = std::getenv(name.c_str());
+  if (val) {
+    return std::string(val);
+  }
+  return std::nullopt;
+}
+
+inline level_enum ParseLogLevel(const std::string &s) {
   std::string lower = s;
   std::transform(lower.begin(), lower.end(), lower.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (lower == "trace") return spdlog::level::trace;
-  if (lower == "debug") return spdlog::level::debug;
-  if (lower == "info")  return spdlog::level::info;
-  if (lower == "warn" || lower == "warning") return spdlog::level::warn;
-  if (lower == "error" || lower == "err") return spdlog::level::err;
-  if (lower == "critical" || lower == "fatal") return spdlog::level::critical;
-  if (lower == "off" || lower == "none") return spdlog::level::off;
-  return spdlog::level::info;
+  if (lower == "trace") {
+    return level_enum::trace;
+  }
+  if (lower == "debug") {
+    return level_enum::debug;
+  }
+  if (lower == "info") {
+    return level_enum::info;
+  }
+  if (lower == "warn" || lower == "warning") {
+    return level_enum::warn;
+  }
+  if (lower == "error" || lower == "err") {
+    return level_enum::err;
+  }
+  if (lower == "critical" || lower == "fatal") {
+    return level_enum::critical;
+  }
+  if (lower == "off" || lower == "none") {
+    return level_enum::off;
+  }
+  return level_enum::info;
 }
 
-inline spdlog::level::level_enum GetLogLevel()
-{
-  // RASTERDB_LOG_LEVEL takes precedence over SIRIUS_LOG_LEVEL
+inline level_enum GetLogLevel() {
   auto rdb_level = GetEnvVar(RASTERDB_LOG_LEVEL_ENV);
-  if (rdb_level.has_value()) return ParseLogLevel(*rdb_level);
+  if (rdb_level.has_value()) {
+    return ParseLogLevel(*rdb_level);
+  }
   auto sir_level = GetEnvVar(SIRIUS_LOG_LEVEL_ENV);
-  if (sir_level.has_value()) return ParseLogLevel(*sir_level);
+  if (sir_level.has_value()) {
+    return ParseLogLevel(*sir_level);
+  }
   return ParseLogLevel(RASTERDB_DEFAULT_LOG_LEVEL);
 }
 
-inline std::string GetLogDir()
-{
+inline std::string GetLogDir() {
   auto rasterdb_log_dir_str = GetEnvVar(RASTERDB_LOG_DIR_ENV);
-  if (rasterdb_log_dir_str.has_value()) { return *rasterdb_log_dir_str; }
+  if (rasterdb_log_dir_str.has_value()) {
+    return *rasterdb_log_dir_str;
+  }
   auto log_dir_str = GetEnvVar(SIRIUS_LOG_DIR_ENV);
-  if (log_dir_str.has_value()) { return *log_dir_str; }
+  if (log_dir_str.has_value()) {
+    return *log_dir_str;
+  }
   return RASTERDB_DEFAULT_LOG_DIR;
 }
 
-inline bool RasterDBShouldLog(spdlog::level::level_enum level)
-{
-  auto* logger = spdlog::default_logger_raw();
-  return logger && logger->should_log(level);
+inline const char *level_name(level_enum level) {
+  switch (level) {
+  case level_enum::trace:
+    return "trace";
+  case level_enum::debug:
+    return "debug";
+  case level_enum::info:
+    return "info";
+  case level_enum::warn:
+    return "warn";
+  case level_enum::err:
+    return "error";
+  case level_enum::critical:
+    return "critical";
+  case level_enum::off:
+    return "off";
+  }
+  return "info";
 }
 
-inline void InitGlobalLogger(std::string log_file = "")
-{
-  // Log file
+inline const char *level_color(level_enum level) {
+  switch (level) {
+  case level_enum::trace:
+    return ANSI_TRACE;
+  case level_enum::debug:
+    return ANSI_DEBUG;
+  case level_enum::info:
+    return ANSI_INFO;
+  case level_enum::warn:
+    return ANSI_WARN;
+  case level_enum::err:
+    return ANSI_ERROR;
+  case level_enum::critical:
+    return ANSI_CRITICAL;
+  case level_enum::off:
+    return "";
+  }
+  return "";
+}
+
+inline bool RasterDBShouldLog(level_enum level) {
+  auto &state = global_logger();
+  return state.level != level_enum::off && static_cast<int>(level) >= static_cast<int>(state.level);
+}
+
+inline std::string time_string(bool include_date) {
+  auto now = std::chrono::system_clock::now();
+  auto secs = std::chrono::system_clock::to_time_t(now);
+  std::tm tm_value{};
+#if defined(_WIN32)
+  localtime_s(&tm_value, &secs);
+#else
+  localtime_r(&secs, &tm_value);
+#endif
+  char buffer[32];
+  std::strftime(buffer, sizeof(buffer), include_date ? "%Y-%m-%d %H:%M:%S" : "%H:%M:%S", &tm_value);
+  return std::string(buffer);
+}
+
+inline void close_file_if_needed(logger_state &state) {
+  if (state.file && state.file != stderr) {
+    std::fclose(state.file);
+  }
+  state.file = nullptr;
+}
+
+inline std::FILE *open_log_file(logger_state &state) {
+  if (state.use_stderr) {
+    return stderr;
+  }
+  if (state.file) {
+    return state.file;
+  }
+  if (!state.log_file_path.empty()) {
+    std::filesystem::path path(state.log_file_path);
+    auto parent = path.parent_path();
+    if (!parent.empty()) {
+      std::error_code ec;
+      std::filesystem::create_directories(parent, ec);
+    }
+    state.file = std::fopen(state.log_file_path.c_str(), "a");
+  }
+  if (!state.file) {
+    state.use_stderr = true;
+    state.use_color = true;
+    return stderr;
+  }
+  return state.file;
+}
+
+inline void write_log_line(level_enum level, const std::string &message) {
+  auto &state = global_logger();
+  if (!RasterDBShouldLog(level)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> guard(state.mutex);
+  std::FILE *out = open_log_file(state);
+  if (state.use_stderr) {
+    if (state.use_color) {
+      std::fprintf(out, "[%s] [%s%s%s] %s\n",
+                   time_string(false).c_str(),
+                   level_color(level),
+                   level_name(level),
+                   ANSI_RESET,
+                   message.c_str());
+    } else {
+      std::fprintf(out, "[%s] [%s] %s\n",
+                   time_string(false).c_str(),
+                   level_name(level),
+                   message.c_str());
+    }
+    std::fflush(out);
+    return;
+  }
+
+  std::fprintf(out, "[%s] [%s] %s\n",
+               time_string(true).c_str(),
+               level_name(level),
+               message.c_str());
+  std::fflush(out);
+}
+
+template <typename Format, typename... Args>
+inline void log_message(level_enum level, const Format &format, Args&&... args) {
+  if (!RasterDBShouldLog(level)) {
+    return;
+  }
+  write_log_line(level, duckdb_fmt::format(format, std::forward<Args>(args)...));
+}
+
+inline void InitGlobalLogger(std::string log_file = "") {
+  auto &state = global_logger();
+  std::lock_guard<std::mutex> guard(state.mutex);
+  close_file_if_needed(state);
   if (log_file.empty()) {
-    auto log_dir = GetLogDir();
-    log_file     = log_dir + "/sirius.log";
+    log_file = GetLogDir() + "/sirius.log";
   }
-  auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>(log_file, 0, 0, false);
-  file_sink->set_pattern("[%Y-%m-%d %T.%e] [%l] [%s:%#] %v");
-
-  // Logger
-  auto logger    = std::make_shared<spdlog::logger>("", spdlog::sinks_init_list{file_sink});
-  auto log_level = GetLogLevel();
-  logger->set_level(log_level);
-  spdlog::set_default_logger(logger);
-  spdlog::set_level(log_level);  // Also set the global level
-  auto rasterdb_log_level_str = GetEnvVar(RASTERDB_LOG_LEVEL_ENV);
-  auto sirius_log_level_str = GetEnvVar(SIRIUS_LOG_LEVEL_ENV);
-  if (rasterdb_log_level_str.has_value() || sirius_log_level_str.has_value()) {
-    spdlog::flush_on(log_level);
-  } else {
-    spdlog::flush_every(std::chrono::seconds(SIRIUS_LOG_FLUSH_SEC));
-  }
+  state.level = GetLogLevel();
+  state.use_stderr = false;
+  state.use_color = false;
+  state.log_file_path = std::move(log_file);
 }
 
-inline void InitGPULogger()
-{
-  // stderr color sink for RasterDB GPU (Vulkan/rasterdf) extension path.
-  // Colors: DEBUG=Blue, INFO=Yellow, WARN=Orange, ERROR=Red
-  auto stderr_sink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
-  stderr_sink->set_pattern("[%H:%M:%S] [%^%l%$] %v");
-  stderr_sink->set_color(spdlog::level::trace,    stderr_sink->cyan);
-  stderr_sink->set_color(spdlog::level::debug,    stderr_sink->blue);
-  stderr_sink->set_color(spdlog::level::info,     stderr_sink->yellow);
-  stderr_sink->set_color(spdlog::level::warn,     "\033[38;5;208m");  // Orange (256-color)
-  stderr_sink->set_color(spdlog::level::err,      stderr_sink->red);
-  stderr_sink->set_color(spdlog::level::critical, stderr_sink->red_bold);
-
-  auto logger = std::make_shared<spdlog::logger>("", spdlog::sinks_init_list{stderr_sink});
-  auto log_level = GetLogLevel();
-  logger->set_level(log_level);
-  logger->flush_on(spdlog::level::debug);
-  spdlog::set_default_logger(logger);
-  spdlog::set_level(log_level);
+inline void InitGPULogger() {
+  auto &state = global_logger();
+  std::lock_guard<std::mutex> guard(state.mutex);
+  close_file_if_needed(state);
+  state.level = GetLogLevel();
+  state.use_stderr = true;
+  state.use_color = true;
+  state.log_file_path.clear();
+  state.file = stderr;
 }
 
-}  // namespace duckdb
+} // namespace logging
 
-#endif  // RASTERDB_LOG_LOGGING_HPP
+inline bool RasterDBShouldLog(logging::level_enum level) {
+  return logging::RasterDBShouldLog(level);
+}
+
+inline void InitGlobalLogger(std::string log_file = "") {
+  logging::InitGlobalLogger(std::move(log_file));
+}
+
+inline void InitGPULogger() {
+  logging::InitGPULogger();
+}
+
+} // namespace duckdb
+
+namespace spdlog {
+
+namespace level {
+using level_enum = duckdb::logging::level_enum;
+inline constexpr level_enum trace = level_enum::trace;
+inline constexpr level_enum debug = level_enum::debug;
+inline constexpr level_enum info = level_enum::info;
+inline constexpr level_enum warn = level_enum::warn;
+inline constexpr level_enum err = level_enum::err;
+inline constexpr level_enum critical = level_enum::critical;
+inline constexpr level_enum off = level_enum::off;
+} // namespace level
+
+template <typename Format, typename... Args>
+inline void info(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::info, format, std::forward<Args>(args)...);
+}
+
+template <typename Format, typename... Args>
+inline void warn(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::warn, format, std::forward<Args>(args)...);
+}
+
+template <typename Format, typename... Args>
+inline void error(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::err, format, std::forward<Args>(args)...);
+}
+
+template <typename Format, typename... Args>
+inline void critical(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::critical, format, std::forward<Args>(args)...);
+}
+
+template <typename Format, typename... Args>
+inline void debug(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::debug, format, std::forward<Args>(args)...);
+}
+
+template <typename Format, typename... Args>
+inline void trace(const Format &format, Args&&... args) {
+  duckdb::logging::log_message(level::trace, format, std::forward<Args>(args)...);
+}
+
+} // namespace spdlog
+
+#define RASTERDB_LOG_TRACE(...) ::duckdb::logging::log_message(::duckdb::logging::level_enum::trace, __VA_ARGS__)
+#define RASTERDB_LOG_DEBUG(...) ::duckdb::logging::log_message(::duckdb::logging::level_enum::debug, __VA_ARGS__)
+#define RASTERDB_LOG_INFO(...)  ::duckdb::logging::log_message(::duckdb::logging::level_enum::info, __VA_ARGS__)
+#define RASTERDB_LOG_WARN(...)  ::duckdb::logging::log_message(::duckdb::logging::level_enum::warn, __VA_ARGS__)
+#define RASTERDB_LOG_ERROR(...) ::duckdb::logging::log_message(::duckdb::logging::level_enum::err, __VA_ARGS__)
+#define RASTERDB_LOG_FATAL(...) ::duckdb::logging::log_message(::duckdb::logging::level_enum::critical, __VA_ARGS__)
+#define SIRIUS_LOG_FATAL(...)   ::duckdb::logging::log_message(::duckdb::logging::level_enum::critical, __VA_ARGS__)
+
+#endif // RASTERDB_LOG_LOGGING_HPP

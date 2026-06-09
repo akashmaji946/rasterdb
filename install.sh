@@ -148,7 +148,6 @@ if [ "$SKIP_DEPS" -eq 0 ]; then
     check_apt_package "build-essential" || DEPS_OK=0
     check_command "cmake" || DEPS_OK=0
     check_command "git" || DEPS_OK=0
-    check_apt_package "libspdlog-dev" || DEPS_OK=0
     check_apt_package "libvulkan-dev" || DEPS_OK=0
     check_command "glslc" || DEPS_OK=0
     if [ "$DEPS_OK" -eq 1 ]; then
@@ -157,7 +156,7 @@ if [ "$SKIP_DEPS" -eq 0 ]; then
         echo ""
         echo "  Some build dependencies are missing."
         echo "  Install them manually, for example on Ubuntu/Debian:"
-        echo "    sudo apt install build-essential cmake git libspdlog-dev libvulkan-dev glslang-tools"
+        echo "    sudo apt install build-essential cmake git libvulkan-dev glslang-tools"
         exit 1
     fi
 else
