@@ -486,9 +486,9 @@ static void LoadInternal(ExtensionLoader& loader)
     // Ensure GPU context is destroyed before static destructors run
     std::atexit([]() { rasterdb::gpu::gpu_context::shutdown(); });
 
-    constexpr auto USE_SIZE_CACHE_GB      = 3ULL;
-    constexpr auto USE_SIZE_PROCESSING_GB = 3ULL;
-    constexpr auto USE_SIZE_STAGING_GB    = 4ULL;
+    constexpr auto USE_SIZE_CACHE_GB      = 4ULL;
+    constexpr auto USE_SIZE_PROCESSING_GB = 4ULL;
+    constexpr auto USE_SIZE_STAGING_GB    = 8ULL;
     constexpr auto USE_SIZE_DOWNLOAD_GB   = 2ULL;
 
     constexpr auto USE_SIZE_GB = 1024ULL * 1024ULL * 1024ULL;

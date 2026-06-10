@@ -82,6 +82,20 @@ inline gpu_column alias_fixed_width_column(const gpu_column& src) {
   return out;
 }
 
+struct scoped_bool_setter {
+  bool& target;
+  bool old_value;
+
+  scoped_bool_setter(bool& target, bool new_value)
+      : target(target), old_value(target) {
+    target = new_value;
+  }
+
+  ~scoped_bool_setter() {
+    target = old_value;
+  }
+};
+
 void debug_print_plan(duckdb::LogicalOperator& op, int depth = 0);
 void append_logical_plan(duckdb::LogicalOperator& op, std::string& out, int depth = 0);
 

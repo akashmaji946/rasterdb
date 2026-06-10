@@ -81,7 +81,9 @@ void gpu_executor::execute_ungrouped_aggregate(
         fname.c_str());
     }
 
-    // Evaluate the aggregate's value expression (may be a column ref or complex expr)
+    // Evaluate aggregate inputs in FLOAT32 when DuckDB inserts DOUBLE arithmetic
+    // over FLOAT columns; RasterDF reductions accumulate FLOAT32 to DOUBLE.
+    scoped_bool_setter prefer_float32(_prefer_float32_aggregate_values, true);
     gpu_column val_col = evaluate_expression(input, *expr.children[0]);
     auto col_view = val_col.view();
 
@@ -102,6 +104,12 @@ void gpu_executor::execute_ungrouped_aggregate(
     }
 
     rasterdf::reduce_aggregation agg(kind);
+
+    if (val_col.type.id == rasterdf::type_id::FLOAT64) {
+      throw duckdb::NotImplementedException(
+        "RasterDB GPU: unexpected FLOAT64 aggregate input for '%s'; aggregate inputs should stay FLOAT32 on the GPU fast path",
+        fname.c_str());
+    }
 
     auto t_reduce = std::chrono::high_resolution_clock::now();
     auto scalar = rasterdf::reduce(col_view, agg, val_col.type,

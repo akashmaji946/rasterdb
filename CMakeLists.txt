@@ -50,12 +50,30 @@ else()
   set(RASTERDF_LIBRARY "")
 endif()
 
+# RasterDF fetches volk during its own build, but RasterDB links to an imported
+# shared library target instead of RasterDF's real CMake target. That means the
+# transitive include path for <volk.h> is lost unless we recover it here.
+find_path(RASTERDF_VOLK_INCLUDE_DIR
+  NAMES volk.h
+  PATHS
+    "${RASTERDF_ROOT}/build/_deps/volk-src"
+    "${RASTERDF_ROOT}/build_release/_deps/volk-src"
+    "${RASTERDF_ROOT}/cmake-build-release/_deps/volk-src"
+    "${RASTERDF_ROOT}/cmake-build-debug/_deps/volk-src"
+  NO_DEFAULT_PATH)
+
+if(RASTERDF_VOLK_INCLUDE_DIR)
+  message(STATUS "Found RasterDF volk headers: ${RASTERDF_VOLK_INCLUDE_DIR}")
+else()
+  message(WARNING "RasterDF volk headers not found — builds including rasterdf public headers may fail")
+endif()
+
 # Create imported target so we can link without export-set issues
 if(RASTERDF_LIBRARY)
   add_library(rasterdf_imported SHARED IMPORTED)
   set_target_properties(rasterdf_imported PROPERTIES
     IMPORTED_LOCATION "${RASTERDF_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${RASTERDF_ROOT}/include;${RASTERDF_ROOT}")
+    INTERFACE_INCLUDE_DIRECTORIES "${RASTERDF_ROOT}/include;${RASTERDF_ROOT};${RASTERDF_VOLK_INCLUDE_DIR}")
 endif()
 
 # ==========================================================================

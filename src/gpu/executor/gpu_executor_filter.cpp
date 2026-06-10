@@ -32,6 +32,31 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
 
   if (input->num_rows() == 0) return input;
 
+  auto apply_projection_map = [&](std::unique_ptr<gpu_table> table) -> std::unique_ptr<gpu_table> {
+    if (op.projection_map.empty()) {
+      return table;
+    }
+    auto projected = std::make_unique<gpu_table>();
+    projected->duckdb_types = op.types;
+    projected->columns.resize(op.projection_map.size());
+    for (size_t i = 0; i < op.projection_map.size(); i++) {
+      auto src_idx = op.projection_map[i];
+      if (src_idx >= table->num_columns()) {
+        throw duckdb::InternalException("RasterDB GPU filter: projection map index out of range");
+      }
+      projected->columns[i] = std::move(table->columns[src_idx]);
+    }
+    projected->set_num_rows(table->num_rows());
+    RASTERDB_LOG_DEBUG("Filter projection_map: {} cols => {} cols",
+                       table->num_columns(), projected->num_columns());
+    return projected;
+  };
+
+  if (op.expressions.empty()) {
+    RASTERDB_LOG_DEBUG("Filter has no expressions; forwarding input");
+    return apply_projection_map(std::move(input));
+  }
+
   // Evaluate each filter expression to produce a boolean (int32 0/1) mask
   gpu_column mask;
   bool first = true;
@@ -77,23 +102,7 @@ std::unique_ptr<gpu_table> gpu_executor::execute_filter(duckdb::LogicalFilter& o
   }
   RASTERDB_LOG_DEBUG("[RDB_DEBUG] filter: {} rows => {} rows",
                      input->num_rows(), result->num_rows());
-  if (!op.projection_map.empty()) {
-    auto projected = std::make_unique<gpu_table>();
-    projected->duckdb_types = op.types;
-    projected->columns.resize(op.projection_map.size());
-    for (size_t i = 0; i < op.projection_map.size(); i++) {
-      auto src_idx = op.projection_map[i];
-      if (src_idx >= result->num_columns()) {
-        throw duckdb::InternalException("RasterDB GPU filter: projection map index out of range");
-      }
-      projected->columns[i] = std::move(result->columns[src_idx]);
-    }
-    projected->set_num_rows(result->num_rows());
-    RASTERDB_LOG_DEBUG("Filter projection_map: {} cols => {} cols",
-                       result->num_columns(), projected->num_columns());
-    return projected;
-  }
-  return result;
+  return apply_projection_map(std::move(result));
 }
 
 // ============================================================================
@@ -193,10 +202,12 @@ std::unique_ptr<gpu_table> gpu_executor::apply_filter_mask(const gpu_table& inpu
     return idx_buf;
   };
 
-  // Check if any column is STRING — if so, we need gather indices
   bool has_string_col = false;
   for (size_t c = 0; c < input.num_columns(); c++) {
-    if (input.col(c).is_string()) { has_string_col = true; break; }
+    if (input.col(c).is_string()) {
+      has_string_col = true;
+      break;
+    }
   }
 
   rasterdf::device_buffer gather_idx_buf;

@@ -94,7 +94,7 @@ static bool int128_groupby_agg_kind(const std::string& function_name,
 }  // namespace
 
 void gpu_executor::execute_grouped_aggregate(
-  const gpu_table& input,
+  const gpu_table& input_in,
   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& groups,
   const duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& aggregates,
   const duckdb::vector<duckdb::LogicalType>& result_types,
@@ -119,16 +119,67 @@ void gpu_executor::execute_grouped_aggregate(
     }
   }
 
-  // Extract group column indices and validate
+  std::unique_ptr<gpu_table> group_input_storage;
+
+  auto ensure_group_input_storage = [&]() -> gpu_table& {
+    if (group_input_storage) {
+      return *group_input_storage;
+    }
+    group_input_storage = std::make_unique<gpu_table>();
+    group_input_storage->duckdb_types = input_in.duckdb_types;
+    group_input_storage->columns.resize(input_in.num_columns());
+    group_input_storage->set_num_rows(input_in.num_rows());
+
+    for (size_t c = 0; c < input_in.num_columns(); c++) {
+      const auto& src = input_in.col(c);
+      if (src.is_host_only) {
+        group_input_storage->columns[c].type = src.type;
+        group_input_storage->columns[c].num_rows = src.num_rows;
+        group_input_storage->columns[c].is_host_only = true;
+        group_input_storage->columns[c].host_data = src.host_data;
+      } else if (src.is_string()) {
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: GROUP BY expression with STRING input is not yet supported");
+      } else if (can_alias_fixed_width_column(src)) {
+        group_input_storage->columns[c] = alias_fixed_width_column(src);
+      } else {
+        group_input_storage->columns[c] = allocate_column(_ctx, src.type, src.num_rows);
+        size_t byte_count = static_cast<size_t>(src.num_rows) * rdf_type_size(src.type.id);
+        if (byte_count > 0) {
+          VkBuffer src_buf = src.data.buffer() != VK_NULL_HANDLE ? src.data.buffer() : src.cached_buffer;
+          VkDeviceSize src_off = src.data.buffer() != VK_NULL_HANDLE ? src.data.offset() : src.cached_offset;
+          _ctx.dispatcher().copy_buffer(src_buf,
+                                        group_input_storage->columns[c].data.buffer(),
+                                        byte_count,
+                                        src_off,
+                                        group_input_storage->columns[c].data.offset());
+        }
+      }
+    }
+    return *group_input_storage;
+  };
+
+  // Extract group column indices. Expression groups are evaluated into
+  // temporary columns so the existing groupby paths can operate on refs.
   std::vector<duckdb::idx_t> group_col_indices;
   for (size_t g = 0; g < num_group_cols; g++) {
     auto& group_expr = *groups[g];
-    if (group_expr.type != duckdb::ExpressionType::BOUND_REF) {
-      throw duckdb::NotImplementedException(
-        "RasterDB GPU: GROUP BY expression must be a column reference");
+    if (group_expr.type == duckdb::ExpressionType::BOUND_REF) {
+      group_col_indices.push_back(group_expr.Cast<duckdb::BoundReferenceExpression>().index);
+    } else {
+      auto& group_input = ensure_group_input_storage();
+      gpu_column group_col = evaluate_expression(input_in, group_expr);
+      auto group_idx = static_cast<duckdb::idx_t>(group_input.columns.size());
+      group_input.duckdb_types.push_back(group_expr.return_type);
+      group_input.columns.push_back(std::move(group_col));
+      group_col_indices.push_back(group_idx);
+      RASTERDB_LOG_DEBUG("GROUP BY expression {} evaluated as temporary column {}",
+                         g,
+                         static_cast<uint64_t>(group_idx));
     }
-    group_col_indices.push_back(group_expr.Cast<duckdb::BoundReferenceExpression>().index);
   }
+
+  const gpu_table& input = group_input_storage ? *group_input_storage : input_in;
 
   RASTERDB_LOG_DEBUG("GROUP BY {} cols, {} rows", num_group_cols, input.num_rows());
   {
@@ -918,7 +969,18 @@ void gpu_executor::execute_grouped_aggregate(
       VkDeviceAddress values_addr     = 0;
       rasterdf::type_id value_type_id = rasterdf::type_id::INT32;
       if (!is_count_star) {
-        val_temp      = evaluate_expression(input, *expr.children[0]);
+        duckdb::Expression* value_expr = expr.children[0].get();
+        auto& unwrapped_value = unwrap_cast(*value_expr);
+        if ((gfxm_agg_type == 0 || gfxm_agg_type == 4) &&
+            unwrapped_value.type == duckdb::ExpressionType::BOUND_REF) {
+          auto ref_idx = unwrapped_value.Cast<duckdb::BoundReferenceExpression>().index;
+          if (ref_idx < input.num_columns() &&
+              input.col(ref_idx).type.id == rasterdf::type_id::FLOAT32) {
+            value_expr = &unwrapped_value;
+          }
+        }
+        scoped_bool_setter prefer_float32(_prefer_float32_aggregate_values, true);
+        val_temp      = evaluate_expression(input, *value_expr);
         values_addr   = val_temp.address();
         value_type_id = val_temp.type.id;
         RASTERDB_LOG_DEBUG("     [GFXM] Value column evaluated, addr=0x{:x}",
@@ -1362,6 +1424,7 @@ void gpu_executor::execute_grouped_aggregate(
       if (it != sum_request_by_expr.end()) {
         return it->second;
       }
+      scoped_bool_setter prefer_float32(_prefer_float32_aggregate_values, true);
       val_temps.push_back(evaluate_expression(input, child));
       rasterdf::aggregation_request req;
       req.values = val_temps.back().view();
@@ -1421,6 +1484,7 @@ void gpu_executor::execute_grouped_aggregate(
       if (is_count_star) {
         req.values = key_col_ptr->view();
       } else {
+        scoped_bool_setter prefer_float32(_prefer_float32_aggregate_values, true);
         val_temps.push_back(evaluate_expression(input, *expr.children[0]));
         req.values   = val_temps.back().view();
       }

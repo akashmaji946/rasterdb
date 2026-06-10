@@ -60,6 +60,7 @@ private:
   int64_t _scan_limit = -1;          // -1 = no limit pushdown
   int64_t _join_limit = -1;
   bool    _scan_count_star_only = false; // true = only need row count, scan 1 col
+  bool    _prefer_float32_aggregate_values = false;
 
   // Pre-analyze plan tree to set scan hints
   void analyze_plan_hints(duckdb::LogicalOperator& plan);

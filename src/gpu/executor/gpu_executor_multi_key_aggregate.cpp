@@ -58,6 +58,11 @@ bool tuple_groupby_fixed_width_supported(rasterdf::type_id id)
          id == rasterdf::type_id::FLOAT32 || id == rasterdf::type_id::FLOAT64;
 }
 
+bool tuple_groupby_float64_type(const duckdb::LogicalType& type)
+{
+  return type.id() == duckdb::LogicalTypeId::DOUBLE;
+}
+
 uint64_t double_bits(double value)
 {
   uint64_t bits;
@@ -125,9 +130,36 @@ bool gpu_executor::try_execute_multi_key_aggregate(
   bool single_float_key =
     num_group_cols == 1 && (input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT32 ||
                             input.col(group_col_indices[0]).type.id == rasterdf::type_id::FLOAT64);
+  bool has_group_expression = false;
+  for (auto& group : groups) {
+    if (group->type != duckdb::ExpressionType::BOUND_REF) {
+      has_group_expression = true;
+      break;
+    }
+  }
+  bool has_float64_value_aggregate = false;
+  for (auto& aggregate : aggregates) {
+    auto& expr = aggregate->Cast<duckdb::BoundAggregateExpression>();
+    auto& fname = expr.function.name;
+    bool aggregate_uses_value =
+      !(expr.children.empty() && (fname == "count" || fname == "count_star"));
+    if (aggregate_uses_value && !expr.children.empty()) {
+      auto& child = unwrap_cast(*expr.children[0]);
+      bool direct_float32_ref =
+        child.type == duckdb::ExpressionType::BOUND_REF &&
+        input.col(child.Cast<duckdb::BoundReferenceExpression>().index).type.id ==
+          rasterdf::type_id::FLOAT32;
+      if (tuple_groupby_float64_type(expr.children[0]->return_type) && !direct_float32_ref) {
+        has_float64_value_aggregate = true;
+        break;
+      }
+    }
+  }
   bool all_int32_keys = true;
   bool tuple_candidate =
-    force_tuple_key ? num_group_cols >= 1 : (num_group_cols >= 2 || single_float_key);
+    force_tuple_key ? num_group_cols >= 1
+                    : (num_group_cols >= 2 || single_float_key ||
+                       (has_group_expression && has_float64_value_aggregate));
   for (auto idx : group_col_indices) {
     auto key_type   = input.col(idx).type.id;
     tuple_candidate = tuple_candidate && tuple_groupby_fixed_width_supported(key_type);
@@ -258,7 +290,18 @@ bool gpu_executor::try_execute_multi_key_aggregate(
         value_cols.push_back(&input.col(group_col_indices[0]));
         value_types.push_back(input.col(group_col_indices[0]).type.id);
       } else {
-        value_temps.push_back(evaluate_expression(input, *expr.children[0]));
+        duckdb::Expression* value_expr = expr.children[0].get();
+        auto& unwrapped_value = unwrap_cast(*value_expr);
+        if ((kind == TUPLE_GB_SUM || kind == TUPLE_GB_MEAN) &&
+            unwrapped_value.type == duckdb::ExpressionType::BOUND_REF) {
+          auto ref_idx = unwrapped_value.Cast<duckdb::BoundReferenceExpression>().index;
+          if (ref_idx < input.num_columns() &&
+              input.col(ref_idx).type.id == rasterdf::type_id::FLOAT32) {
+            value_expr = &unwrapped_value;
+          }
+        }
+        scoped_bool_setter prefer_float32(_prefer_float32_aggregate_values, true);
+        value_temps.push_back(evaluate_expression(input, *value_expr));
         if (!tuple_groupby_fixed_width_supported(value_temps.back().type.id)) {
           tuple_candidate = false;
           break;

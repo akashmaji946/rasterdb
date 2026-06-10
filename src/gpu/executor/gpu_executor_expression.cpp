@@ -5,6 +5,8 @@
 
 #include "gpu/gpu_executor_internal.hpp"
 
+#include <cmath>
+
 namespace rasterdb {
 namespace gpu {
 
@@ -168,6 +170,25 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
     // Unwrap casts inserted by the optimizer
     auto& left = unwrap_cast(*cmp.left);
     auto& right = unwrap_cast(*cmp.right);
+
+    // Computed expression vs constant, e.g. `(p_type_id % 10) = 3`.
+    // Evaluate the expression once into a temporary column, then reuse the
+    // existing column-vs-constant comparison path.
+    if (left.type != duckdb::ExpressionType::BOUND_REF &&
+        right.type == duckdb::ExpressionType::VALUE_CONSTANT) {
+      gpu_table computed_input;
+      computed_input.duckdb_types.push_back(left.return_type);
+      computed_input.columns.push_back(evaluate_expression(input, left));
+      computed_input.set_num_rows(input.num_rows());
+
+      auto computed_ref = duckdb::make_uniq<duckdb::BoundReferenceExpression>(
+        left.return_type, 0);
+      auto constant = duckdb::make_uniq<duckdb::BoundConstantExpression>(
+        right.Cast<duckdb::BoundConstantExpression>().value);
+      duckdb::BoundComparisonExpression computed_cmp(
+        expr.type, std::move(computed_ref), std::move(constant));
+      return evaluate_comparison(computed_input, computed_cmp);
+    }
 
     // Column vs constant
     if (left.type == duckdb::ExpressionType::BOUND_REF &&
@@ -378,7 +399,11 @@ gpu_column gpu_executor::evaluate_comparison(const gpu_table& input, duckdb::Exp
 // ============================================================================
 
 static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src);
+static gpu_column cast_int32_to_float64(gpu_context& ctx, const gpu_column& src);
+static gpu_column cast_int64_to_float64(gpu_context& ctx, const gpu_column& src);
 static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src);
+static gpu_column cast_float32_to_float64(gpu_context& ctx, const gpu_column& src);
+static gpu_column cast_float64_to_int32(gpu_context& ctx, const gpu_column& src);
 
 gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Expression& raw_expr)
 {
@@ -439,7 +464,7 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
 
     auto child_col = evaluate_expression(input, *cast.child);
     rasterdf::data_type target_type = to_rdf_type(raw_expr.return_type);
-    if (target_type.id == rasterdf::type_id::FLOAT64) {
+    if (_prefer_float32_aggregate_values && target_type.id == rasterdf::type_id::FLOAT64) {
       target_type = {rasterdf::type_id::FLOAT32};
     }
     if (child_col.type.id == target_type.id) {
@@ -449,9 +474,25 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
         child_col.type.id == rasterdf::type_id::FLOAT32) {
       return cast_float32_to_int32(_ctx, child_col);
     }
+    if (target_type.id == rasterdf::type_id::INT32 &&
+        child_col.type.id == rasterdf::type_id::FLOAT64) {
+      return cast_float64_to_int32(_ctx, child_col);
+    }
     if (target_type.id == rasterdf::type_id::FLOAT32 &&
         child_col.type.id == rasterdf::type_id::INT32) {
       return cast_int32_to_float32(_ctx, child_col);
+    }
+    if (target_type.id == rasterdf::type_id::FLOAT64 &&
+        child_col.type.id == rasterdf::type_id::FLOAT32) {
+      return cast_float32_to_float64(_ctx, child_col);
+    }
+    if (target_type.id == rasterdf::type_id::FLOAT64 &&
+        child_col.type.id == rasterdf::type_id::INT32) {
+      return cast_int32_to_float64(_ctx, child_col);
+    }
+    if (target_type.id == rasterdf::type_id::FLOAT64 &&
+        child_col.type.id == rasterdf::type_id::INT64) {
+      return cast_int64_to_float64(_ctx, child_col);
     }
     throw duckdb::NotImplementedException(
       "RasterDB GPU: unsupported cast from type_id %d to %s",
@@ -528,8 +569,7 @@ gpu_column gpu_executor::evaluate_expression(const gpu_table& input, duckdb::Exp
     // Broadcast scalar to a full column
     auto& c = expr.Cast<duckdb::BoundConstantExpression>();
     rasterdf::data_type rdf_type = to_rdf_type(c.return_type);
-    // Downcast FLOAT64 constants to FLOAT32 (shader only supports INT32/FLOAT32)
-    if (rdf_type.id == rasterdf::type_id::FLOAT64) {
+    if (_prefer_float32_aggregate_values && rdf_type.id == rasterdf::type_id::FLOAT64) {
       rdf_type = {rasterdf::type_id::FLOAT32};
     }
     auto col = allocate_column(_ctx, rdf_type, input.num_rows());
@@ -656,6 +696,45 @@ static gpu_column cast_int32_to_float32(gpu_context& ctx, const gpu_column& src)
   return out;
 }
 
+static gpu_column cast_int32_to_float64(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  const int32_t* src_int = nullptr;
+  std::vector<int32_t> h_int;
+
+  auto& bufMgr = GPUBufferManager::GetInstance();
+  if (src.cached_address != 0 && src.cached_buffer == bufMgr.cpuStagingBuffer()) {
+    size_t staging_off = static_cast<size_t>(
+        src.cached_address - bufMgr.cpuStagingAddress());
+    src_int = reinterpret_cast<const int32_t*>(bufMgr.cpuProcessing + staging_off);
+  } else {
+    h_int.resize(n);
+    download_column(ctx, src, h_int.data(), n * sizeof(int32_t));
+    src_int = h_int.data();
+  }
+
+  std::vector<double> h_dbl(n);
+  for (size_t i = 0; i < n; i++) h_dbl[i] = static_cast<double>(src_int[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::FLOAT64}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_dbl.data(), n * sizeof(double),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
+static gpu_column cast_int64_to_float64(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  std::vector<int64_t> h_int(n);
+  download_column(ctx, src, h_int.data(), n * sizeof(int64_t));
+
+  std::vector<double> h_dbl(n);
+  for (size_t i = 0; i < n; i++) h_dbl[i] = static_cast<double>(h_int[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::FLOAT64}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_dbl.data(), n * sizeof(double),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
 static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src)
 {
   size_t n = static_cast<size_t>(src.num_rows);
@@ -664,6 +743,34 @@ static gpu_column cast_float32_to_int32(gpu_context& ctx, const gpu_column& src)
 
   std::vector<int32_t> h_int(n);
   for (size_t i = 0; i < n; i++) h_int[i] = static_cast<int32_t>(h_flt[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::INT32}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_int.data(), n * sizeof(int32_t),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
+static gpu_column cast_float32_to_float64(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  std::vector<float> h_flt(n);
+  download_column(ctx, src, h_flt.data(), n * sizeof(float));
+
+  std::vector<double> h_dbl(n);
+  for (size_t i = 0; i < n; i++) h_dbl[i] = static_cast<double>(h_flt[i]);
+  auto out = allocate_column(ctx, {rasterdf::type_id::FLOAT64}, static_cast<rasterdf::size_type>(n));
+  out.data.copy_from_host(h_dbl.data(), n * sizeof(double),
+                          ctx.device(), ctx.queue(), ctx.command_pool());
+  return out;
+}
+
+static gpu_column cast_float64_to_int32(gpu_context& ctx, const gpu_column& src)
+{
+  size_t n = static_cast<size_t>(src.num_rows);
+  std::vector<double> h_dbl(n);
+  download_column(ctx, src, h_dbl.data(), n * sizeof(double));
+
+  std::vector<int32_t> h_int(n);
+  for (size_t i = 0; i < n; i++) h_int[i] = static_cast<int32_t>(h_dbl[i]);
   auto out = allocate_column(ctx, {rasterdf::type_id::INT32}, static_cast<rasterdf::size_type>(n));
   out.data.copy_from_host(h_int.data(), n * sizeof(int32_t),
                           ctx.device(), ctx.queue(), ctx.command_pool());
@@ -709,10 +816,109 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   auto& left_expr = *func.children[0];
   auto& right_expr = *func.children[1];
 
+  auto read_host_scalar_as_double = [&](duckdb::Expression& e, double& out) -> bool {
+    auto& unwrapped = unwrap_cast(e);
+    if (unwrapped.type == duckdb::ExpressionType::VALUE_CONSTANT) {
+      auto& c = unwrapped.Cast<duckdb::BoundConstantExpression>();
+      out = c.value.DefaultCastAs(duckdb::LogicalType::DOUBLE).GetValue<double>();
+      return true;
+    }
+    if (unwrapped.type != duckdb::ExpressionType::BOUND_REF) {
+      return false;
+    }
+    auto& ref = unwrapped.Cast<duckdb::BoundReferenceExpression>();
+    if (ref.index >= input.num_columns()) {
+      return false;
+    }
+    const auto& col = input.col(ref.index);
+    if (!col.is_host_only || col.num_rows != 1 || col.host_data.empty()) {
+      return false;
+    }
+    switch (col.type.id) {
+    case rasterdf::type_id::FLOAT64: {
+      double v;
+      std::memcpy(&v, col.host_data.data(), sizeof(double));
+      out = v;
+      return true;
+    }
+    case rasterdf::type_id::FLOAT32: {
+      float v;
+      std::memcpy(&v, col.host_data.data(), sizeof(float));
+      out = static_cast<double>(v);
+      return true;
+    }
+    case rasterdf::type_id::INT64: {
+      int64_t v;
+      std::memcpy(&v, col.host_data.data(), sizeof(int64_t));
+      out = static_cast<double>(v);
+      return true;
+    }
+    case rasterdf::type_id::INT32: {
+      int32_t v;
+      std::memcpy(&v, col.host_data.data(), sizeof(int32_t));
+      out = static_cast<double>(v);
+      return true;
+    }
+    default:
+      return false;
+    }
+  };
+
+  if (input.num_rows() == 1) {
+    double lhs = 0.0;
+    double rhs = 0.0;
+    if (read_host_scalar_as_double(left_expr, lhs) &&
+        read_host_scalar_as_double(right_expr, rhs)) {
+      double value = 0.0;
+      switch (op_code) {
+      case 0: value = lhs + rhs; break;
+      case 1: value = lhs - rhs; break;
+      case 2: value = lhs * rhs; break;
+      case 3: value = lhs / rhs; break;
+      case 4: value = std::fmod(lhs, rhs); break;
+      default:
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: unsupported scalar function '%s'", fname.c_str());
+      }
+
+      gpu_column out;
+      out.type = to_rdf_type(func.return_type);
+      out.num_rows = 1;
+      out.is_host_only = true;
+      switch (out.type.id) {
+      case rasterdf::type_id::FLOAT64: {
+        out.host_data.resize(sizeof(double));
+        std::memcpy(out.host_data.data(), &value, sizeof(double));
+        return out;
+      }
+      case rasterdf::type_id::FLOAT32: {
+        float v = static_cast<float>(value);
+        out.host_data.resize(sizeof(float));
+        std::memcpy(out.host_data.data(), &v, sizeof(float));
+        return out;
+      }
+      case rasterdf::type_id::INT64: {
+        int64_t v = static_cast<int64_t>(value);
+        out.host_data.resize(sizeof(int64_t));
+        std::memcpy(out.host_data.data(), &v, sizeof(int64_t));
+        return out;
+      }
+      case rasterdf::type_id::INT32: {
+        int32_t v = static_cast<int32_t>(value);
+        out.host_data.resize(sizeof(int32_t));
+        std::memcpy(out.host_data.data(), &v, sizeof(int32_t));
+        return out;
+      }
+      default:
+        throw duckdb::NotImplementedException(
+          "RasterDB GPU: unsupported host scalar output type_id %d",
+          static_cast<int>(out.type.id));
+      }
+    }
+  }
+
   rasterdf::data_type out_type = to_rdf_type(func.return_type);
-  // Downcast FLOAT64 to FLOAT32 for binary op shader (inputs are FLOAT32 from the integer dataset;
-  // the aggregation shader accumulates FLOAT32 values in double precision internally)
-  if (out_type.id == rasterdf::type_id::FLOAT64) {
+  if (_prefer_float32_aggregate_values && out_type.id == rasterdf::type_id::FLOAT64) {
     out_type = {rasterdf::type_id::FLOAT32};
   }
   int32_t type_id = rdf_shader_type_id(out_type.id);
@@ -757,45 +963,52 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
     left_src_type = r.second;
   }
 
-  // If shader will run the float path but this operand is INT32, cast it.
+  // If shader will run a float path, cast narrower operands to the exact output
+  // width so the shader does not read 4-byte data as 8-byte data.
   auto align_if_int_to_float = [&](VkDeviceAddress& addr,
                                    rasterdf::type_id& src_type,
                                    gpu_column& cast_out,
-                                   const gpu_column* ref_src) {
-    if (out_type.id != rasterdf::type_id::FLOAT32) return;
+                                   const gpu_column& src_col) {
+    if (out_type.id != rasterdf::type_id::FLOAT32 &&
+        out_type.id != rasterdf::type_id::FLOAT64) {
+      return;
+    }
     if (src_type == rasterdf::type_id::INT32) {
-      // Build a gpu_column view of the int32 source so we can cast it.
-      gpu_column tmp_view;
-      tmp_view.type = {rasterdf::type_id::INT32};
-      tmp_view.num_rows = static_cast<rasterdf::size_type>(input.num_rows());
-      if (ref_src) {
-        tmp_view.cached_address = ref_src->address();
-        tmp_view.cached_buffer = ref_src->cached_buffer;
-        tmp_view.is_host_only = ref_src->is_host_only;
-        tmp_view.host_data = ref_src->host_data;
-        cast_out = cast_int32_to_float32(_ctx, *ref_src);
+      if (out_type.id == rasterdf::type_id::FLOAT32) {
+        cast_out = cast_int32_to_float32(_ctx, src_col);
       } else {
-        // Can't cheaply view without the gpu_column; fall back to a re-read.
-        // Not expected in current flows (non-ref temps are already float).
-        throw duckdb::NotImplementedException(
-          "RasterDB GPU: unexpected INT32 temp operand requiring float cast");
+        cast_out = cast_int32_to_float64(_ctx, src_col);
       }
       addr = cast_out.address();
-      src_type = rasterdf::type_id::FLOAT32;
+      src_type = out_type.id;
+    } else if (out_type.id == rasterdf::type_id::FLOAT64 &&
+               src_type == rasterdf::type_id::FLOAT32) {
+      cast_out = cast_float32_to_float64(_ctx, src_col);
+      addr = cast_out.address();
+      src_type = rasterdf::type_id::FLOAT64;
+    } else if (out_type.id == rasterdf::type_id::FLOAT64 &&
+               src_type == rasterdf::type_id::INT64) {
+      cast_out = cast_int64_to_float64(_ctx, src_col);
+      addr = cast_out.address();
+      src_type = rasterdf::type_id::FLOAT64;
     }
   };
 
-  // Apply cast to left operand if needed (only for BOUND_REF, where we can access the source column)
-  if (!left_is_const && left_is_ref) {
-    auto& ref = left_expr.Cast<duckdb::BoundReferenceExpression>();
-    align_if_int_to_float(left_addr, left_src_type, left_cast, &input.col(ref.index));
+  // Apply cast to left operand if needed.
+  if (!left_is_const) {
+    if (left_is_ref) {
+      auto& ref = left_expr.Cast<duckdb::BoundReferenceExpression>();
+      align_if_int_to_float(left_addr, left_src_type, left_cast, input.col(ref.index));
+    } else {
+      align_if_int_to_float(left_addr, left_src_type, left_cast, left_temp);
+    }
   }
 
   if (left_is_ref && right_is_ref) {
     auto& rref = right_expr.Cast<duckdb::BoundReferenceExpression>();
     VkDeviceAddress right_addr = input.col(rref.index).address();
     rasterdf::type_id right_src_type = input.col(rref.index).type.id;
-    align_if_int_to_float(right_addr, right_src_type, right_cast, &input.col(rref.index));
+    align_if_int_to_float(right_addr, right_src_type, right_cast, input.col(rref.index));
     pc.input_a = left_addr;
     pc.input_b = right_addr;
     pc.mode = 0; // COL_COL
@@ -814,12 +1027,18 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
   } else if (left_is_const && right_is_ref) {
     // SCALAR op COL — swap to COL op SCALAR with adjusted op (only for commutative, else temp)
     auto& c = left_expr.Cast<duckdb::BoundConstantExpression>();
-    VkDeviceAddress right_addr = input.col(right_expr.Cast<duckdb::BoundReferenceExpression>().index).address();
+    auto& rref = right_expr.Cast<duckdb::BoundReferenceExpression>();
+    VkDeviceAddress right_addr = input.col(rref.index).address();
+    rasterdf::type_id right_src_type = input.col(rref.index).type.id;
+    align_if_int_to_float(right_addr, right_src_type, right_cast, input.col(rref.index));
     // For subtraction (scalar - col), evaluate scalar as column
     if (op_code == 1 || op_code == 3 || op_code == 4) {
       // Non-commutative: evaluate left as column
       left_temp = evaluate_expression(input, left_expr);
-      pc.input_a = left_temp.address();
+      VkDeviceAddress scalar_addr = left_temp.address();
+      rasterdf::type_id scalar_src_type = left_temp.type.id;
+      align_if_int_to_float(scalar_addr, scalar_src_type, left_cast, left_temp);
+      pc.input_a = scalar_addr;
       pc.input_b = right_addr;
       pc.mode = 0; // COL_COL
     } else {
@@ -839,10 +1058,15 @@ gpu_column gpu_executor::evaluate_binary_op(const gpu_table& input, duckdb::Expr
     if (!left_addr) {
       left_temp = evaluate_expression(input, left_expr);
       left_addr = left_temp.address();
+      left_src_type = left_temp.type.id;
+      align_if_int_to_float(left_addr, left_src_type, left_cast, left_temp);
     }
     right_temp = evaluate_expression(input, right_expr);
+    VkDeviceAddress right_addr = right_temp.address();
+    rasterdf::type_id right_src_type = right_temp.type.id;
+    align_if_int_to_float(right_addr, right_src_type, right_cast, right_temp);
     pc.input_a = left_addr;
-    pc.input_b = right_temp.address();
+    pc.input_b = right_addr;
     pc.mode = 0; // COL_COL
     pc.scalar_val = 0;
   }
