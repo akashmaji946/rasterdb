@@ -118,7 +118,7 @@ bool gpu_executor::try_execute_multi_key_aggregate(
   if (tuple_key_policy == 0) { return false; }
   if (tuple_key_policy != -1 && tuple_key_policy != 1) {
     throw duckdb::InvalidInputException(
-      "RasterDB GPU: USE_SIMPLE_TUPLE_KEY_AGGR must be -1, 0, or 1");
+      "RasterDB GPU: tuple-key groupby policy must be -1, 0, or 1");
   }
   const bool force_tuple_key = tuple_key_policy == 1;
 
@@ -140,14 +140,6 @@ bool gpu_executor::try_execute_multi_key_aggregate(
     }
     return false;
   }
-  if (aggregates.empty()) {
-    if (force_tuple_key) {
-      throw duckdb::NotImplementedException(
-        "RasterDB GPU: forced tuple-key GROUP BY does not yet support distinct-only grouping");
-    }
-    return false;
-  }
-
   bool tuple_low_cardinality_contention = false;
   dense_key_range_info dense_info;
   if (all_int32_keys && num_group_cols >= 1 && input.num_rows() >= 1024) {
@@ -217,7 +209,7 @@ bool gpu_executor::try_execute_multi_key_aggregate(
     }
   }
 
-  if (tuple_candidate && !aggregates.empty()) {
+  if (tuple_candidate) {
     std::vector<gpu_column> value_temps;
     value_temps.reserve(aggregates.size());
     std::vector<const gpu_column*> value_cols;
@@ -270,7 +262,179 @@ bool gpu_executor::try_execute_multi_key_aggregate(
     }
 
     if (tuple_candidate) {
-      bool dense_candidate = tuple_low_cardinality_contention && dense_info.supported &&
+      bool direct_candidate = num_group_cols == 1 &&
+                              input.col(group_col_indices[0]).type.id ==
+                                rasterdf::type_id::INT32 &&
+                              aggregates.size() <= 1 && input.num_rows() > 0;
+      uint64_t direct_range = 0;
+      int64_t direct_min_v  = 0;
+      int64_t direct_max_v  = 0;
+      if (direct_candidate) {
+        const auto& gcol = input.col(group_col_indices[0]);
+        if (gcol.has_i32_minmax) {
+          direct_min_v = static_cast<int64_t>(gcol.i32_min);
+          direct_max_v = static_cast<int64_t>(gcol.i32_max);
+        } else {
+          auto col_view = gcol.view();
+          rasterdf::reduce_aggregation min_agg(rasterdf::aggregation_kind::MIN);
+          rasterdf::reduce_aggregation max_agg(rasterdf::aggregation_kind::MAX);
+          auto min_s = rasterdf::reduce(col_view,
+                                        min_agg,
+                                        rasterdf::data_type{rasterdf::type_id::INT32},
+                                        _ctx.vk_context(),
+                                        _ctx.dispatcher(),
+                                        _ctx.workspace_mr());
+          auto max_s = rasterdf::reduce(col_view,
+                                        max_agg,
+                                        rasterdf::data_type{rasterdf::type_id::INT32},
+                                        _ctx.vk_context(),
+                                        _ctx.dispatcher(),
+                                        _ctx.workspace_mr());
+          direct_min_v = static_cast<int64_t>(min_s->as<int32_t>());
+          direct_max_v = static_cast<int64_t>(max_s->as<int32_t>());
+        }
+        direct_candidate = direct_max_v >= direct_min_v;
+        if (direct_candidate) {
+          direct_range = static_cast<uint64_t>(direct_max_v - direct_min_v + 1);
+          direct_candidate = direct_range > 65536ull && direct_range <= 400000000ull &&
+                             direct_range <=
+                               static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) &&
+                             input.num_rows() <=
+                               static_cast<rasterdf::size_type>(
+                                 std::numeric_limits<int32_t>::max());
+        }
+        if (direct_candidate && !agg_kinds.empty()) {
+          direct_candidate =
+            (agg_kinds[0] == TUPLE_GB_SUM || agg_kinds[0] == TUPLE_GB_COUNT) &&
+            tuple_groupby_fixed_width_supported(value_types[0]);
+        }
+      }
+
+      if (direct_candidate) {
+        stage_timer direct_timer("    groupby_i32_direct");
+        auto n_rows = input.num_rows();
+        auto n      = static_cast<uint32_t>(n_rows);
+        auto range  = static_cast<uint32_t>(direct_range);
+        auto max_out_rows =
+          static_cast<rasterdf::size_type>(std::min<uint64_t>(direct_range, n_rows));
+
+        rasterdf::type_id output_type = rasterdf::type_id::EMPTY;
+        bool has_aggregate            = !agg_kinds.empty();
+        if (has_aggregate) {
+          output_type = dense_groupby_output_type(agg_kinds[0], value_types[0]);
+        }
+        const bool direct_is_sum = has_aggregate && agg_kinds[0] == TUPLE_GB_SUM;
+        const bool use_f32_sum_storage =
+          direct_is_sum && value_types[0] == rasterdf::type_id::FLOAT32 &&
+          output_type == rasterdf::type_id::FLOAT64;
+        const bool use_f64_sum_storage =
+          direct_is_sum && output_type == rasterdf::type_id::FLOAT64 && !use_f32_sum_storage;
+        const bool use_i64_sum_storage =
+          direct_is_sum && output_type != rasterdf::type_id::FLOAT64;
+
+        VkBufferUsageFlags usage =
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+        rasterdf::device_buffer counts(
+          _ctx.workspace_mr(), static_cast<size_t>(range) * sizeof(uint32_t), usage);
+        rasterdf::device_buffer sum_i64(
+          _ctx.workspace_mr(),
+          use_i64_sum_storage ? static_cast<size_t>(range) * sizeof(int64_t) : sizeof(uint64_t),
+          usage);
+        rasterdf::device_buffer sum_f64(
+          _ctx.workspace_mr(),
+          use_f64_sum_storage ? static_cast<size_t>(range) * sizeof(uint64_t) : sizeof(uint64_t),
+          usage);
+        rasterdf::device_buffer sum_f32(
+          _ctx.workspace_mr(),
+          use_f32_sum_storage ? static_cast<size_t>(range) * sizeof(uint32_t) : sizeof(uint64_t),
+          usage);
+        rasterdf::device_buffer out_keys(
+          _ctx.workspace_mr(), static_cast<size_t>(max_out_rows) * sizeof(int32_t), usage);
+        rasterdf::device_buffer out_values(
+          _ctx.workspace_mr(),
+          has_aggregate ? static_cast<size_t>(max_out_rows) * rdf_type_size(output_type) : sizeof(uint64_t),
+          usage);
+        rasterdf::device_buffer write_idx(_ctx.workspace_mr(), sizeof(uint32_t), usage);
+        rasterdf::device_buffer overflow_count(_ctx.workspace_mr(), sizeof(uint32_t), usage);
+
+        auto& disp = _ctx.dispatcher();
+        i32_direct_groupby_pc direct_pc{};
+        direct_pc.keys_ptr            = input.col(group_col_indices[0]).address();
+        direct_pc.values_ptr          = has_aggregate ? value_cols[0]->address() : 0;
+        direct_pc.counts_ptr          = counts.data();
+        direct_pc.sum_i64_ptr         = sum_i64.data();
+        direct_pc.sum_f64_ptr         = sum_f64.data();
+        direct_pc.sum_f32_ptr         = sum_f32.data();
+        direct_pc.out_keys_ptr        = out_keys.data();
+        direct_pc.out_values_ptr      = out_values.data();
+        direct_pc.write_idx_ptr       = write_idx.data();
+        direct_pc.overflow_count_ptr  = overflow_count.data();
+        direct_pc.numRows             = n;
+        direct_pc.minKey              = static_cast<uint32_t>(static_cast<int32_t>(direct_min_v));
+        direct_pc.range               = range;
+        direct_pc.kind                = has_aggregate ? agg_kinds[0] : TUPLE_GB_COUNT;
+        direct_pc.valueType           = has_aggregate ? static_cast<uint32_t>(value_types[0]) : 0;
+        direct_pc.outputType          = has_aggregate ? static_cast<uint32_t>(output_type) : 0;
+        direct_pc.hasAggregate        = has_aggregate ? 1u : 0u;
+
+        RASTERDB_LOG_INFO("[Dense Direct GB] rows={} range={} value_type={}",
+                          input.num_rows(),
+                          direct_range,
+                          has_aggregate ? static_cast<uint32_t>(value_types[0]) : 0u);
+
+        disp.begin_batch();
+        disp.fill_buffer(counts.buffer(), 0, static_cast<VkDeviceSize>(range) * sizeof(uint32_t), counts.offset());
+        disp.fill_buffer(sum_i64.buffer(),
+                         0,
+                         use_i64_sum_storage ? static_cast<VkDeviceSize>(range) * sizeof(int64_t) : sizeof(uint64_t),
+                         sum_i64.offset());
+        disp.fill_buffer(sum_f64.buffer(),
+                         0,
+                         use_f64_sum_storage ? static_cast<VkDeviceSize>(range) * sizeof(uint64_t) : sizeof(uint64_t),
+                         sum_f64.offset());
+        disp.fill_buffer(sum_f32.buffer(),
+                         0,
+                         use_f32_sum_storage ? static_cast<VkDeviceSize>(range) * sizeof(uint32_t) : sizeof(uint64_t),
+                         sum_f32.offset());
+        disp.fill_buffer(write_idx.buffer(), 0, sizeof(uint32_t), write_idx.offset());
+        disp.fill_buffer(overflow_count.buffer(), 0, sizeof(uint32_t), overflow_count.offset());
+        disp.batch_barrier_fill_to_compute();
+        disp.dispatch_i32_direct_groupby_build(direct_pc, (n + 255u) / 256u);
+        disp.end_batch();
+
+        uint32_t overflow = 0;
+        overflow_count.copy_to_host(
+          &overflow, sizeof(uint32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        if (overflow != 0) {
+          throw duckdb::NotImplementedException(
+            "RasterDB GPU: direct INT32 GROUP BY saw %u keys outside estimated range", overflow);
+        }
+
+        disp.begin_batch();
+        disp.dispatch_i32_direct_groupby_extract(direct_pc, (range + 255u) / 256u);
+        disp.end_batch();
+
+        uint32_t num_unique_groups = 0;
+        write_idx.copy_to_host(
+          &num_unique_groups, sizeof(uint32_t), _ctx.device(), _ctx.queue(), _ctx.command_pool());
+        auto ng = static_cast<rasterdf::size_type>(num_unique_groups);
+        RASTERDB_LOG_INFO("[Dense Direct GB] unique_groups={}", num_unique_groups);
+
+        output.columns[0].type     = input.col(group_col_indices[0]).type;
+        output.columns[0].num_rows = ng;
+        output.columns[0].data     = std::move(out_keys);
+        if (has_aggregate) {
+          output.columns[1].type     = {output_type};
+          output.columns[1].num_rows = ng;
+          output.columns[1].data     = std::move(out_values);
+        }
+        output.set_num_rows(ng);
+        return true;
+      }
+
+      bool dense_candidate = !aggregates.empty() && tuple_low_cardinality_contention && dense_info.supported &&
                              dense_info.group_count > 0 && dense_info.group_count <= 65536ull;
       for (auto idx : group_col_indices) {
         dense_candidate = dense_candidate && input.col(idx).type.id == rasterdf::type_id::INT32;
@@ -700,17 +864,21 @@ bool gpu_executor::try_execute_multi_key_aggregate(
       rasterdf::device_buffer key_desc_buf(
         _ctx.workspace_mr(), key_descs.size() * sizeof(tuple_key_desc_host), usage);
       rasterdf::device_buffer agg_desc_buf(
-        _ctx.workspace_mr(), agg_descs.size() * sizeof(tuple_agg_desc_host), usage);
+        _ctx.workspace_mr(),
+        std::max<size_t>(agg_descs.size() * sizeof(tuple_agg_desc_host), 1),
+        usage);
       key_desc_buf.copy_from_host(key_descs.data(),
                                   key_descs.size() * sizeof(tuple_key_desc_host),
                                   _ctx.device(),
                                   _ctx.queue(),
                                   _ctx.command_pool());
-      agg_desc_buf.copy_from_host(agg_descs.data(),
-                                  agg_descs.size() * sizeof(tuple_agg_desc_host),
-                                  _ctx.device(),
-                                  _ctx.queue(),
-                                  _ctx.command_pool());
+      if (!agg_descs.empty()) {
+        agg_desc_buf.copy_from_host(agg_descs.data(),
+                                    agg_descs.size() * sizeof(tuple_agg_desc_host),
+                                    _ctx.device(),
+                                    _ctx.queue(),
+                                    _ctx.command_pool());
+      }
 
       rasterdf::device_buffer slot_state(
         _ctx.workspace_mr(), static_cast<size_t>(table_size) * sizeof(uint32_t), usage);

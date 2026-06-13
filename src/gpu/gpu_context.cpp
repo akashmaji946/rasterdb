@@ -90,7 +90,7 @@ gpu_context::gpu_context(size_t memory_limit)
   // Eagerly create simple_garuda_engine (graphics pipelines, render pass, etc.)
   // so the first join call doesn't pay the ~15ms init cost.
   rasterdf::simple_garuda_engine_init(*_ctx);
-  RASTERDB_LOG_INFO("Simple Garuda join pipelines loaded");
+  RASTERDB_LOG_INFO("Simple Garuda Join (SGJ) pipelines loaded.");
 
   // Create memory manager
   if (memory_limit == 0) {
