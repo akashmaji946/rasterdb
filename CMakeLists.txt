@@ -55,7 +55,7 @@ if(RASTERDF_LIBRARY)
   add_library(rasterdf_imported SHARED IMPORTED)
   set_target_properties(rasterdf_imported PROPERTIES
     IMPORTED_LOCATION "${RASTERDF_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${RASTERDF_ROOT}/include;${RASTERDF_ROOT}")
+    INTERFACE_INCLUDE_DIRECTORIES "${RASTERDF_ROOT}/include;${RASTERDF_ROOT};${RASTERDF_ROOT}/build/_deps/volk-src")
 endif()
 
 # ==========================================================================

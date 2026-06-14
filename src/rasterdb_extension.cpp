@@ -488,8 +488,8 @@ static void LoadInternal(ExtensionLoader& loader)
 
     constexpr auto USE_SIZE_CACHE_GB      = 3ULL;
     constexpr auto USE_SIZE_PROCESSING_GB = 3ULL;
-    constexpr auto USE_SIZE_STAGING_GB    = 4ULL;
-    constexpr auto USE_SIZE_DOWNLOAD_GB   = 2ULL;
+    constexpr auto USE_SIZE_STAGING_GB    = 8ULL;
+    constexpr auto USE_SIZE_DOWNLOAD_GB   = 1ULL;
 
     constexpr auto USE_SIZE_GB = 1024ULL * 1024ULL * 1024ULL;
 

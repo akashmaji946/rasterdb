@@ -8,6 +8,7 @@
 
 #include <rasterdf/simple_garuda_join.hpp>
 #include <rasterdf/gfx_groupby_engine.hpp>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -28,6 +29,35 @@ namespace {
 bool shader_dir_is_usable(const std::filesystem::path& dir)
 {
   return !dir.empty() && std::filesystem::exists(dir / "transform.spv");
+}
+
+std::string normalize_device_name(const char* value)
+{
+  std::string normalized = value ? value : "";
+  for (auto& ch : normalized) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return normalized;
+}
+
+rasterdf::DeviceVendor configured_device_vendor()
+{
+  const auto device = normalize_device_name(std::getenv("RASTERDF_DEVICE"));
+  if (device.empty() || device == "nvidia") {
+    return rasterdf::DeviceVendor::NVIDIA;
+  }
+  if (device == "amd") {
+    return rasterdf::DeviceVendor::AMD;
+  }
+  if (device == "intel") {
+    return rasterdf::DeviceVendor::INTEL;
+  }
+  if (device == "any" || device == "software" || device == "llvmpipe") {
+    return rasterdf::DeviceVendor::ANY;
+  }
+
+  RASTERDB_LOG_WARN("Unknown RASTERDF_DEVICE='{}'; falling back to NVIDIA", device);
+  return rasterdf::DeviceVendor::NVIDIA;
 }
 
 void configure_rasterdf_shader_dir()
@@ -76,8 +106,9 @@ gpu_context::gpu_context(size_t memory_limit)
 {
   RASTERDB_LOG_INFO("Initializing RasterDB GPU context (Vulkan/rasterdf)...");
 
-  // Create Vulkan context — use NVIDIA discrete GPU
-  _ctx = std::make_unique<rasterdf::context>(rasterdf::DeviceVendor::NVIDIA);
+  // Create Vulkan context. RASTERDF_DEVICE accepts: nvidia, amd, intel, any/software/llvmpipe.
+  const auto preferred_vendor = configured_device_vendor();
+  _ctx = std::make_unique<rasterdf::context>(preferred_vendor);
   RASTERDB_LOG_INFO("GPU device: {}", _ctx->device_name());
   RASTERDB_LOG_INFO("GPU memory: {} MB", _ctx->device_memory_bytes() / (1024 * 1024));
 
@@ -85,7 +116,7 @@ gpu_context::gpu_context(size_t memory_limit)
 
   // Create dispatcher (loads all compute shader pipelines)
   _dispatcher = std::make_unique<rasterdf::execution::dispatcher>(*_ctx);
-  RASTERDB_LOG_INFO("Vulkan compute pipelines loaded");
+  RASTERDB_LOG_INFO("Vulkan Compute pipelines loaded.");
 
   // Eagerly create simple_garuda_engine (graphics pipelines, render pass, etc.)
   // so the first join call doesn't pay the ~15ms init cost.
@@ -97,7 +128,7 @@ gpu_context::gpu_context(size_t memory_limit)
     memory_limit = static_cast<size_t>(_ctx->device_memory_bytes() * 0.8);
   }
   _mem_mgr = std::make_unique<rasterdf::memory_manager>(*_ctx, memory_limit);
-  RASTERDB_LOG_INFO("GPU memory manager initialized ({} MB limit)",
+  RASTERDB_LOG_INFO("GPU Memory Manager: initialized ({} MB limit.)",
                    memory_limit / (1024 * 1024));
 }
 

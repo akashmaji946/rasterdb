@@ -10,6 +10,7 @@
 #include <duckdb/storage/table_storage_info.hpp>
 
 #include <future>
+#include <limits>
 #include <mutex>
 #include <thread>
 
@@ -20,6 +21,9 @@ namespace gpu {
 // directly into RasterDB's staging buffers. Set false to force the earlier
 // single-thread scan path for operator-only comparisons against Sirius/cuDF.
 static constexpr bool USE_RDB_PARALLEL_SCAN = true;
+// Set to 1, 2, 3, ... to cap scan workers. 
+// Leave at max() to use all available scan threads.
+static constexpr size_t USE_RDB_PARALLEL_SCAN_THREADS = std::numeric_limits<size_t>::max();
 
 static duckdb::unique_ptr<duckdb::TableFilterSet>
 create_scan_filter_set(const duckdb::TableFilterSet& table_filters,
@@ -317,9 +321,13 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
             max_threads = 1;
           }
         }
-        auto hw_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
-        auto num_scan_threads =
-          static_cast<size_t>(std::min<duckdb::idx_t>(max_threads, hw_threads));
+        auto table_max_threads = static_cast<size_t>(std::max<duckdb::idx_t>(1, max_threads));
+        auto hw_threads = static_cast<size_t>(
+          std::max<unsigned>(1, std::thread::hardware_concurrency()));
+        auto max_scan_threads = std::max<size_t>(1, std::min(table_max_threads, hw_threads));
+        auto requested_scan_threads =
+          std::max<size_t>(1, USE_RDB_PARALLEL_SCAN_THREADS);
+        auto num_scan_threads = std::min(requested_scan_threads, max_scan_threads);
         if (!USE_RDB_PARALLEL_SCAN ||
             std::getenv("RASTERDB_DISABLE_PARALLEL_SCAN") != nullptr) {
           num_scan_threads = 1;
@@ -418,7 +426,14 @@ std::unique_ptr<gpu_table> gpu_executor::execute_get(duckdb::LogicalGet& op)
           RASTERDB_LOG_WARN("Staging buffer overflow during parallel scan; result truncated to {} rows",
                             total_scanned);
         }
-        RASTERDB_LOG_DEBUG("[RDB_DEBUG]   scan_threads={}", num_scan_threads);
+        RASTERDB_LOG_DEBUG(
+          "[RDB_DEBUG]   scan_threads={} requested={} max={} table_max={} hw={} parallel={}",
+          num_scan_threads,
+          requested_scan_threads,
+          max_scan_threads,
+          table_max_threads,
+          hw_threads,
+          USE_RDB_PARALLEL_SCAN);
       }
       RASTERDB_LOG_DEBUG(
         "[TIMER]   scan: {} {} rows x {} cols", table_name, total_scanned, types.size());
