@@ -12,6 +12,8 @@ tpch-data/dbgen
 .vscode/
 *.duckdb
 
+*.db
+
 .plan/
 
 !test/cpp/integration/integration.duckdb
